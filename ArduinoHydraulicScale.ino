@@ -1,3 +1,5 @@
+// Author: alex.pennington@organicengineer.com
+
 #include <EEPROM.h>
 
 bool debug_flag = false;
