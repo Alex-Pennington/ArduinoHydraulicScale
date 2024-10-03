@@ -95,6 +95,11 @@ void loop() {
         rTsum += rT[i];
       }
     }
+    else if (inputString == "clear") {
+      for (int i = 0; i <= (rTsize - 1); i++) {
+        rT[i] = 0;
+      }
+    }
     else {
       calFactor = float(inputString.toInt()) / float(pValue);
       EEPROM.put(addr,  calFactor);
