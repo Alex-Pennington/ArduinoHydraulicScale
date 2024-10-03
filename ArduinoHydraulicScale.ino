@@ -1,5 +1,7 @@
 // Author: alex.pennington@organicengineer.com
 
+#define calWeight 530 // the weight of the calibration object
+
 #include <EEPROM.h>
 
 bool debug_flag = false;
@@ -16,13 +18,13 @@ unsigned long previousMillis = 0;
 int interval = 10; //choose the time between readings in milliseconds
 
 
-int sensorValue = 0;        // value read from the pot
+int sensorValue = 0;
 int pValue = 0; // pressure
-int outputValue = 0;        // value output to the PWM (analog out)
-int tareValue = 0;        // value output to the PWM (analog out)
-float calFactor = 0.0;        // value output to the PWM (analog out)
+int outputValue = 0;
+int tareValue = 241;
+float calFactor = 1.81;
 int addr = 10;
-#define rTsize 30
+#define rTsize 50
 int rT[rTsize];
 int rTindex = 0;
 unsigned int rTsum = 0;
@@ -37,7 +39,7 @@ void setup() {
   analogReference(DEFAULT);  //on the uno & nano this is VSupply
   nWeighting = 1 - weighting; //calculate weight to be applied to the new reading
   fValue = analogRead(analogInPin);  //initialise to current value of input
-  EEPROM.get(addr, calFactor);
+  //EEPROM.get(addr, calFactor);
 }
 
 void loop() {
@@ -60,6 +62,9 @@ void loop() {
     else if (inputString == "+") {
       if (rTindex < rTsize) {
         rT[rTindex] = outputValue;
+        Serial.print(rTindex);
+        Serial.print(" = ");
+        Serial.println(rT[rTindex]);
         rTindex++;
       } else {
         Serial.println("Buffer Full");
@@ -71,8 +76,6 @@ void loop() {
         if (rTindex > 0 ) {
           rTindex--;
         }
-      } else {
-        Serial.println("Buffer Empty");
       }
     }
     else if (inputString == "read") {
@@ -96,7 +99,11 @@ void loop() {
       rTsum = 0;
       for (int i = 0; i < rTindex; i++) {
         rTsum += rT[i];
+        Serial.print(i);
+        Serial.print(" = ");
+        Serial.println(rT[i]);
       }
+      Serial.print("sum = ");
       Serial.println(rTsum);
     }
     else if (inputString == "clear") {
@@ -104,8 +111,8 @@ void loop() {
         rT[i] = 0;
       }
     }
-    else {
-      calFactor = float(inputString.toInt()) / float(pValue);
+    else if (inputString == "cal") {
+      calFactor = float(calWeight) / float(pValue);
       EEPROM.put(addr,  calFactor);
     }
     // clear the string:
