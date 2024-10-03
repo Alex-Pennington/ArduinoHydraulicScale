@@ -58,7 +58,7 @@ void loop() {
       debug_flag = !debug_flag;
     }
     else if (inputString == "+") {
-      if (rTindex <= (rTindex - 1)) {
+      if (rTindex < rTsize) {
         rT[rTindex] = outputValue;
         rTindex++;
       } else {
@@ -85,18 +85,22 @@ void loop() {
         Serial.print(tareValue);
         Serial.print("\t c = ");
         Serial.print(calFactor);
+        Serial.print("\t i = ");
+        Serial.print(rTindex);
         Serial.print("\t ");
       }
       Serial.print("weight = ");
       Serial.println(outputValue);
     }
     else if (inputString == "sum") {
-      for (int i = 0; i <= (rTindex - 1); i++) {
+      rTsum = 0;
+      for (int i = 0; i < rTindex; i++) {
         rTsum += rT[i];
       }
+      Serial.println(rTsum);
     }
     else if (inputString == "clear") {
-      for (int i = 0; i <= (rTsize - 1); i++) {
+      for (int i = 0; i < rTsize; i++) {
         rT[i] = 0;
       }
     }
