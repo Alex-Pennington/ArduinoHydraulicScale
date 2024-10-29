@@ -4,19 +4,17 @@
 
 #include <EEPROM.h>
 
-bool debug_flag = false;
+bool debug_flag = true;
 
-// These constants won't change. They're used to give names to the pins used:
-const int analogInPin = A0;  // Analog input pin that the potentiometer is attached to
+const int analogInPin = A1;  // Analog input pin that the potentiometer is attached to
 
-float vADC;  // the voltage
 float fValue;  //the filtered value from the last reading
 float weighting = 0.7; //the weight (between 0 and 1) given to the previous filter value
 float nWeighting;  //the weighting given to the new input value. weighting + nWeighting must equal 1 so we just calculate nWeighting as 1 - weighting
-float vReference = 5.0; //using the supply voltage as the reference
 unsigned long previousMillis = 0;
+unsigned long previousMillis2 = 0;
 int interval = 10; //choose the time between readings in milliseconds
-int interval2 = 60000; //choose the time between readings in milliseconds
+int interval2 = 5000; //choose the time between readings in milliseconds
 
 int sensorValue = 0;
 int pValue = 0; // pressure
@@ -74,29 +72,65 @@ MqttClient mqttClient(wifiClient);
 
 const char broker[] = SECRET_MQTT_BROKER;
 int        port     = 1883;
-const char topic[]  = "arduino/";
+const char topic[]  = "arduino";
 const char username[] = SECRET_MQTT_USER;
 const char password[]  =  SECRET_MQTT_PASS;
 
 
-// constants won't change. They're used here to set pin numbers:
 const int button1Pin = D2;    // the number of the pushbutton pin
 const int ledPin = D13;      // the number of the LED pin
 
-// Variables will change:
-int ledState = HIGH;         // the current state of the output pin
+int ledState = LOW;         // the current state of the output pin
 int button1State;             // the current reading from the input pin
 int lastButton1State = LOW;   // the previous reading from the input pin
 
-// the following variables are unsigned longs because the time, measured in
-// milliseconds, will quickly become a bigger number than can be stored in an int.
 unsigned long lastDebounceTime1 = 0;  // the last time the output pin was toggled
 unsigned long debounceDelay = 50;    // the debounce time; increase if the output flickers
 
 #define ScaleReadingsIndex_MAX  100
 float ScaleReadings[ScaleReadingsIndex_MAX] = {};
 int ScaleReadingsIndex = 0;
-float ScaleFluctuationThreshold = 0.3;
+float ScaleFluctuationThreshold = 120;
+
+bool isFluctuating(float reading) {
+  ScaleReadings[ScaleReadingsIndex] = reading;
+  if (ScaleReadingsIndex = ( ScaleReadingsIndex_MAX - 1 )) {
+    ScaleReadingsIndex = 0;
+  } else {
+    ScaleReadingsIndex++;
+  }
+
+  float sumOfDifferences = 0;
+  for (int i = 1; i < ScaleReadingsIndex_MAX; i++) {
+    sumOfDifferences += fabs(ScaleReadings[i] - ScaleReadings[i - 1]);
+  }
+
+  float averageDifference = sumOfDifferences / (ScaleReadingsIndex_MAX - 1);
+  //Serial.println(averageDifference);
+  if (averageDifference > ScaleFluctuationThreshold) {
+    return true;
+  } else {
+    return false;
+  }
+
+}
+
+/*
+  Arduino 2x16 LCD - Detect Buttons
+  modified on 18 Feb 2019
+  by Saeed Hosseini @ Electropeak
+  https://electropeak.com/learn/
+*/
+#include <LiquidCrystal.h>
+//LCD pin to Arduino
+const int pin_RS = 8;
+const int pin_EN = 9;
+const int pin_d4 = 4;
+const int pin_d5 = 5;
+const int pin_d6 = 6;
+const int pin_d7 = 7;
+const int pin_BL = 10;
+LiquidCrystal lcd( pin_RS,  pin_EN,  pin_d4,  pin_d5,  pin_d6,  pin_d7);
 
 void setup() {
   //setup button
@@ -154,53 +188,67 @@ void setup() {
   nWeighting = 1 - weighting; //calculate weight to be applied to the new reading
   fValue = analogRead(analogInPin);  //initialise to current value of input
   //EEPROM.get(addr, calFactor);
-
-
+  lcd.begin(16, 2);
+  lcd.setCursor(0, 0);
+  lcd.print(WiFi.localIP());
+  lcd.setCursor(0, 1);
+  lcd.print("Press Key:");
 }
 
 void loop() {
-  mqttClient.poll();
 
-  // read the state of the switch into a local variable:
-  int readingButton1 = digitalRead(button1Pin);
-
-  // check to see if you just pressed the button
-  // (i.e. the input went from LOW to HIGH), and you've waited long enough
-  // since the last press to ignore any noise:
-
-  // If the switch changed, due to noise or pressing:
-  if (readingButton1 != lastButton1State) {
-    // reset the debouncing timer
-    lastDebounceTime1 = millis();
+  int x;
+  x = analogRead (A0);
+  lcd.setCursor(10, 1);
+  if (x < 60) {
+    lcd.print ("Right ");
+  }
+  else if (x < 200) {
+    lcd.print ("Up    ");
+  }
+  else if (x < 400) {
+    lcd.print ("Down  ");
+  }
+  else if (x < 600) {
+    lcd.print ("Left  ");
+  }
+  else if (x < 800) {
+    lcd.print ("Select");
   }
 
-  if ((millis() - lastDebounceTime1) > debounceDelay) {
-    // whatever the reading is at, it's been there for longer than the debounce
-    // delay, so take it as the actual current state:
+  mqttClient.poll();
+  unsigned long currentMillis = millis();  //get the time
 
-    // if the button state has changed:
-    if (readingButton1 != button1State) {
-      button1State = readingButton1;
+  /*
+    // read the state of the switch into a local variable:
+    int readingButton1 = digitalRead(button1Pin);
 
-      // only toggle the LED if the new button state is HIGH
-      if (button1State == HIGH) {
-        ledState = !ledState;
+    // check to see if you just pressed the button
+    // (i.e. the input went from LOW to HIGH), and you've waited long enough
+    // since the last press to ignore any noise:
+
+    // If the switch changed, due to noise or pressing:
+    if (readingButton1 != lastButton1State) {
+      // reset the debouncing timer
+      lastDebounceTime1 = currentMillis;
+    }
+
+    if ((currentMillis - lastDebounceTime1) > debounceDelay) {
+      if (readingButton1 != button1State) {
+        button1State = readingButton1;
+        if (button1State == HIGH) {
+          ledState = !ledState;
+        }
       }
     }
-  }
 
-  if (((millis() - lastDebounceTime1) > 30000) & ledState == HIGH) { // after 30 Seconds turn led off
-    ledState = isFluctuating(outputValue);
-  }
+    if (((currentMillis - lastDebounceTime1) > 10000)) { // return to fluctuation indicator after timeout
+      ledState = isFluctuating(outputValue);
+    }
 
-  // set the LED:
-  
-  digitalWrite(ledPin, ledState);
-
-  // save the reading. Next time through the loop, it'll be the lastButtonState:
-  lastButton1State = readingButton1;
-
-  unsigned long currentMillis = millis();  //get the time
+    digitalWrite(ledPin, ledState);
+    lastButton1State = readingButton1;
+  */
 
   //scale averaging
   if (currentMillis - previousMillis >= interval) {  // if its time for a new reading
@@ -209,10 +257,54 @@ void loop() {
     fValue = sensorValue * nWeighting + fValue * weighting; //calculate new fValue based on input and previous fValue
     pValue = map(fValue, tareValue, 1023, 0, 3000);
     outputValue = calFactor * pValue;
+    ledState = isFluctuating(outputValue);
+    digitalWrite(ledPin, ledState);
   }
-  
+
   //send sensor data
-  if (currentMillis - previousMillis >= interval2) {}
+  if (currentMillis - previousMillis2 >= interval2) {
+    previousMillis2 = currentMillis;
+    /*if (debug_flag) {
+      Serial.print("sensor = ");
+      Serial.print(sensorValue);
+      Serial.print("\t p = ");
+      Serial.print(pValue);
+      Serial.print("\t t = ");
+      Serial.print(tareValue);
+      Serial.print("\t c = ");
+      Serial.print(calFactor);
+      Serial.print("\t i = ");
+      Serial.print(rTindex);
+      Serial.print("\t ");
+      Serial.print("weight = ");
+      Serial.println(outputValue);
+      }*/
+    // send message, the Print interface can be used to set the message contents
+    char topic_temp[30];
+    String str_temp;
+    str_temp = String(topic);
+    str_temp.concat("/debug");
+    str_temp.toCharArray(topic_temp, 30);
+    mqttClient.beginMessage(topic_temp);
+    char oV[10];
+    str_temp = String(outputValue);
+    str_temp.toCharArray(oV, 10);
+    mqttClient.print(oV);
+    mqttClient.endMessage();
+  }
+
+  while (Serial.available()) {
+    // get the new byte:
+    char inChar = (char)Serial.read();
+    if (inChar == '\n') {
+      stringComplete = true;
+      if (debug_flag) {
+        Serial.println("RECEIVED COMMAND");
+      }
+    } else {
+      inputString += inChar;
+    }
+  }
 
   if (stringComplete) {
     Serial.println(inputString);
@@ -242,6 +334,7 @@ void loop() {
         str_temp.toCharArray(oV, 10);
         mqttClient.print(oV);
         mqttClient.endMessage();
+        Serial.println("OK");
       } else {
         Serial.println("Buffer Full");
       }
@@ -253,6 +346,7 @@ void loop() {
           rTindex--;
         }
       }
+      Serial.println("OK");
     }
     else if (inputString == "read") {
       if (debug_flag) {
@@ -286,6 +380,7 @@ void loop() {
       for (int i = 0; i < rTsize; i++) {
         rT[i] = 0;
       }
+      Serial.println("OK");
     }
     else if (inputString == "cal") {
       calFactor = float(calWeight) / float(pValue);
@@ -296,42 +391,7 @@ void loop() {
     stringComplete = false;
   }
 
-
   // wait 2 milliseconds before the next loop for the analog-to-digital
   // converter to settle after the last reading:
   delay(2);
-}
-
-void serialEvent() {
-  while (Serial.available()) {
-    // get the new byte:
-    char inChar = (char)Serial.read();
-    if (inChar == '\n') {
-      stringComplete = true;
-    } else {
-      inputString += inChar;
-    }
-  }
-}
-
-int isFluctuating(float reading) {
-  ScaleReadings[ScaleReadingsIndex] = reading;
-  if (ScaleReadingsIndex >= ScaleReadingsIndex_MAX) {
-    ScaleReadingsIndex = 0;
-  } else {
-    ScaleReadingsIndex++;
-  }
-  int numReadings = sizeof(ScaleReadings) / sizeof(ScaleReadings[0]);
-  if (numReadings < 2) {
-    return 0; // Not enough readings to determine fluctuation
-  }
-
-  float sumOfDifferences = 0;
-  for (int i = 1; i < numReadings; i++) {
-    sumOfDifferences += fabs(ScaleReadings[i] - ScaleReadings[i - 1]);
-  }
-
-  float averageDifference = sumOfDifferences / (numReadings - 1);
-
-  return averageDifference > ScaleFluctuationThreshold;
 }
