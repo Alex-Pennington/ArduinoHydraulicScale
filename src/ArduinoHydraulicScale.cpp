@@ -23,9 +23,9 @@ bool debug_flag = false;
 const int analogInPin = A2;  // Analog input pin that the potentiometer is attached to
 
 float vADC;  // the voltage
-float fValue;  //the filtered value from the last reading
-float weighting = 0.7; //the weight (between 0 and 1) given to the previous filter value
-float nWeighting;  //the weighting given to the new input value. weighting + nWeighting must equal 1 so we just calculate nWeighting as 1 - weighting
+float smoothedValue;  //the filtered value from the last reading
+float alpha = 0.7; //the weight (between 0 and 1) given to the previous filter value
+float nWeighting;  //the alpha given to the new input value. alpha + nWeighting must equal 1 so we just calculate nWeighting as 1 - alpha
 float vReference = 5.0; //using the supply voltage as the reference
 unsigned long previousMillis = 0;
 int interval = 100; //choose the time between readings in milliseconds
@@ -62,8 +62,8 @@ void setup() {
   Serial1.begin(9600);
   inputString.reserve(200);
   //analogReference(DEFAULT);  //on the uno & nano this is VSupply
-  nWeighting = 1 - weighting; //calculate weight to be applied to the new reading
-  fValue = analogRead(analogInPin);  //initialise to current value of input
+  nWeighting = 1 - alpha; //calculate weight to be applied to the new reading
+  smoothedValue = analogRead(analogInPin);  //initialise to current value of input
   EEPROM.get(addr, calFactor);
   EEPROM.get(addr+4, tareValue);
   lcd.begin(16, 2);
@@ -78,18 +78,26 @@ void setup() {
 void loop() {
   unsigned long currentMillis = millis();  //get the time
   if (currentMillis - previousMillis >= interval) {  // if its time for a new reading
+    analogReadResolution(14); // set the resolution to 14 bits
     previousMillis = currentMillis;                  //update time of most recent reading
-    sensorValue = analogRead(analogInPin);                    // read the input at the analog pin
-    sensorVoltage = map(sensorValue, 0, 1023, 0, 5000);                    // read the input at the analog pin
-    fValue = (float)sensorValue * nWeighting + fValue * weighting; //calculate new fValue based on input and previous fValue
-    pValue = map((int)fValue, 0, 1023, 0, sensorMaxPSI);
-    outputValue = calFactor * (fValue - tareValue); //calculate the output value
+    int numReadings = 10;
+    float total = 0;
+    for (int i = 0; i < numReadings; i++) {
+      total += analogRead(analogInPin);
+      delay(10);
+    }
+    float sensorValue = total / numReadings;
+    sensorVoltage = map((int)sensorValue, 0, 1023, 0, 5000);                    // read the input at the analog pin
+    smoothedValue = (smoothedValue * alpha) + (sensorValue * (1 - alpha)); //calculate new smoothedValue based on input and previous smoothedValue
+    pValue = map((int)smoothedValue, 0, 1023, 0, sensorMaxPSI);
+    outputValue = (float)calFactor * ((float)smoothedValue - (float)tareValue); //calculate the output value
     if (display_rolling_weight) {
       lcd.setCursor(0, 1);
       lcd.print ("                 ");
       lcd.setCursor(0, 1);
       lcd.print (outputValue);
     }
+    analogReadResolution(10); // set the resolution to 10 bits
   }
 
   if ((currentMillis - button_LastChange) >  button_DebounceTime) {
@@ -140,7 +148,7 @@ void loop() {
   if (stringComplete) {
     //Serial.println(inputString);
     if (inputString == "tare") {
-      tareValue = (int)fValue;
+      tareValue = (int)smoothedValue;
       EEPROM.put(addr+4, tareValue);
     }
     else if (inputString == "debug") {
@@ -224,7 +232,7 @@ void loop() {
       lcd.print("Buffer Cleared");
     }
     else if (inputString == "cal") {
-      calFactor = float(calWeight) / (float(fValue) - tareValue);
+      calFactor = float(calWeight) / (float(smoothedValue) - tareValue);
       EEPROM.put(addr,  calFactor);
     }
     else if (inputString.charAt(0) == 'c') {
