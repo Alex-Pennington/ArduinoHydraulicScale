@@ -24,17 +24,16 @@ const int analogInPin = A2;  // Analog input pin that the potentiometer is attac
 
 float vADC;  // the voltage
 float smoothedValue;  //the filtered value from the last reading
-float alpha = 0.7; //the weight (between 0 and 1) given to the previous filter value
-float nWeighting;  //the alpha given to the new input value. alpha + nWeighting must equal 1 so we just calculate nWeighting as 1 - alpha
+float alpha = 0.1; //the weight (between 0 and 1) given to the previous filter value
 float vReference = 5.0; //using the supply voltage as the reference
 unsigned long previousMillis = 0;
-int interval = 100; //choose the time between readings in milliseconds
+int interval = 500; //choose the time between readings in milliseconds
 bool display_rolling_weight = true;
 
 int sensorValue = 0;
 int sensorVoltage = 0; // the voltage
-int pValue = 0; // pressure
-float outputValue = 0.0;
+int pressureValue = 0; // pressure
+int outputValue = 0;
 int tareValue = 0;
 float calFactor = 1.0; //calibration factor
 int sensorMaxPSI = 3000; // maximum pressure in PSI
@@ -61,8 +60,6 @@ void setup() {
   delay(2000);
   Serial1.begin(9600);
   inputString.reserve(200);
-  //analogReference(DEFAULT);  //on the uno & nano this is VSupply
-  nWeighting = 1 - alpha; //calculate weight to be applied to the new reading
   smoothedValue = analogRead(analogInPin);  //initialise to current value of input
   EEPROM.get(addr, calFactor);
   EEPROM.get(addr+4, tareValue);
@@ -78,18 +75,18 @@ void setup() {
 void loop() {
   unsigned long currentMillis = millis();  //get the time
   if (currentMillis - previousMillis >= interval) {  // if its time for a new reading
-    analogReadResolution(14); // set the resolution to 14 bits
     previousMillis = currentMillis;                  //update time of most recent reading
     int numReadings = 10;
     float total = 0;
+    analogReadResolution(14); // set the resolution to 14 bits
     for (int i = 0; i < numReadings; i++) {
       total += analogRead(analogInPin);
       delay(10);
     }
-    float sensorValue = total / numReadings;
-    sensorVoltage = map((int)sensorValue, 0, 1023, 0, 5000);                    // read the input at the analog pin
+    sensorValue = total / numReadings;
+    sensorVoltage = map((int)sensorValue, 0, 16384, 0, (int)(vReference * 1000.0));                    // read the input at the analog pin
     smoothedValue = (smoothedValue * alpha) + (sensorValue * (1 - alpha)); //calculate new smoothedValue based on input and previous smoothedValue
-    pValue = map((int)smoothedValue, 0, 1023, 0, sensorMaxPSI);
+    pressureValue = map((int)smoothedValue, 0, 16384, 0, sensorMaxPSI);
     outputValue = (float)calFactor * ((float)smoothedValue - (float)tareValue); //calculate the output value
     if (display_rolling_weight) {
       lcd.setCursor(0, 1);
@@ -97,11 +94,11 @@ void loop() {
       lcd.setCursor(0, 1);
       lcd.print (outputValue);
     }
-    analogReadResolution(10); // set the resolution to 10 bits
   }
 
   if ((currentMillis - button_LastChange) >  button_DebounceTime) {
     int x;
+    analogReadResolution(10); // set the resolution to 10 bits
     x = analogRead (0);
     lcd.setCursor(0, 1);
     if (x < 60) { //Right
@@ -121,9 +118,8 @@ void loop() {
     else if (x < 400) { //Down
       lcd.print ("                           ");
       lcd.setCursor(0, 1);
-      inputString = "clear";
+      inputString = "b";
       stringComplete = true;
-      lcd.print (inputString);
     }
     else if (x < 600) { //Left
       lcd.print ("                           ");
@@ -148,8 +144,9 @@ void loop() {
   if (stringComplete) {
     //Serial.println(inputString);
     if (inputString == "tare") {
-      tareValue = (int)smoothedValue;
+      tareValue = sensorValue;
       EEPROM.put(addr+4, tareValue);
+      Serial1.println("tare");
     }
     else if (inputString == "debug") {
       debug_flag = !debug_flag;
@@ -184,7 +181,7 @@ void loop() {
         Serial1.print("\t v = ");
         Serial1.print(sensorVoltage);        
         Serial1.print("\t p = ");
-        Serial1.print(pValue);
+        Serial1.print(pressureValue);
         Serial1.print("\t t = ");
         Serial1.print(tareValue);
         Serial1.print("\t c = ");
@@ -219,7 +216,7 @@ void loop() {
       lcd.print("sum = ");
       lcd.print(rTsum);
     }
-    else if (inputString == "clear") {
+    else if (inputString == "b") {
       for (int i = 0; i < rTsize; i++) {
         rT[i] = 0;
       }
@@ -231,8 +228,8 @@ void loop() {
       lcd.setCursor(0, 1);
       lcd.print("Buffer Cleared");
     }
-    else if (inputString == "cal") {
-      calFactor = float(calWeight) / (float(smoothedValue) - tareValue);
+    else if (inputString == "kv") {
+      calFactor = float(calWeight) / (float(smoothedValue) - (float)tareValue);
       EEPROM.put(addr,  calFactor);
     }
     else if (inputString.charAt(0) == 'c') {
@@ -254,7 +251,7 @@ void loop() {
       lcd.print(sensorMaxPSI);
     }
     // clear the string:
-    if (display_rolling_weight) {delay(5000);}
+    if (display_rolling_weight) {delay(1000);}
     inputString = "";
     stringComplete = false;
   }
