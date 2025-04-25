@@ -7,7 +7,7 @@
 #include <EEPROM.h>
 
 #include <LiquidCrystal.h>
-//LCD pin to Arduino
+// LCD pin to Arduino
 const int pin_RS = 8;
 const int pin_EN = 9;
 const int pin_d4 = 4;
@@ -53,6 +53,7 @@ int button_LastPressedIndex = 0;
 
 
 void  serialEvent();
+void printDebug();
 
 void setup() {
   // analogReadResolution(14);
@@ -63,6 +64,7 @@ void setup() {
   smoothedValue = analogRead(analogInPin);  //initialise to current value of input
   EEPROM.get(addr, calFactor);
   EEPROM.get(addr+4, tareValue);
+  EEPROM.get(addr+8, alpha);
   lcd.begin(16, 2);
   lcd.setCursor(0, 0);
   lcd.print("Loader Scale");
@@ -70,6 +72,7 @@ void setup() {
   lcd.print("Press Key:");
 
   Serial1.println("JD5055e OK");
+  printDebug();
 }
 
 void loop() {
@@ -175,22 +178,9 @@ void loop() {
       }
     }
     else if (inputString == "read") {
-      if (debug_flag) {
-        Serial1.print("a = ");
-        Serial1.print(sensorValue);
-        Serial1.print("\t v = ");
-        Serial1.print(sensorVoltage);        
-        Serial1.print("\t p = ");
-        Serial1.print(pressureValue);
-        Serial1.print("\t t = ");
-        Serial1.print(tareValue);
-        Serial1.print("\t c = ");
-        Serial1.print(calFactor);
-        Serial1.print("\t sm = ");
-        Serial1.print(sensorMaxPSI);        
-        Serial1.print("\t i = ");
-        Serial1.print(rTindex);
-        Serial1.print("\t ");
+      if (debug_flag)
+      {
+        printDebug();
       }
       Serial1.print("weight = ");
       Serial1.println(outputValue);
@@ -241,6 +231,15 @@ void loop() {
       lcd.print("c = ");
       lcd.print(inputString);
     }
+    else if (inputString.charAt(0) == 'w') {
+      inputString.remove(0, 1); // remove the first character
+      alpha = float(inputString.toFloat());
+      EEPROM.put(addr+8,  alpha);
+      lcd.print ("                           ");
+      lcd.setCursor(0, 1);
+      lcd.print("w = ");
+      lcd.print(alpha);
+    }
     else if (inputString.startsWith("sm")) {
       inputString.remove(0, 2); // remove the first character
       sensorMaxPSI = inputString.toInt();
@@ -258,11 +257,30 @@ void loop() {
 
 }
 
-/*
-  SerialEvent occurs whenever a new data comes in the hardware serial RX. This
-  routine is run between each time loop() runs, so using delay inside loop can
-  delay response. Multiple bytes of data may be available.
-*/
+void printDebug()
+{
+    Serial1.print("a = ");
+    Serial1.println(sensorValue);
+    Serial1.print("v = ");
+    Serial1.println(sensorVoltage);
+    Serial1.print("p = ");
+    Serial1.println(pressureValue);
+    Serial1.print("t = ");
+    Serial1.println(tareValue);
+    Serial1.print("c = ");
+    Serial1.println(calFactor);
+    Serial1.print("sm = ");
+    Serial1.println(sensorMaxPSI);
+    Serial1.print("w = ");
+    Serial1.println(alpha);
+    Serial1.print("i = ");
+    Serial1.println(rTindex);
+  }
+ /*
+   SerialEvent occurs whenever a new data comes in the hardware serial RX. This
+   routine is run between each time loop() runs, so using delay inside loop can
+   delay response. Multiple bytes of data may be available.
+ */
 void serialEvent() {
   while (Serial1.available()) {
     // get the new byte:
