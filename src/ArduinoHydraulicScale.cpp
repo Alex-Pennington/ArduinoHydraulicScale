@@ -224,7 +224,7 @@ void loop() {
       lcd.print("Buffer Cleared");
     }
     else if (inputString == "cal") {
-      calFactor = float(calWeight) / float(fValue);
+      calFactor = float(calWeight) / (float(fValue) - tareValue);
       EEPROM.put(addr,  calFactor);
     }
     else if (inputString.charAt(0) == 'c') {
