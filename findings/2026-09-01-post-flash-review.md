@@ -405,3 +405,37 @@ association, and no AP under our control can force that. The assurance here is s
 split makes it arithmetically impossible for both halves to share a heartbeat — plus a passing
 test of the reachable half. That is a different and weaker kind of evidence than reproducing the
 failure and watching it stop, and it should be read that way.
+
+---
+
+## Watchdog verified end to end on hardware
+
+The heartbeat-gated watchdog was, until now, argued for rather than proven — its only
+evidence was the absence of resets. A `hang` verb (console-only; it spins with no heartbeat
+and no refresh) settles it, and the worst case is the recovery being tested.
+
+```
+t+  0.5s  hang: stopping the loop
+t+ 38.4s  JD5055e OK  reset: WATCHDOG  (r0=00 r1=0002)
+```
+
+38.4 s matches the design: 30 s heartbeat tolerance, up to 5.6 s of watchdog period, plus the
+2 s boot delay. **A genuine hang is caught and recovered, and the cause is reported.** That is
+the first direct proof of F1 working, on the machine where a permanent silent hang was the
+worst outcome in the audit.
+
+### What `reset` can and cannot tell you
+
+Measured, because this field is published in `status` and consumed downstream:
+
+| event | reported |
+|---|---|
+| watchdog bite | `WATCHDOG (r1=0002)` — **detected** |
+| upload / software reset | `software (r1=0004)` — **detected** |
+| USB power cycle | `none-flagged` — PORF not observed |
+| shield RESET button | `none-flagged` — indistinguishable from a power cycle |
+
+PORF is presumably read and cleared by the core's BSP startup before `setup()` runs. So the
+field separates a watchdog reset and an upload from everything else, and does **not** separate
+a power cycle from the RES# pin. An earlier message to `estate-bridge` claimed it distinguished
+a watchdog bite "from a power event" — half right, and corrected there.

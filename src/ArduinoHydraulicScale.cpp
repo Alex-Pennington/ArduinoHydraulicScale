@@ -265,6 +265,8 @@ const unsigned long TELEMETRY_MS = 5000;
 struct WeightRecord {
   int32_t  weight;
   uint32_t capturedAtMs;
+  uint8_t  sensorAtCapture;   // SensorState AS IT WAS when this weight was taken
+  uint8_t  calDefaultAtCapture;
 };
 const int QUEUE_DEPTH = 200;              // ~4 working days at 50 buckets/day
 WeightRecord queueBuf[QUEUE_DEPTH];
@@ -279,6 +281,15 @@ unsigned long queueDropped = 0;           // overflow policy: drop OLDEST, and c
 //   RSTSR0: PORF b0, LVD0RF b1, LVD1RF b2, LVD2RF b3   (power / voltage events)
 //   RSTSR1: IWDTRF b0, WDTRF b1, SWRF b2               (watchdog / software)
 // ---------------------------------------------------------------------------
+// MEASURED behaviour of this decode on real hardware, 2026-09-01 — it is less
+// discriminating than the register map suggests, and `reset` is consumed downstream:
+//   watchdog bite      -> "WATCHDOG (r1=0002)"   detected, verified with the `hang` verb
+//   upload / software  -> "software (r1=0004)"   detected
+//   USB power cycle    -> "none-flagged"         PORF is NOT observed
+//   shield RESET button-> "none-flagged"         indistinguishable from a power cycle
+// PORF is presumably read and cleared by the core's BSP startup before setup() runs.
+// So this separates a watchdog reset and an upload from everything else, and does NOT
+// separate a power cycle from the RES# pin. Do not claim more than that.
 char resetCause[40] = "unknown";
 
 static void captureResetCause() {
@@ -345,9 +356,10 @@ static const char *sensorStateName() {
 static bool publishWeight(int32_t w, uint32_t ageMs, bool backlog) {
   char payload[128];
   snprintf(payload, sizeof(payload),
-           "{\"w\":%ld,\"age_ms\":%lu,\"backlog\":%s,\"sensor\":\"%s\",\"id\":\"%s\"}",
+           "{\"w\":%ld,\"age_ms\":%lu,\"backlog\":%s,\"sensor\":\"%s\","
+           "\"cal\":\"%s\",\"id\":\"%s\"}",
            (long)w, (unsigned long)ageMs, backlog ? "true" : "false",
-           sensorStateName(), CLIENT_ID);
+           sensorStateName(), calibrationDefaulted ? "DEFAULT" : "ok", CLIENT_ID);
   return publishTo("weight", payload);
 }
 
@@ -394,6 +406,13 @@ static void queuePush(int32_t w) {
   int tail = (queueHead + queueCount) % QUEUE_DEPTH;
   queueBuf[tail].weight = w;
   queueBuf[tail].capturedAtMs = millis();
+  // Validity is a HISTORICAL FACT about this reading, so it is recorded here rather
+  // than read at flush time. Omitting it entirely (the previous behaviour) was right
+  // in that stamping CURRENT state on a past record would have been an undetectable
+  // lie — but it left every weight taken out of radio range unusable as data, on the
+  // one machine where being out of range is normal operation.
+  queueBuf[tail].sensorAtCapture = (uint8_t)sensorState;
+  queueBuf[tail].calDefaultAtCapture = calibrationDefaulted ? 1 : 0;
   queueCount++;
 }
 
@@ -402,12 +421,16 @@ static void queueFlush() {
     WeightRecord &r = queueBuf[queueHead];
     uint32_t age = (uint32_t)(millis() - r.capturedAtMs);
     char payload[128];
-    // No `sensor` field here on purpose: sensorState is the state NOW, and this
-    // is a reading captured minutes or hours ago. Stamping the current state on a
-    // historical record would be a small lie a consumer cannot detect.
+    // sensor and cal are the values AT CAPTURE, carried in the record — not the
+    // current ones. That keeps the record honest and still lets a consumer decide
+    // whether the reading was valid, which the earlier omit-entirely form could not.
+    static const char *names[] = { "ok", "NO SENSOR", "SENSOR SHORT" };
     snprintf(payload, sizeof(payload),
-             "{\"w\":%ld,\"age_ms\":%lu,\"backlog\":true,\"id\":\"%s\"}",
-             (long)r.weight, (unsigned long)age, CLIENT_ID);
+             "{\"w\":%ld,\"age_ms\":%lu,\"backlog\":true,\"sensor\":\"%s\","
+             "\"cal\":\"%s\",\"id\":\"%s\"}",
+             (long)r.weight, (unsigned long)age,
+             names[r.sensorAtCapture <= 2 ? r.sensorAtCapture : 0],
+             r.calDefaultAtCapture ? "DEFAULT" : "ok", CLIENT_ID);
     if (!publishTo("weight", payload)) return;   // stop on first failure; keep the rest
     queueHead = (queueHead + 1) % QUEUE_DEPTH;
     queueCount--;
@@ -1046,6 +1069,16 @@ void loop() {
       } else {
         sensorMaxPSI = v;
       }
+    }
+    else if (inputString == "hang") {
+      // Deliberate watchdog test. The ONLY way to establish whether WDTRF is
+      // observable at boot — which matters because `reset` is published in status
+      // and consumed downstream as a liveness signal. Console-only, never on the
+      // keypad, and the worst case IS the recovery: the watchdog reboots the board
+      // in a few seconds, which is precisely what is being tested.
+      Console.println("hang: stopping the loop. watchdog should reset in ~5 s.");
+      Console.flush();
+      for (;;) { }        // no heartbeat, no WDT.refresh
     }
     else if (inputString == "keys") {
       // Live ladder sampler. Press each button in turn; every change in the decoded
