@@ -163,7 +163,13 @@ float sampleTotal = 0;
 // ---------------------------------------------------------------------------
 // Bump this if the EEPROM layout ever changes, and old stored values are ignored
 // rather than reinterpreted.
-const uint32_t EEPROM_SIGNATURE = 0x504C4334;   // 'PLC4'
+const uint32_t EEPROM_SIGNATURE = 0x504C4334;   // 'PLC4'  calibration block
+// The tally gets its OWN signature so clearing or rejecting calibration cannot
+// silently discard the operator's recorded work, and vice versa.
+const uint32_t TALLY_SIGNATURE  = 0x544C5934;   // 'TLY4'
+// EEPROM map, all relative to addr(10):
+//   +0  calFactor   +4  tareValue   +8  alpha   +12 EEPROM_SIGNATURE
+//   +16 TALLY_SIGNATURE   +20 rTindex   +24 rT[rTsize]
 bool calibrationDefaulted = false;
 
 const uint32_t WDT_TIMEOUT_MS            = 5000;   // ceiling on this part is 5592
@@ -505,7 +511,10 @@ void setup() {
   lcd.setCursor(0, 1);
   lcd.print("Press Key:");
 
+  tallyRestore();
   captureResetCause();
+  Console.print("tally restored = ");
+  Console.println(rTindex);
   Console.print("JD5055e OK  reset: ");
   Console.println(resetCause);
   printDebug();
@@ -551,6 +560,49 @@ void setup() {
   }
   Console.print("heartbeat wdt = ");
   Console.println(hb ? "on" : "UNAVAILABLE - resets during network calls");
+}
+
+// ---------------------------------------------------------------------------
+// Tally persistence.
+//
+// Added because the LCD shield's RESET button sits in the same row as the five
+// operator keys — confirmed 2026-09-01 when pressing along the row reset the board
+// and wiped the tally (reset cause reported "none-flagged", i.e. the RES# pin, which
+// is what an external button does). A gloved thumb will find it in the field.
+//
+// EEPROM.put() on this core is a virtual EEPROM over data flash: it skips unchanged
+// BYTES but still erases and rewrites the whole block per CALL. So the cost is
+// counted in calls, not bytes, and these helpers write the least that is sufficient:
+//   +  one entry and the index      -  the index alone
+//   b  the index alone (set to 0; the stale entries above it are never read,
+//      because `sum` loops i < rTindex)
+// At ~50 buckets a day that is well inside the 100,000-cycle minimum.
+// ---------------------------------------------------------------------------
+// The signature is written ONCE, not on every action. EEPROM.put() erases its block
+// whether or not the value changed, so rewriting a constant every bucket would have
+// tripled the wear for nothing.
+bool tallySigWritten = false;
+static void tallySaveIndex() {
+  EEPROM.put(addr + 20, rTindex);
+  if (!tallySigWritten) {
+    EEPROM.put(addr + 16, TALLY_SIGNATURE);
+    tallySigWritten = true;
+  }
+}
+static void tallySaveEntry(int i) {
+  if (i < 0 || i >= rTsize) return;
+  EEPROM.put(addr + 24 + (i * (int)sizeof(int)), rT[i]);
+}
+static void tallyRestore() {
+  uint32_t sig = 0;
+  EEPROM.get(addr + 16, sig);
+  if (sig != TALLY_SIGNATURE) return;          // nothing stored, or a different layout
+  int idx = 0;
+  EEPROM.get(addr + 20, idx);
+  if (idx < 0 || idx > rTsize) return;         // refuse an impossible index rather than trust it
+  for (int i = 0; i < idx; i++) EEPROM.get(addr + 24 + (i * (int)sizeof(int)), rT[i]);
+  rTindex = idx;
+  tallySigWritten = true;                      // already on flash; do not rewrite it
 }
 
 // Map a raw ladder reading to a key index, or -1 for "no button".
@@ -792,7 +844,9 @@ void loop() {
         Console.print(" = ");
         Console.println(rT[rTindex]);
         lcd.print(outputValue);
+        tallySaveEntry(rTindex);
         rTindex++;
+        tallySaveIndex();
         // Publish live, or queue for flush on reconnect. Never blocks.
         if (netState == NET_ONLINE) {
           if (!publishWeight(outputValue, 0, false)) queuePush(outputValue);
@@ -819,6 +873,7 @@ void loop() {
       if (rTindex > 0) {
         rTindex--;
         rT[rTindex] = 0;
+        tallySaveIndex();     // the entry above is stale but never read: sum loops i < rTindex
       }
     }
     else if (inputString == "read") {
@@ -855,6 +910,7 @@ void loop() {
       }
       rTindex = 0;
       rTsum = 0;
+      tallySaveIndex();
       Console.println("Buffer Cleared");
       lcd.setCursor(0, 1);
       lcd.print ("                           ");

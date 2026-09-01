@@ -79,6 +79,91 @@ and published when the broker comes back into range — `net` shows how many are
 waiting. Published backlog is marked as such with its age, so it cannot be mistaken
 for a live reading.
 
+## What survives a reset, and what does not
+
+**Corrected 2026-09-01.** An earlier version of this page said the recorded weights
+stayed in the tally through a power cycle. That was wrong at the time and has now been
+made true: the tally is written to permanent memory as you record it.
+
+| what | survives a reset or power cycle? |
+|---|---|
+| `tare` zero | **yes** — stored |
+| `kv` calibration | **yes** — stored |
+| the recorded tally (`+`, `sum`) | **yes** — stored as you go |
+| weights queued for upload while out of range | **NO — lost** |
+| `sm` full-scale setting | **NO — reverts to 3000 psi** |
+
+So a reset costs you the *uploads* that had not gone out yet, not the numbers
+themselves. `sum` will still be right. If the queue mattered, get back in radio range
+before keying off — `net` and the display both show how many are waiting.
+
+**If you ever change `sm`, set it again after every reset.** It is the only setting
+that looks permanent and is not. With a transducer of a range other than 3000 psi
+fitted, a silent revert leaves the scale working and reading wrong.
+
+## Mind the RESET button
+
+The LCD shield has a **RESET button in the same row as the five operator keys.** It is
+easy to catch with a glove, and it restarts the board.
+
+That is now survivable — the tally is kept — but it is not free: anything still queued
+for upload is lost, and the scale takes a few seconds to come back and re-associate.
+If you keep catching it, tape over it.
+
+## Commands
+
+Sent over the Bluetooth console (HC-05, 9600 baud), or from the LCD keypad.
+
+| Command | Does |
+|---|---|
+| `tare` | Set zero from the current reading. Stored. **At the mark, empty.** |
+| `kv` | Calibrate span against `calWeight`. Stored. **At the mark, with the load.** Refuses if at or below tare. |
+| `+` | Record the current weight to the tally, and publish it |
+| `-` | Remove the last recorded entry |
+| `sum` | Total the recorded entries |
+| `b` | Clear the tally |
+| `read` | Print the current weight |
+| `net` | Print WiFi, MQTT, IP, queued and dropped counts, and sensor state |
+| `debug` | Toggle verbose output. Not stored — off at every boot. |
+| `c<value>` | Set the calibration factor directly. Stored. Rejected if out of range. |
+| `w<value>` | Set the smoothing factor, 0 to 1. Stored. |
+| `sm<value>` | Set the transducer full-scale pressure in psi. **NOT stored — reverts to 3000 on every reset.** |
+
+**Note the renames:** `cal` became `kv` and `clear` became `b` on this firmware line.
+The Bluetooth macro set in `serial_bluetooth_terminal_cfg.txt` has been reissued to
+match — reload it on the phone, or two of the buttons will do nothing.
+
+**If you ever change `sm`, you must set it again after every reset.** It is the only
+setting that looks permanent and is not. If a transducer with a range other than 3000 psi
+is fitted and `sm` silently reverts, the scale keeps working and reads wrong — with
+nothing on the display to say so.
+
+## Keypad
+
+| Key | Command |
+|---|---|
+| Right | `+` |
+| Up | `sum` |
+| Down | `b` |
+| Left | `-` |
+| Select | `tare` |
+
+## What the display tells you
+
+- A number — the current weight.
+- **`NO SENSOR`** — the transducer reads below its live zero. Open circuit, cut or
+  chafed wire, or a dead sensor. **This is not a zero reading; it is a fault.** The
+  scale cannot weigh until it is fixed.
+- **`SENSOR SHORT`** — the input is near the supply rail. Shorted wiring.
+- `Buffer Full` — the 50-entry tally is full. Use `sum`, then `b`.
+
+## Working out of radio range
+
+The scale works normally with no network. Recorded weights (`+`) are held in memory
+and published when the broker comes back into range — `net` shows how many are
+waiting. Published backlog is marked as such with its age, so it cannot be mistaken
+for a live reading.
+
 ## NOTHING YOU RECORD SURVIVES A POWER CYCLE
 
 **Read this before you key off.**
