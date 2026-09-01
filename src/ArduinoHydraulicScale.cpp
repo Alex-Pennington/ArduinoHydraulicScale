@@ -249,6 +249,9 @@ unsigned long netAttempts = 0;   // how many times netPoll has tried to connect
 const unsigned long NET_RETRY_MS = 30000;   // bounded attempt rate, never a loop
 const unsigned long STAGE_GAP_MS = 500;     // gap between association and broker stages
 unsigned long lastTelemetryMs = 0;
+unsigned long lastStatusMs = 0;
+bool willArmed = false;
+const unsigned long STATUS_MS = 60000;   // heartbeat; also published immediately on connect
 const unsigned long TELEMETRY_MS = 5000;
 
 // --- RAM backlog queue -----------------------------------------------------
@@ -303,11 +306,15 @@ void printDebug();
 // ---------------------------------------------------------------------------
 // Topic building — sized buffer, never a hard-coded length
 // ---------------------------------------------------------------------------
+static bool buildTopic(const char *leaf, char *out, size_t len) {
+  int n = snprintf(out, len, "%s/%s", TOPIC_ROOT, leaf);
+  return n > 0 && (size_t)n < len;      // refuse a truncated topic rather than publish to a stub
+}
+
 static bool publishTo(const char *leaf, const char *payload) {
   if (netState != NET_ONLINE) return false;
   char topic[64];
-  int n = snprintf(topic, sizeof(topic), "%s/%s", TOPIC_ROOT, leaf);
-  if (n < 0 || (size_t)n >= sizeof(topic)) return false;   // refuse to publish a truncated topic
+  if (!buildTopic(leaf, topic, sizeof(topic))) return false;
   if (!mqttClient.beginMessage(topic)) return false;       // return IS checked — silent loss was C6
   mqttClient.print(payload);
   return mqttClient.endMessage() == 1;
@@ -342,6 +349,40 @@ static bool publishWeight(int32_t w, uint32_t ageMs, bool backlog) {
            (long)w, (unsigned long)ageMs, backlog ? "true" : "false",
            sensorStateName(), CLIENT_ID);
   return publishTo("weight", payload);
+}
+
+// ---------------------------------------------------------------------------
+// Retained status: whether to BELIEVE the numbers, not what they are.
+//
+// Everything here was already known to the board and reachable only from the LCD or
+// a serial console in the cab. A consumer could not tell a calibrated scale from one
+// running on defaults, could not see that weights had been dropped, and could not
+// tell "out of radio range" from "wedged".
+//
+// Retained, so a subscriber that connects later gets the current state rather than
+// silence. Paired with the last will below, silence finally means something.
+//
+// Deliberately NOT a boot counter: persisting one would mean an EEPROM write on every
+// boot, and a board in a reset loop would then wear the flash out while failing.
+// Uptime plus the hardware reset cause tell the same story without that risk.
+// ---------------------------------------------------------------------------
+static void publishStatus(unsigned long now) {
+  lastStatusMs = now;
+  char payload[320];
+  snprintf(payload, sizeof(payload),
+    "{\"up\":true,\"cal\":\"%s\",\"sensor\":\"%s\",\"tare\":%d,\"cf\":%.5f,"
+    "\"n\":%d,\"q\":%d,\"dropped\":%lu,\"uptime_s\":%lu,\"rssi\":%d,"
+    "\"reset\":\"%s\",\"id\":\"%s\"}",
+    calibrationDefaulted ? "DEFAULT" : "ok",
+    sensorStateName(), tareValue, calFactor,
+    rTindex, queueCount, queueDropped,
+    (unsigned long)(now / 1000UL), (int)WiFi.RSSI(),
+    resetCause, CLIENT_ID);
+  char topic[64];
+  if (!buildTopic("status", topic, sizeof(topic))) return;
+  if (!mqttClient.beginMessage(topic, true, 1)) return;   // retained, QoS 1
+  mqttClient.print(payload);
+  mqttClient.endMessage();
 }
 
 static void queuePush(int32_t w) {
@@ -446,6 +487,35 @@ static void netPoll() {
   mqttClient.setId(CLIENT_ID);                          // was unset: C7
   mqttClient.setUsernamePassword(mqttUser, mqttPass);
 
+  // The last will MUST be armed before connect: the broker records it at CONNECT and
+  // publishes it if this client ever drops without a clean DISCONNECT. That is what
+  // makes an absent tractor distinguishable from a wedged one — without it, silence
+  // has no meaning and a dead board looks exactly like one out of radio range.
+  //
+  // TWO bugs lived in these six lines, both worth naming:
+  //
+  //  1. beginWill() returns 0 on SUCCESS (MqttClient.cpp:294). Testing it as a
+  //     boolean inverted the check, so on success the payload was never written and
+  //     endWill() never ran — leaving the CONNECT packet declaring a will flag over a
+  //     zero-length will buffer. The broker dropped it without a CONNACK and the board
+  //     reported mqtt_err = -1, CONNECTION_TIMEOUT, on every attempt.
+  //  2. It was armed on EVERY retry. The library keeps _willBuffer and _willFlags
+  //     across connects (MqttClient.cpp:916 only reads them), so once is enough.
+  //
+  // The first is the same misreading as publishWeight()'s void-in-a-boolean-test
+  // earlier today: assuming a return contract instead of reading it.
+  if (!willArmed) {
+    char willTopic[64];
+    if (buildTopic("status", willTopic, sizeof(willTopic))
+        && mqttClient.beginWill(willTopic, true, 0) == 0) {   // retained, QoS 0
+      mqttClient.print("{\"up\":false,\"id\":\"");
+      mqttClient.print(CLIENT_ID);
+      mqttClient.print("\"}");
+      mqttClient.endWill();
+      willArmed = true;
+    }
+  }
+
   // R1: this refresh was missing when WiFi was ALREADY associated — the common case.
   // The last refresh was then at the top of this function, and the connect below can
   // occupy most of the watchdog period on its own. Without it, WiFi up plus an
@@ -461,6 +531,7 @@ static void netPoll() {
   lastMqttError = 0;
   WDT.refresh();
   netState = NET_ONLINE;
+  publishStatus(now);      // say we are here, and on what terms, before any data
   queueFlush();                                          // was C6: no reconnect path at all
 }
 
@@ -798,6 +869,10 @@ void loop() {
   }
 
   netPoll();
+
+  if (netState == NET_ONLINE && currentMillis - lastStatusMs >= STATUS_MS) {
+    publishStatus(currentMillis);
+  }
 
   if (netState == NET_ONLINE && currentMillis - lastTelemetryMs >= TELEMETRY_MS) {
     lastTelemetryMs = currentMillis;
