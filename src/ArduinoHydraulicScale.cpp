@@ -554,6 +554,12 @@ void setup() {
 }
 
 // Map a raw ladder reading to a key index, or -1 for "no button".
+//
+// MEASURED on the fitted shield 2026-09-01 with the `keys` verb, at 10-bit:
+//   Right 0   Up 145   Down 343   Left 516   Select 731   none 1016
+// Every reading sits well inside its band, so the thresholds inherited from the
+// uno-r3-swserial-lcd branch are correct for this hardware and need no remap.
+// They are only valid at 10 bits - see the analogReadResolution(10) in hmiPoll().
 static int keyIndex(int x) {
   if (x < 60)  return 0;   // Right
   if (x < 200) return 1;   // Up
