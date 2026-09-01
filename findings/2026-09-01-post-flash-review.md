@@ -128,6 +128,23 @@ what was checked — here, `WDT.cpp` and `WiFi.cpp` — so that what was *not* c
 
 ---
 
+## What a value-sweep misses: the `calFactor` upper bound
+
+Raised by the reviewer, and worth recording for its shape rather than its size.
+
+`calFactor`'s validation accepts anything up to `1000.0f`. The expected value is around
+**0.066**, so the bound admits roughly **15,000x** the plausible figure — it is a range check
+that would pass almost any corruption.
+
+The reason it survived the earlier sweep is the useful part. That sweep hunted for constants
+that were wrong *for 14-bit resolution*, and it was substantially right that no fifth instance
+affected a published value. But `1000.0f` is a **validator**, not a value: it produces no wrong
+number itself, it merely fails to reject one. A search for wrong outputs cannot surface a bound
+that is too generous, because a too-generous bound has no output.
+
+The rule to carry: after a resolution or scaling change, re-derive the **limits** as well as the
+values. Not fixed — `src/` is untouched pending the R1 design decision.
+
 ## Also from the bench, and also mine
 
 **T4's open-circuit detection does not work.** With nothing connected to A1 the board reads 4401

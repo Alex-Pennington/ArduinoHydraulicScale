@@ -39,14 +39,19 @@ Sent over the Bluetooth console (HC-05, 9600 baud), or from the LCD keypad.
 | `b` | Clear the tally |
 | `read` | Print the current weight |
 | `net` | Print WiFi, MQTT, IP, queued and dropped counts, and sensor state |
-| `debug` | Toggle verbose output |
-| `c<value>` | Set the calibration factor directly. Rejected if out of range. |
-| `w<value>` | Set the smoothing factor, 0 to 1 |
-| `sm<value>` | Set the transducer full-scale pressure in psi |
+| `debug` | Toggle verbose output. Not stored — off at every boot. |
+| `c<value>` | Set the calibration factor directly. Stored. Rejected if out of range. |
+| `w<value>` | Set the smoothing factor, 0 to 1. Stored. |
+| `sm<value>` | Set the transducer full-scale pressure in psi. **NOT stored — reverts to 3000 on every reset.** |
 
 **Note the renames:** `cal` became `kv` and `clear` became `b` on this firmware line.
 The Bluetooth macro set in `serial_bluetooth_terminal_cfg.txt` has been reissued to
 match — reload it on the phone, or two of the buttons will do nothing.
+
+**If you ever change `sm`, you must set it again after every reset.** It is the only
+setting that looks permanent and is not. If a transducer with a range other than 3000 psi
+is fitted and `sm` silently reverts, the scale keeps working and reads wrong — with
+nothing on the display to say so.
 
 ## Keypad
 
@@ -74,7 +79,26 @@ and published when the broker comes back into range — `net` shows how many are
 waiting. Published backlog is marked as such with its age, so it cannot be mistaken
 for a live reading.
 
-**Held readings do not survive a power cycle.** If the tractor is keyed off with
-readings still queued, those publishes are lost. The weights themselves remain in the
-tally (`sum`) until you clear it, so the record is not gone — only the automatic
-upload of it.
+## NOTHING YOU RECORD SURVIVES A POWER CYCLE
+
+**Read this before you key off.**
+
+An earlier version of this page said the recorded weights stay in the tally through a
+power cycle and that only the upload was lost. **That was wrong.** Both the tally and
+the queued uploads live in RAM:
+
+| what | survives a reset or power cycle? |
+|---|---|
+| `tare` zero | **yes** — stored |
+| `kv` calibration | **yes** — stored |
+| the recorded tally (`+`, `sum`) | **NO — lost** |
+| weights queued for upload while out of range | **NO — lost** |
+| `sm` full-scale setting | **NO — reverts to 3000 psi** |
+
+**So: get your weights off the machine before you key off.** Either `sum` them and write
+the total down, or be in radio range long enough for the queue to publish — `net` shows
+how many are still waiting. Once it queues to zero, they are gone from the machine and
+safe on the broker.
+
+Anything that resets the board does this, not just turning the key. A power blip, a loose
+connector, or a firmware fault all clear the tally the same way and without warning.
