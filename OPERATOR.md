@@ -58,9 +58,12 @@ The Bluetooth macro set in `serial_bluetooth_terminal_cfg.txt` has been reissued
 match — reload it on the phone, or two of the buttons will do nothing.
 
 **If you ever change `sm`, you must set it again after every reset.** It is the only
-setting that looks permanent and is not. If a transducer with a range other than 3000 psi
-is fitted and `sm` silently reverts, the scale keeps working and reads wrong — with
-nothing on the display to say so.
+setting that looks permanent and is not. If a transducer with a range other than the
+built-in default is fitted and `sm` silently reverts, the scale keeps working and reads
+wrong — with nothing on the display to say so.
+
+For a sensor that is staying on the machine, do not rely on `sm` at all: the default
+belongs in the firmware, so it survives every reset without anyone remembering.
 
 ## Keypad
 

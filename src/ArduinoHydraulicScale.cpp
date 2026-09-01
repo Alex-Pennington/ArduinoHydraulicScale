@@ -880,10 +880,18 @@ void loop() {
     //
     // This value is PUBLISHED as `psi`, so it is not display-only cosmetics.
     //
-    // NOTE the asymmetry: sensorMaxPSI is runtime-settable via `sm`, but the count
-    // endpoints are compile-time and derived from the 0.5-4.5 V spec. Changing `sm`
-    // alone does NOT rescale a physically different transducer — if the part number
-    // comes back as something else, SENSOR_COUNTS_ZERO/FS have to change with it.
+    // What `sm` can and cannot rescale — an earlier revision of this comment was
+    // over-broad and said it could not rescale a different transducer at all:
+    //
+    //   different PRESSURE range, same 0.5-4.5 V output  -> `sm` alone IS sufficient.
+    //     SENSOR_COUNTS_ZERO/FS are the counts for 0.5 V and 4.5 V; they do not move
+    //     when the psi range does. A 3500 psi unit needs only sensorMaxPSI = 3500.
+    //   different OUTPUT VOLTAGE range (e.g. 1-5 V)      -> both count endpoints must
+    //     change too, and `sm` alone would silently leave the scale wrong.
+    //
+    // The live hazard is not the arithmetic, it is that `sm` is NOT PERSISTED: it
+    // reverts to the compile-time default on every reset. So a non-default sensor
+    // wants the default below changed, not `sm` typed after each boot.
     pressureValue = map((int)smoothedValue, SENSOR_COUNTS_ZERO, SENSOR_COUNTS_FS,
                         0, sensorMaxPSI);
     outputValue = (float)calFactor * ((float)smoothedValue - (float)tareValue);
