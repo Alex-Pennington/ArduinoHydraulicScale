@@ -25,10 +25,35 @@ const int pin_d7 = 7;
 const int pin_BL = 10;
 LiquidCrystal lcd( pin_RS,  pin_EN,  pin_d4,  pin_d5,  pin_d6,  pin_d7);
 
+// ---------------------------------------------------------------------------
+// Console: the HC-05 on Serial1 (D0/D1) is the field interface, but the board
+// also has a USB port and a technician with a laptop will plug into it. Mirror
+// output to both and accept commands from either.
+//
+// NOTE: there is deliberately NO `while (!Serial)` here. On this board `Serial`
+// is USB CDC and that guard blocks forever with no host attached — it is defect
+// C4 from the audit, the single worst line in the original firmware. Writes to
+// an unopened CDC port are harmless; waiting for one is not.
+// ---------------------------------------------------------------------------
+class DualPrint : public Print {
+  public:
+    size_t write(uint8_t c) override {
+      Serial.write(c);
+      return Serial1.write(c);
+    }
+    size_t write(const uint8_t *b, size_t n) override {
+      Serial.write(b, n);
+      return Serial1.write(b, n);
+    }
+};
+DualPrint Console;
+
 bool debug_flag = false;
 
 // These constants won't change. They're used to give names to the pins used:
-const int analogInPin = A2;  // pressure transducer. NOTE: the r4_wifi_mqtt branch used A1.
+// Pressure transducer. CONFIRMED A1 by Alex, 2026-09-01, at the machine.
+// `main` had this as A2; the r4_wifi_mqtt branch had A1 and was right.
+const int analogInPin = A1;
 
 // ---------------------------------------------------------------------------
 // Transducer scaling — SPEC-DEPENDENT, NOT YET CONFIRMED AGAINST A DATASHEET
@@ -111,6 +136,11 @@ float sampleTotal = 0;
 // If you raise WIFI_CONNECT_TIMEOUT_MS, raise the watchdog to match — and it
 // cannot go above 5592.
 // ---------------------------------------------------------------------------
+// Bump this if the EEPROM layout ever changes, and old stored values are ignored
+// rather than reinterpreted.
+const uint32_t EEPROM_SIGNATURE = 0x504C4334;   // 'PLC4'
+bool calibrationDefaulted = false;
+
 const uint32_t WDT_TIMEOUT_MS            = 5000;   // ceiling on this part is 5592
 const unsigned long WIFI_CONNECT_TIMEOUT_MS = 3000;
 const unsigned long MQTT_CONNECT_TIMEOUT_MS = 3000;
@@ -280,7 +310,8 @@ static void netPoll() {
 
 void setup() {
   delay(2000);
-  Serial1.begin(9600);
+  Serial1.begin(9600);   // HC-05 field console
+  Serial.begin(115200);  // USB console for bring-up and service. No wait-for-host.
   inputString.reserve(200);
   // Set the resolution BEFORE seeding the filter: main seeded smoothedValue from
   // a 10-bit read and then ran the loop at 14 bits, so the filter started ~16x
@@ -288,16 +319,43 @@ void setup() {
   analogReadResolution(14);
   smoothedValue = analogRead(analogInPin);
 
-  EEPROM.get(addr, calFactor);
-  EEPROM.get(addr+4, tareValue);
-  EEPROM.get(addr+8, alpha);
+  // -------------------------------------------------------------------------
+  // EEPROM restore, with a signature.
+  //
+  // Range checks alone are NOT enough, and this bit me on the first flash: the
+  // board came back with tareValue = 16256, calFactor ~0 and alpha 0, all of
+  // which passed a plain range test and none of which were this firmware's. They
+  // were leftovers from an earlier build with a different layout — 16256 is
+  // 0x3F80, the top half of a float 1.0f landing at the wrong offset.
+  //
+  // Garbage that happens to fall in range is indistinguishable from a real stored
+  // calibration, so the signature is what makes the distinction possible at all.
+  // Without it, every board flashed over older firmware silently inherits
+  // nonsense and reports `sensor = ok` while doing it.
+  // -------------------------------------------------------------------------
+  uint32_t sig = 0;
+  EEPROM.get(addr+12, sig);
+  bool eepromValid = (sig == EEPROM_SIGNATURE);
 
-  // A virgin EEPROM reads 0xFF, which is NaN as a float and -1 as an int. Without
-  // this, a fresh board silently runs on garbage calibration and every reading is
-  // NaN. Same defect class as A7 — unvalidated calibration values.
-  if (isnan(calFactor) || calFactor <= 0.0f || calFactor > 1000.0f) calFactor = 1.0f;
-  if (tareValue < 0 || tareValue > 16383) tareValue = 0;
-  if (isnan(alpha) || alpha < 0.0f || alpha >= 1.0f) alpha = 0.1f;
+  if (eepromValid) {
+    EEPROM.get(addr, calFactor);
+    EEPROM.get(addr+4, tareValue);
+    EEPROM.get(addr+8, alpha);
+  }
+
+  // Second line of defence: reject anything physically impossible even if the
+  // signature matched. A zero outside the transducer's own operating band cannot
+  // be a zero, whatever the EEPROM says.
+  bool defaulted = !eepromValid;
+  if (isnan(calFactor) || calFactor <= 0.0001f || calFactor > 1000.0f) { calFactor = 1.0f; defaulted = true; }
+  if (tareValue < SENSOR_COUNTS_OPEN || tareValue > SENSOR_COUNTS_FS)  { tareValue = SENSOR_COUNTS_ZERO; defaulted = true; }
+  if (isnan(alpha) || alpha <= 0.0f || alpha >= 1.0f)                  { alpha = 0.1f; defaulted = true; }
+
+  if (defaulted) {
+    // Say so loudly. A silently defaulted calibration is the same failure the
+    // stale-zero problem describes: the machine works, and reads wrong.
+    calibrationDefaulted = true;
+  }
 
   lcd.begin(16, 2);
   lcd.setCursor(0, 0);
@@ -305,7 +363,7 @@ void setup() {
   lcd.setCursor(0, 1);
   lcd.print("Press Key:");
 
-  Serial1.println("JD5055e OK");
+  Console.println("JD5055e OK");
   printDebug();
 
   // Both timeouts must be set before the watchdog is armed — see the comment on
@@ -442,12 +500,13 @@ void loop() {
       // unloaded pressure as well as the loaded pressure, so a tare taken
       // anywhere else puts a constant offset into every reading.
       if (sensorState != SENSOR_OK) {
-        Serial1.print("tare REFUSED: ");
-        Serial1.println(sensorStateName());
+        Console.print("tare REFUSED: ");
+        Console.println(sensorStateName());
       } else {
         tareValue = sensorValue;
         EEPROM.put(addr+4, tareValue);
-        Serial1.println("tare");
+        EEPROM.put(addr+12, EEPROM_SIGNATURE);
+        Console.println("tare");
       }
     }
     else if (inputString == "debug") {
@@ -458,8 +517,8 @@ void loop() {
       // put a fabricated number into the tally and publish it as a real weight.
       // A fault must refuse the operation, not quietly produce a plausible value.
       if (sensorState != SENSOR_OK) {
-        Serial1.print("NOT RECORDED: ");
-        Serial1.println(sensorStateName());
+        Console.print("NOT RECORDED: ");
+        Console.println(sensorStateName());
         lcd.setCursor(0, 1);
         lcd.print ("                           ");
         lcd.setCursor(0, 1);
@@ -467,9 +526,9 @@ void loop() {
       }
       else if (rTindex < rTsize) {
         rT[rTindex] = outputValue;
-        Serial1.print(rTindex);
-        Serial1.print(" = ");
-        Serial1.println(rT[rTindex]);
+        Console.print(rTindex);
+        Console.print(" = ");
+        Console.println(rT[rTindex]);
         lcd.print(outputValue);
         rTindex++;
         // Publish live, or queue for flush on reconnect. Never blocks.
@@ -479,7 +538,7 @@ void loop() {
           queuePush(outputValue);
         }
       } else {
-        Serial1.println("Buffer Full");
+        Console.println("Buffer Full");
         lcd.print ("                           ");
         lcd.setCursor(0, 1);
         lcd.print ("Buffer Full");
@@ -505,8 +564,8 @@ void loop() {
       {
         printDebug();
       }
-      Serial1.print("weight = ");
-      Serial1.println(outputValue);
+      Console.print("weight = ");
+      Console.println(outputValue);
       lcd.setCursor(0, 1);
       lcd.print ("                           ");
       lcd.setCursor(0, 1);
@@ -516,12 +575,12 @@ void loop() {
       rTsum = 0;
       for (int i = 0; i < rTindex; i++) {
         rTsum += rT[i];
-        Serial1.print(i);
-        Serial1.print(" = ");
-        Serial1.println(rT[i]);
+        Console.print(i);
+        Console.print(" = ");
+        Console.println(rT[i]);
       }
-      Serial1.print("sum = ");
-      Serial1.println(rTsum);
+      Console.print("sum = ");
+      Console.println(rTsum);
       lcd.setCursor(0, 1);
       lcd.print ("                           ");
       lcd.setCursor(0, 1);
@@ -534,7 +593,7 @@ void loop() {
       }
       rTindex = 0;
       rTsum = 0;
-      Serial1.println("Buffer Cleared");
+      Console.println("Buffer Cleared");
       lcd.setCursor(0, 1);
       lcd.print ("                           ");
       lcd.setCursor(0, 1);
@@ -549,10 +608,10 @@ void loop() {
       if (sensorState != SENSOR_OK) {
         // A short reads high and would yield a plausible-looking span. Both the
         // zero and the span are persisted, so a bad one survives the reboot.
-        Serial1.print("cal REFUSED: ");
-        Serial1.println(sensorStateName());
+        Console.print("cal REFUSED: ");
+        Console.println(sensorStateName());
       } else if (span <= 0.0f) {
-        Serial1.println("cal FAILED: at or below tare");
+        Console.println("cal FAILED: at or below tare");
         lcd.setCursor(0, 1);
         lcd.print ("                           ");
         lcd.setCursor(0, 1);
@@ -560,8 +619,10 @@ void loop() {
       } else {
         calFactor = float(calWeight) / span;
         EEPROM.put(addr,  calFactor);
-        Serial1.print("c = ");
-        Serial1.println(calFactor);
+        EEPROM.put(addr+12, EEPROM_SIGNATURE);
+        calibrationDefaulted = false;
+        Console.print("c = ");
+        Console.println(calFactor);
       }
     }
     else if (inputString.charAt(0) == 'c') {
@@ -569,10 +630,11 @@ void loop() {
       inputString.remove(0, 1);
       float v = inputString.toFloat();
       if (isnan(v) || v <= 0.0f || v > 1000.0f) {
-        Serial1.println("c REJECTED");
+        Console.println("c REJECTED");
       } else {
         calFactor = v;
         EEPROM.put(addr,  calFactor);
+        EEPROM.put(addr+12, EEPROM_SIGNATURE);
       }
       lcd.print ("                           ");
       lcd.setCursor(0, 1);
@@ -583,10 +645,11 @@ void loop() {
       inputString.remove(0, 1);
       float v = inputString.toFloat();
       if (isnan(v) || v < 0.0f || v >= 1.0f) {
-        Serial1.println("w REJECTED");
+        Console.println("w REJECTED");
       } else {
         alpha = v;
         EEPROM.put(addr+8,  alpha);
+        EEPROM.put(addr+12, EEPROM_SIGNATURE);
       }
       lcd.print ("                           ");
       lcd.setCursor(0, 1);
@@ -597,7 +660,7 @@ void loop() {
       inputString.remove(0, 2);
       int v = inputString.toInt();
       if (v <= 0 || v > 20000) {
-        Serial1.println("sm REJECTED");
+        Console.println("sm REJECTED");
       } else {
         sensorMaxPSI = v;
       }
@@ -607,18 +670,18 @@ void loop() {
       lcd.print(sensorMaxPSI);
     }
     else if (inputString == "net") {
-      Serial1.print("wifi = ");
-      Serial1.println(WiFi.status() == WL_CONNECTED ? "up" : "down");
-      Serial1.print("mqtt = ");
-      Serial1.println(netState == NET_ONLINE ? "up" : "down");
-      Serial1.print("ip = ");
-      Serial1.println(WiFi.localIP());
-      Serial1.print("queued = ");
-      Serial1.println(queueCount);
-      Serial1.print("dropped = ");
-      Serial1.println(queueDropped);
-      Serial1.print("sensor = ");
-      Serial1.println(sensorStateName());
+      Console.print("wifi = ");
+      Console.println(WiFi.status() == WL_CONNECTED ? "up" : "down");
+      Console.print("mqtt = ");
+      Console.println(netState == NET_ONLINE ? "up" : "down");
+      Console.print("ip = ");
+      Console.println(WiFi.localIP());
+      Console.print("queued = ");
+      Console.println(queueCount);
+      Console.print("dropped = ");
+      Console.println(queueDropped);
+      Console.print("sensor = ");
+      Console.println(sensorStateName());
     }
     // The blocking delay(1000) that used to sit here is gone: it stalled the
     // whole loop, poll() included, after every keypress. The LCD message now
@@ -631,35 +694,37 @@ void loop() {
 
 void printDebug()
 {
-    Serial1.print("a = ");
-    Serial1.println(sensorValue);
-    Serial1.print("v = ");
-    Serial1.println(sensorVoltage);
-    Serial1.print("p = ");
-    Serial1.println(pressureValue);
-    Serial1.print("t = ");
-    Serial1.println(tareValue);
-    Serial1.print("c = ");
-    Serial1.println(calFactor);
-    Serial1.print("sm = ");
-    Serial1.println(sensorMaxPSI);
-    Serial1.print("w = ");
-    Serial1.println(alpha);
-    Serial1.print("i = ");
-    Serial1.println(rTindex);
-    Serial1.print("sensor = ");
-    Serial1.println(sensorStateName());
+    Console.print("a = ");
+    Console.println(sensorValue);
+    Console.print("v = ");
+    Console.println(sensorVoltage);
+    Console.print("p = ");
+    Console.println(pressureValue);
+    Console.print("t = ");
+    Console.println(tareValue);
+    Console.print("c = ");
+    Console.println(calFactor, 5);   // 2dp printed both garbage values as "0.00"
+    Console.print("sm = ");
+    Console.println(sensorMaxPSI);
+    Console.print("w = ");
+    Console.println(alpha, 4);
+    Console.print("i = ");
+    Console.println(rTindex);
+    Console.print("sensor = ");
+    Console.println(sensorStateName());
+    Console.print("cal = ");
+    Console.println(calibrationDefaulted ? "DEFAULTED - tare and kv needed" : "stored");
   }
  /*
    SerialEvent occurs whenever a new data comes in the hardware serial RX.
  */
 void serialEvent() {
-  while (Serial1.available()) {
+  while (Serial1.available() || Serial.available()) {
     // A6: stop consuming the buffer once a line is complete, or a second
     // command arriving in the same burst concatenates onto the first
     // ("tare" + "read" -> "tareread") and is silently discarded.
     if (stringComplete) return;
-    char inChar = (char)Serial1.read();
+    char inChar = Serial1.available() ? (char)Serial1.read() : (char)Serial.read();
     if (inChar == '\n' || inChar == '\r') {
       if (inputString.length() > 0) stringComplete = true;
     } else if (inputString.length() < 64) {   // was unbounded: heap growth on garbage
