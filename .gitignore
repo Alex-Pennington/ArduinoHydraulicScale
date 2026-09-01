@@ -6,3 +6,6 @@
 
 # Never commit real credentials (arduino_secrets.h.example is the tracked template)
 arduino_secrets.h
+
+# Other sessions may create worktrees in here; never track them
+.claude/worktrees/
