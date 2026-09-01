@@ -3,3 +3,6 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# Never commit real credentials (arduino_secrets.h.example is the tracked template)
+arduino_secrets.h
