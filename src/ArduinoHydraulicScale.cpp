@@ -344,9 +344,25 @@ void loop() {
     else if (sensorValue > SENSOR_COUNTS_SHORT) sensorState = SENSOR_SHORT;
     else                                        sensorState = SENSOR_OK;
 
-    sensorVoltage = map((int)sensorValue, 0, 16384, 0, (int)(vReference * 1000.0));
+    // 14-bit full scale is 16383, not 16384.
+    sensorVoltage = map((int)sensorValue, 0, 16383, 0, (int)(vReference * 1000.0));
     smoothedValue = (smoothedValue * alpha) + (sensorValue * (1 - alpha));
-    pressureValue = map((int)smoothedValue, 0, 16384, 0, sensorMaxPSI);
+
+    // The psi conversion must start at the sensor's LIVE ZERO, not at zero counts.
+    // Mapping from 0 counts reported 299 psi at true 0 psi and 2699 psi at true
+    // 3000 — wrong at both ends, an offset AND a compressed span. It reached this
+    // firmware from the pre-14-bit line and nobody had followed it through; it is
+    // the third instance of the same unfinished resolution change, after the map
+    // in-max and the 10-bit filter seed.
+    //
+    // This value is PUBLISHED as `psi`, so it is not display-only cosmetics.
+    //
+    // NOTE the asymmetry: sensorMaxPSI is runtime-settable via `sm`, but the count
+    // endpoints are compile-time and derived from the 0.5-4.5 V spec. Changing `sm`
+    // alone does NOT rescale a physically different transducer — if the part number
+    // comes back as something else, SENSOR_COUNTS_ZERO/FS have to change with it.
+    pressureValue = map((int)smoothedValue, SENSOR_COUNTS_ZERO, SENSOR_COUNTS_FS,
+                        0, sensorMaxPSI);
     outputValue = (float)calFactor * ((float)smoothedValue - (float)tareValue);
 
     if (display_rolling_weight && currentMillis > lcdHoldUntil) {

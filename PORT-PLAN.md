@@ -17,6 +17,35 @@ architecture `renesas` against the board's `renesas_uno`.
 written nowhere, so it was caught immediately — but it sat through a full self-review first,
 which is the argument for building rather than reading.
 
+### The third instance of the unfinished resolution change
+
+The coordinator's hypothesis — that the 10-bit-to-14-bit change was never followed through
+anywhere, so a third instance would exist — was right, and it was in a value this port
+**publishes**.
+
+`pressureValue = map(smoothedValue, 0, 16384, 0, sensorMaxPSI)` mapped from **zero counts**
+rather than from the sensor's 1638-count live zero:
+
+| true pressure | reported |
+|---|---|
+| 0 psi | **299 psi** |
+| 3000 psi | **2699 psi** |
+
+Wrong at both ends — a +299 psi offset *and* a compressed span. On `main` it was display-only
+and easy to overlook. This port puts `psi` in the telemetry payload, which would have made it a
+knowingly-wrong number shipped to the broker. Fixed to map from `SENSOR_COUNTS_ZERO` to
+`SENSOR_COUNTS_FS`.
+
+Running total for the same unfinished change: the `map()` in-max (C3), the 10-bit seed of the
+14-bit filter, and now the psi conversion. The keypad ladder (A2) was a fourth, already fixed on
+`main`. **Anything in this codebase that touches an ADC count should be assumed guilty until
+checked against 14 bits.**
+
+One asymmetry left deliberately, and flagged in the code: `sensorMaxPSI` is runtime-settable via
+`sm`, but the count endpoints are compile-time constants derived from the 0.5-4.5 V spec.
+Changing `sm` alone does **not** rescale a physically different transducer. If the part number
+comes back as something else, `SENSOR_COUNTS_ZERO`/`_FS` must change with it.
+
 ### The defect that reading the core found, which a build would NOT have caught
 
 **The watchdog and the WiFi library conflict, and the result is a reboot loop out of range —
