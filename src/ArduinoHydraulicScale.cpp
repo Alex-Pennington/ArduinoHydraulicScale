@@ -94,7 +94,11 @@ int addr = 10;
 #define rTsize 50
 int rT[rTsize];
 int rTindex = 0;
-unsigned int rTsum = 0;
+// SIGNED, and it matters: outputValue goes negative below tare and on an
+// uncalibrated board, and an unsigned total underflowed to 4294967281 for three
+// entries of -5. A total that is visibly absurd is better than one that is quietly
+// wrong, but neither belongs on the operator's display.
+long rTsum = 0;
 String inputString = "";         // a String to hold incoming data
 bool stringComplete = false;  // whether the string is complete
 
@@ -1022,9 +1026,9 @@ void loop() {
               snprintf(b, sizeof(b), "%d in tally", rTindex); break;
       case 2: snprintf(a, sizeof(a), "%-16s", "Removed last");
               snprintf(b, sizeof(b), "%d in tally", rTindex); break;
-      case 3: { unsigned long t = 0; for (int i = 0; i < rTindex; i++) t += rT[i];
+      case 3: { long t = 0; for (int i = 0; i < rTindex; i++) t += rT[i];
                 rTsum = t;
-                snprintf(a, sizeof(a), "Total %10lu", t);
+                snprintf(a, sizeof(a), "Total %10ld", t);
                 snprintf(b, sizeof(b), "%d entries", rTindex); } break;
       case 4: snprintf(a, sizeof(a), "WiFi %-3s MQTT %-3s",
                        WiFi.status() == WL_CONNECTED ? "up" : "no",
