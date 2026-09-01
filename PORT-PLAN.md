@@ -31,10 +31,24 @@ rather than from the sensor's 1638-count live zero:
 | 0 psi | **299 psi** |
 | 3000 psi | **2699 psi** |
 
-Wrong at both ends — a +299 psi offset *and* a compressed span. On `main` it was display-only
-and easy to overlook. This port puts `psi` in the telemetry payload, which would have made it a
-knowingly-wrong number shipped to the broker. Fixed to map from `SENSOR_COUNTS_ZERO` to
-`SENSOR_COUNTS_FS`.
+Wrong at both ends — a +299 psi offset *and* a span of 2400 over a true 3000, i.e. 80%. Fixed
+to map from `SENSOR_COUNTS_ZERO` to `SENSOR_COUNTS_FS`.
+
+**Be precise about the blast radius: the weight was never affected.** Verified — `pressureValue`
+is assigned at `:364`, published at `:387` and printed at `:639`, and appears nowhere else. The
+weight comes from `outputValue = calFactor * (smoothedValue - tareValue)` at `:366`, straight
+from counts, and `kv` calibrates against the same count span. The psi path is a leaf. **The
+scale's own reading was sound; the published `psi` field would have been wrong.**
+
+State it that way round rather than leaving it unqualified. The vague version invites a reader
+to conclude the scale was broken and then to distrust the calibration path with it — which
+would be wrong, and would cost someone a day re-verifying something that was never at fault.
+The narrow claim is also the stronger one.
+
+**It still matters, because it is wrong *plausibly*.** 299 psi on an idle loader does not look
+like a fault; it reads as residual system pressure. A zero or a dead-loop value would be
+noticed. Any consumer using that field to judge relief pressure or overload is misled, by 20% at
+the top of the range, with nothing to signal it.
 
 Running total for the same unfinished change: the `map()` in-max (C3), the 10-bit seed of the
 14-bit filter, and now the psi conversion. The keypad ladder (A2) was a fourth, already fixed on
@@ -45,6 +59,41 @@ One asymmetry left deliberately, and flagged in the code: `sensorMaxPSI` is runt
 `sm`, but the count endpoints are compile-time constants derived from the 0.5-4.5 V spec.
 Changing `sm` alone does **not** rescale a physically different transducer. If the part number
 comes back as something else, `SENSOR_COUNTS_ZERO`/`_FS` must change with it.
+
+### The through-line: not one of these defects announces itself
+
+Worth stating once, because it is the strongest single generalisation in the whole
+investigation and it is the argument behind several design choices here.
+
+| Defect | What it looked like |
+|---|---|
+| T0 | ~9700 at no load — a number, not an error |
+| C2 | weights published to `arduino/w`, unmatched by any subscription, no error anywhere |
+| T5 + the boom mark | a stale zero silently applied at every boot |
+| T4 | a shorted sensor reading high, and persisting into the span via `kv` |
+| the psi conversion | 299 psi on an idle loader — reads as residual pressure |
+| the watchdog conflict | correct in the yard; a reset loop only out of range |
+
+**Every one of them produces a plausible wrong answer rather than a visible failure.** That is
+why T4 refuses to record, tare or calibrate on a faulted sensor instead of returning a number,
+why backlog carries `age_ms` rather than being published bare, and why `publishTo()` refuses a
+truncated topic instead of shortening it. On this machine, the correct response to "I am not
+sure this value is real" is to say so, never to emit the best guess.
+
+### On review: a session reviewing its own fresh work is the weakest reviewer of it
+
+Two instances today, both in code written minutes earlier and both missed by a careful
+self-review:
+
+- `publishWeight()` declared `void` and used in a boolean test — caught only by the compiler.
+- The psi conversion — caught only because the coordinator asked whether a third instance of
+  the resolution change existed. The field was *added by this port*, so the exposure was
+  created and then reviewed by the same session, and survived.
+
+Neither was subtle in hindsight. Both were invisible from inside. This is a better argument for
+building the code and getting an outside prompt than any process assertion — and it is why the
+A3 remedy, which was accepted from a peer without walking the boundary case, is the third
+example of the same failure from the other direction.
 
 ### The defect that reading the core found, which a build would NOT have caught
 
