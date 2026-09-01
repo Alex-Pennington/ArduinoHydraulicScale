@@ -87,8 +87,9 @@ the body and out of the cable entry, which is an internal element/seal failure r
 thread or installation fault. See `notes/2026-09-01-transducer-failure-and-selection.md`; oil
 travels up a cable, so the harness and whatever it terminates in want checking before reuse.
 
-**Open defect, hardware: A1 needs a pull-down resistor or the NO SENSOR detection does not
-work.** Demonstrated on the bench — with nothing connected, A1 reads 4401 counts and the
+**Open defect, hardware: the transducer input needs a pull-down resistor or the NO SENSOR
+detection does not work.** Demonstrated on the bench — with nothing connected, the input reads
+4401 counts and the
 firmware reports `sensor = ok`. A floating CMOS input does not sit at 0 V. Until a 10k-47k
 pull-down to GND is fitted, `sensor = ok` means "in range", not "a sensor is present", and a cut
 sensor wire on the tractor would read as a valid pressure.
@@ -101,7 +102,8 @@ Read from the source at `c602655` unless marked otherwise.
 `WiFiS3` arm of the include block (:55-57), `analogReadResolution(14)` (:185), and `D2`/`D13`
 pin naming (:80-81) which the AVR core does not define.
 
-**Transducer — 0-3000 psi, 0.5-4.5 V ratiometric, on A1.** Spec direct from Alex via the
+**Transducer — 0-3000 psi, 0.5-4.5 V ratiometric, on A2 as wired** (confirmed by Alex
+2026-09-01; briefly recorded as A1 in error — `main` had A2 all along).** Spec direct from Alex via the
 coordinator; **no part number supplied and no datasheet read.** Read with plain `analogRead`
 (:256); no external conditioning is recorded anywhere in the repo. At AVCC = 5 V and 14-bit
 resolution this gives a live zero of **1638 counts**, full scale of **14745 counts**, a span

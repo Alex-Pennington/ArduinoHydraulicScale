@@ -164,7 +164,7 @@ values. Not fixed — `src/` is untouched pending the R1 design decision.
 
 ## Also from the bench, and also mine
 
-**T4's open-circuit detection does not work.** With nothing connected to A1 the board reads 4401
+**T4's open-circuit detection does not work.** With nothing connected the board reads 4401
 counts and reports `sensor = ok`. A floating CMOS analog input does not sit at 0 V. Needs a
 10k-47k pull-down to GND; no firmware change substitutes for it, because a floating reading is
 not distinguishable from a real one. The PLC #1 dead-loop *pattern* crossed to this machine; its

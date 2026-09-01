@@ -35,7 +35,7 @@ Two consequences worth acting on:
 
 ## T4 DOES NOT WORK: an unconnected input reports `sensor = ok`
 
-**Demonstrated on the bench, 2026-09-01, with NOTHING connected to A1:**
+**Demonstrated on the bench, 2026-09-01, with NOTHING connected to the transducer input:**
 
 ```
 a = 4401 counts   v = 1343 mV   p = 632 psi   sensor = ok
@@ -55,7 +55,7 @@ on a tractor, and it previously read as no load" — describes a defect the feat
 actually fix. A cut sensor wire on the tractor would float exactly like this and be reported as
 a valid pressure.
 
-**The fix is hardware, not firmware: a pull-down resistor from A1 to GND.** Something in the
+**The fix is hardware, not firmware: a pull-down resistor from the transducer input to GND.** Something in the
 10k-47k range. With the sensor connected its low output impedance dominates and the error is
 negligible; with the sensor disconnected the pin is pulled to 0 V, lands far below the 1311-count
 threshold, and the open-circuit path works as designed. No firmware change can substitute for it

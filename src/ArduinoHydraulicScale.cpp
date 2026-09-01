@@ -52,9 +52,14 @@ DualPrint Console;
 bool debug_flag = false;
 
 // These constants won't change. They're used to give names to the pins used:
-// Pressure transducer. CONFIRMED A1 by Alex, 2026-09-01, at the machine.
-// `main` had this as A2; the r4_wifi_mqtt branch had A1 and was right.
-const int analogInPin = A1;
+// Pressure transducer: A2, AS WIRED. Confirmed by Alex 2026-09-01.
+//
+// The history, because this flip-flopped and the next reader deserves to know why:
+// `main` had A2, the r4_wifi_mqtt branch had A1, this file was briefly set to A1 on
+// an early answer, and Alex then confirmed the harness is actually landing on A2.
+// `main` was right all along. Every bench reading taken before this change was on a
+// floating A1 and means nothing.
+const int analogInPin = A2;
 
 // ---------------------------------------------------------------------------
 // Transducer scaling — SPEC-DEPENDENT, NOT YET CONFIRMED AGAINST A DATASHEET
