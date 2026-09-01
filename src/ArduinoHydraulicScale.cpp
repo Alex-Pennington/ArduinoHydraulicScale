@@ -98,10 +98,34 @@ unsigned int rTsum = 0;
 String inputString = "";         // a String to hold incoming data
 bool stringComplete = false;  // whether the string is complete
 
-unsigned long button_LastChange = 0;
-unsigned long button_DebounceTime = 1000;
-int button_PressedIndex = 0;
-int button_LastPressedIndex = 0;
+// ---------------------------------------------------------------------------
+// HMI. Five buttons, a 16x2 LCD, and a gloved operator on a tractor seat.
+//
+// Principles, from the review of the old handler:
+//  * EDGE triggered, not level. The old code sampled every 1000 ms and re-fired
+//    while held, so holding Right recorded duplicate weights and holding Select
+//    hammered EEPROM with re-tares.
+//  * Everyday actions are one press from home. Rare or destructive ones live in
+//    the menu, and the destructive one confirms.
+//  * Status the operator needs to trust the reading is ON THE HOME SCREEN, not
+//    behind a button and not only on the serial console.
+// ---------------------------------------------------------------------------
+const unsigned long KEY_DEBOUNCE_MS = 40;
+const unsigned long MSG_HOLD_MS     = 1500;
+
+enum Screen { SCR_HOME, SCR_MENU, SCR_CONFIRM, SCR_CHECKCAL };
+Screen screen = SCR_HOME;
+
+int  keyPrev = -1, keyStable = -1;
+unsigned long keyChangeMs = 0;
+int  menuIndex = 0;
+unsigned long msgUntil = 0;
+int  tarePrev = -1;            // previous zero, for Undo tare
+bool lcdDirty = true;
+
+const char *MENU_ITEMS[] = { "Tare at mark", "Calibrate", "Check cal",
+                             "Undo tare", "Clear tally", "Exit" };
+const int MENU_COUNT = 6;
 
 // --- non-blocking sample accumulation (replaces the 10x delay(10) burst) ----
 const int SAMPLE_COUNT = 10;
@@ -529,6 +553,134 @@ void setup() {
   Console.println(hb ? "on" : "UNAVAILABLE - resets during network calls");
 }
 
+// Map a raw ladder reading to a key index, or -1 for "no button".
+static int keyIndex(int x) {
+  if (x < 60)  return 0;   // Right
+  if (x < 200) return 1;   // Up
+  if (x < 400) return 2;   // Down
+  if (x < 600) return 3;   // Left
+  if (x < 800) return 4;   // Select
+  return -1;
+}
+
+// Queue a verb for the existing command handler. The keypad and the serial console
+// share one execution path so a button and a typed command can never diverge.
+static void hmiRun(const char *verb) {
+  inputString = verb;
+  stringComplete = true;
+}
+
+static void hmiMessage(const char *a, const char *b, unsigned long now) {
+  lcd.setCursor(0, 0); lcd.print("                ");
+  lcd.setCursor(0, 0); lcd.print(a);
+  lcd.setCursor(0, 1); lcd.print("                ");
+  lcd.setCursor(0, 1); lcd.print(b);
+  msgUntil = now + MSG_HOLD_MS;
+}
+
+static void hmiDrawHome() {
+  char l0[17], l1[17];
+  // Row 0: the weight, or the fault that makes the weight meaningless.
+  if (sensorState != SENSOR_OK) snprintf(l0, sizeof(l0), "%-16s", sensorStateName());
+  else                          snprintf(l0, sizeof(l0), "%-11d n%-3d", outputValue, rTindex);
+
+  // Row 1: whatever the operator needs in order to trust row 0. Worst first —
+  // an uncalibrated scale is wrong, a backlog is only late.
+  if (calibrationDefaulted)      snprintf(l1, sizeof(l1), "%-16s", "CAL NOT SET!");
+  else if (queueDropped > 0)     snprintf(l1, sizeof(l1), "DROPPED %-8lu", queueDropped);
+  else if (queueCount > 0)       snprintf(l1, sizeof(l1), "Q%-3d %-11s", queueCount,
+                                          netState == NET_ONLINE ? "sending" : "no link");
+  else if (rTindex >= rTsize)    snprintf(l1, sizeof(l1), "%-16s", "TALLY FULL");
+  else if (rTindex >= rTsize - 5)snprintf(l1, sizeof(l1), "%d left  Sel=menu", rTsize - rTindex);
+  else                           snprintf(l1, sizeof(l1), "%-16s", "Sel=menu");
+
+  lcd.setCursor(0, 0); lcd.print(l0);
+  lcd.setCursor(0, 1); lcd.print(l1);
+}
+
+static void hmiDrawMenu() {
+  char l1[17];
+  lcd.setCursor(0, 0); lcd.print("Menu  Lt=back   ");
+  snprintf(l1, sizeof(l1), ">%-15s", MENU_ITEMS[menuIndex]);
+  lcd.setCursor(0, 1); lcd.print(l1);
+}
+
+static void hmiDrawCheckCal() {
+  char l0[17], l1[17];
+  snprintf(l0, sizeof(l0), "Should be %-6d", calWeight);
+  snprintf(l1, sizeof(l1), "Reads %-6d Lt=x", outputValue);
+  lcd.setCursor(0, 0); lcd.print(l0);
+  lcd.setCursor(0, 1); lcd.print(l1);
+}
+
+static void hmiOnPress(int key, unsigned long now) {
+  lcdDirty = true;
+  if (screen == SCR_HOME) {
+    switch (key) {
+      case 0: hmiRun("+");   break;                       // Right  - add to tally
+      case 3: hmiRun("-");   break;                       // Left   - delete last
+      case 1: hmiRun("sum"); break;                       // Up     - total
+      case 2: hmiRun("net"); hmiMessage("Link/queue", "see console", now); break;  // Down - status
+      case 4: screen = SCR_MENU; menuIndex = 0; break;    // Select - menu
+    }
+    return;
+  }
+  if (screen == SCR_MENU) {
+    switch (key) {
+      case 1: menuIndex = (menuIndex + MENU_COUNT - 1) % MENU_COUNT; break;
+      case 2: menuIndex = (menuIndex + 1) % MENU_COUNT; break;
+      case 3: screen = SCR_HOME; break;                   // Left = back, always
+      case 4:
+        switch (menuIndex) {
+          case 0: tarePrev = tareValue; hmiRun("tare");
+                  hmiMessage("Tare taken", "at the mark?", now); screen = SCR_HOME; break;
+          case 1: hmiRun("kv");
+                  hmiMessage("Calibrated", "check it now", now); screen = SCR_HOME; break;
+          case 2: screen = SCR_CHECKCAL; break;
+          case 3: if (tarePrev >= 0) { int t = tareValue; tareValue = tarePrev; tarePrev = t;
+                    EEPROM.put(addr+4, tareValue); EEPROM.put(addr+12, EEPROM_SIGNATURE);
+                    hmiMessage("Zero restored", "", now); }
+                  else hmiMessage("No previous", "zero to undo", now);
+                  screen = SCR_HOME; break;
+          case 4: screen = SCR_CONFIRM; break;            // clear tally - confirms
+          case 5: screen = SCR_HOME; break;
+        }
+        break;
+    }
+    return;
+  }
+  if (screen == SCR_CONFIRM) {
+    if (key == 4) { hmiRun("b"); hmiMessage("Tally cleared", "", now); }
+    screen = SCR_HOME;                                    // any other key cancels
+    return;
+  }
+  if (screen == SCR_CHECKCAL) {
+    if (key == 3 || key == 4) screen = SCR_HOME;
+    return;
+  }
+}
+
+// Edge-triggered keypad + screen renderer. Non-blocking; no delay() anywhere.
+static void hmiPoll(unsigned long now) {
+  analogReadResolution(10);                 // the ladder is a 10-bit divider
+  int k = keyIndex(analogRead(0));
+  if (k != keyPrev) { keyPrev = k; keyChangeMs = now; }
+  else if (now - keyChangeMs >= KEY_DEBOUNCE_MS && k != keyStable) {
+    keyStable = k;
+    if (k >= 0) hmiOnPress(k, now);         // act on press only, never on release or hold
+  }
+
+  if (now < msgUntil) return;               // let a message stand
+  if (screen == SCR_CONFIRM) {
+    lcd.setCursor(0, 0); lcd.print("Clear tally?    ");
+    lcd.setCursor(0, 1); lcd.print("Sel=YES  any=no ");
+    return;
+  }
+  if (screen == SCR_MENU)     { hmiDrawMenu();     return; }
+  if (screen == SCR_CHECKCAL) { hmiDrawCheckCal(); return; }
+  hmiDrawHome();
+}
+
 void loop() {
   unsigned long currentMillis = millis();
   loopHeartbeatMs = currentMillis;   // the ISR refreshes the watchdog only while this moves
@@ -574,13 +726,7 @@ void loop() {
                         0, sensorMaxPSI);
     outputValue = (float)calFactor * ((float)smoothedValue - (float)tareValue);
 
-    if (display_rolling_weight && currentMillis > lcdHoldUntil) {
-      lcd.setCursor(0, 1);
-      lcd.print ("                 ");
-      lcd.setCursor(0, 1);
-      if (sensorState == SENSOR_OK) lcd.print (outputValue);
-      else                          lcd.print (sensorStateName());
-    }
+    // The weight is drawn by hmiDrawHome(); nothing else writes to the LCD here.
   }
 
   netPoll();
@@ -600,48 +746,7 @@ void loop() {
     publishTo("telemetry", payload);
   }
 
-  if ((currentMillis - button_LastChange) >  button_DebounceTime) {
-    int x;
-    analogReadResolution(10); // A2: the ladder thresholds are 10-bit values
-    x = analogRead (0);
-    lcd.setCursor(0, 1);
-    if (x < 60) { //Right
-      lcd.print ("                           ");
-      lcd.setCursor(0, 1);
-      inputString = "+";
-      stringComplete = true;
-      lcd.print (inputString);
-    }
-    else if (x < 200) { //Up
-      lcd.print ("                           ");
-      lcd.setCursor(0, 1);
-      inputString = "sum";
-      stringComplete = true;
-      lcd.print (inputString);
-    }
-    else if (x < 400) { //Down
-      lcd.print ("                           ");
-      lcd.setCursor(0, 1);
-      inputString = "b";
-      stringComplete = true;
-    }
-    else if (x < 600) { //Left
-      lcd.print ("                           ");
-      lcd.setCursor(0, 1);
-      inputString = "-";
-      stringComplete = true;
-      lcd.print (inputString);
-    }
-    else if (x < 800) { //Select
-      lcd.print ("                           ");
-      lcd.setCursor(0, 1);
-      inputString = "tare";
-      stringComplete = true;
-      lcd.print (inputString);
-    }
-    button_LastChange = currentMillis;
-    button_LastPressedIndex = button_PressedIndex;
-  }
+  hmiPoll(currentMillis);
 
   serialEvent(); // check if data has been sent
 
