@@ -1,7 +1,47 @@
 # PLC #4 — MQTT forward-port onto `origin/main`
 
-**Status: port gate OPEN (Alex, 2026-09-01). Implementation on `plc4/mqtt-port`, branched
-from `origin/main`. Not flashed — no board is tethered.**
+**Status: implemented on `plc4/mqtt-port`, branched from `origin/main`. Not flashed — no
+board is tethered.**
+
+**Build verified.** `arduino-cli compile --fqbn arduino:renesas_uno:unor4wifi` against core
+1.6.0 succeeds: **79,940 bytes flash (30%)**, **10,256 bytes RAM (31%)**, 22,512 bytes left for
+locals. The 1.6 KB backlog queue costs what §1.3 predicted. PlatformIO is not installed on this
+machine, so `pio run` was not the vehicle; the same sources build under arduino-cli with
+`LiquidCrystal` 1.0.7 substituted for the `fmalpartida` fork named in `platformio.ini` (same
+API for this usage). The core emits one benign warning — the bundled `WDT` library declares
+architecture `renesas` against the board's `renesas_uno`.
+
+### The one defect the toolchain found that review did not
+
+`publishWeight()` was declared `void` and used in a boolean test. It would have compiled as
+written nowhere, so it was caught immediately — but it sat through a full self-review first,
+which is the argument for building rather than reading.
+
+### The defect that reading the core found, which a build would NOT have caught
+
+**The watchdog and the WiFi library conflict, and the result is a reboot loop out of range —
+the one situation the whole design exists to serve.** Verified against ArduinoCore-renesas
+1.6.0:
+
+- `WDT.cpp getMaxTimeout()` = `RL_16384 * PR_8192 / (PCLKB_Hz/1000)`. `bsp_clock_cfg.h` for
+  UNOWIFIR4 sets ICLK /1 from 48 MHz and PCLKB /2, so PCLKB is 24 MHz and **the watchdog
+  ceiling is 5592 ms**. There is no longer period available on this part.
+- `CWifi::begin()` busy-waits `while (millis() - start < _timeout)` polling `status()`, with
+  **no watchdog refresh inside the loop**, and `CWifi::CWifi()` defaults `_timeout` to
+  **10000 ms** (`WiFiS3/WiFi.cpp:8`).
+
+So a *failed* association — driving out of range — blocks for 10 s against a watchdog that
+cannot be set beyond 5.6 s. The board would reset every retry, forever, while away from the
+yard. It compiles and it is correct in the yard; it fails only where nobody is watching.
+
+Fixed by calling `WiFi.setTimeout(3000)` and `mqttClient.setConnectionTimeout(3000)` in
+`setup()` before the watchdog is armed. Both constants are documented at their definition with
+the ceiling and the coupling, because raising one without the other reintroduces the loop.
+
+**This is why F1-first mattered in a way that was not obvious when it was sequenced.** Arming
+the watchdog before the networking is what made the conflict visible at all; had the networking
+gone in first and the watchdog last, the reset loop would have arrived as a field symptom.
+
 Date: 2026-09-01. Audit: `findings/2026-09-01-plc4-baseline-audit.md`. Context: `BRIEF.md`.
 
 ## The two rulings this plan serves

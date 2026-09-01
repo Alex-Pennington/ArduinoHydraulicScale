@@ -85,12 +85,35 @@ int  sampleN = 0;
 float sampleTotal = 0;
 
 // --- LCD message hold (replaces the blocking delay(1000) after a command) ---
-// F1: watchdog period. It must exceed the longest blocking call in loop(), which
-// is WiFi.begin() inside netPoll(). WDT.refresh() is called immediately before
-// and after that call so a normal connect attempt cannot trip it, while a hang
-// inside it still does. See PORT-PLAN.md — the achievable maximum period on this
-// part needs confirming against the core before this goes near a board.
-const uint32_t WDT_TIMEOUT_MS = 5000;
+// ---------------------------------------------------------------------------
+// F1 watchdog period, and the WiFi timeout that MUST sit under it.
+//
+// These two numbers are coupled, and getting them wrong produces a reboot loop
+// in exactly the situation the whole design exists to serve. Read before editing.
+//
+// Verified against ArduinoCore-renesas 1.6.0:
+//   * The WDT period ceiling is RL_16384 * PR_8192 / (PCLKB_Hz/1000)
+//     (WDT.cpp getMaxTimeout). UNOWIFIR4 runs ICLK /1 from 48 MHz and PCLKB /2
+//     (bsp_clock_cfg.h), so PCLKB = 24 MHz and the ceiling is 5592 ms. There is
+//     no way to ask for a longer watchdog on this part.
+//   * CWifi::begin() busy-waits `while (millis() - start < _timeout)` polling
+//     status(), with NO watchdog refresh inside the loop (WiFiS3/WiFi.cpp), and
+//     CWifi's constructor defaults _timeout to 10000 ms (WiFi.cpp:8).
+//
+// So with the watchdog armed at ANY achievable period, a FAILED WiFi.begin()
+// would always blow it — and a failed begin() is precisely what happens when the
+// tractor drives out of range. Left alone, the board would reset-loop whenever it
+// was away from the yard: the exact opposite of "keep weighing, buffer, flush".
+//
+// The fix is WiFi.setTimeout() (WiFi.cpp:599), called in setup(). Association now
+// gives up well inside the watchdog window and loop() carries on weighing.
+//
+// If you raise WIFI_CONNECT_TIMEOUT_MS, raise the watchdog to match — and it
+// cannot go above 5592.
+// ---------------------------------------------------------------------------
+const uint32_t WDT_TIMEOUT_MS            = 5000;   // ceiling on this part is 5592
+const unsigned long WIFI_CONNECT_TIMEOUT_MS = 3000;
+const unsigned long MQTT_CONNECT_TIMEOUT_MS = 3000;
 
 unsigned long lcdHoldUntil = 0;
 const unsigned long LCD_HOLD_MS = 1000;
@@ -167,13 +190,13 @@ static const char *sensorStateName() {
 // A buffered reading MUST be distinguishable from a live one. Publishing
 // backlog bare is worse than not buffering, because the consumer cannot tell
 // stale from fresh. age_ms is the delta at flush; live readings carry 0.
-static void publishWeight(int32_t w, uint32_t ageMs, bool backlog) {
+static bool publishWeight(int32_t w, uint32_t ageMs, bool backlog) {
   char payload[128];
   snprintf(payload, sizeof(payload),
            "{\"w\":%ld,\"age_ms\":%lu,\"backlog\":%s,\"sensor\":\"%s\",\"id\":\"%s\"}",
            (long)w, (unsigned long)ageMs, backlog ? "true" : "false",
            sensorStateName(), CLIENT_ID);
-  publishTo("weight", payload);
+  return publishTo("weight", payload);
 }
 
 static void queuePush(int32_t w) {
@@ -212,9 +235,14 @@ static void queueFlush() {
 // HONEST LIMITATION: WiFi.begin() and MqttClient::connect() are blocking calls
 // in WiFiS3/ArduinoMqttClient; there is no non-blocking association API. What
 // this code guarantees is that they are ATTEMPTED AT A BOUNDED RATE AND NEVER
-// LOOPED ON — one attempt per NET_RETRY_MS, after which loop() continues and
-// the scale keeps weighing. That is the ruling's requirement. See PORT-PLAN.md
-// for the watchdog interaction, which needs confirming on real hardware.
+// LOOPED ON — one attempt per NET_RETRY_MS, after which loop() continues and the
+// scale keeps weighing. Each attempt is bounded to WIFI_CONNECT_TIMEOUT_MS +
+// MQTT_CONNECT_TIMEOUT_MS, both of which sit under the watchdog period.
+//
+// Because the board is on the broker's own subnet (FOXTROTBRAVO is the
+// 192.168.10.0 LAN), there are exactly TWO failure states to distinguish: out of
+// WiFi range, and broker down. No route-change, gateway or inter-subnet case
+// exists. Do not add defensive handling for hops that are not there.
 // ---------------------------------------------------------------------------
 static void netPoll() {
   unsigned long now = millis();
@@ -279,6 +307,12 @@ void setup() {
 
   Serial1.println("JD5055e OK");
   printDebug();
+
+  // Both timeouts must be set before the watchdog is armed — see the comment on
+  // WDT_TIMEOUT_MS. The library defaults (10 s association) exceed the watchdog
+  // ceiling and would reset the board on every failed connect.
+  WiFi.setTimeout(WIFI_CONNECT_TIMEOUT_MS);
+  mqttClient.setConnectionTimeout(MQTT_CONNECT_TIMEOUT_MS);
 
   // F1: the watchdog is armed BEFORE any networking exists, so that a hang in
   // the reconnect path has a floor under it. This is the whole reason the
