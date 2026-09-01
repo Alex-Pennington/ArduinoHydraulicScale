@@ -274,3 +274,69 @@ from ~4. Not diagnosed. Two candidates, and I have not distinguished them:
 The steady-state case is fixed. The first-association case is narrower, happens once at boot, and
 costs a tally that is empty at that point. It should not be called fixed until someone knows which
 of those two it is.
+
+---
+
+## Bench bring-up against a live broker — the publish path, exercised at last
+
+Bench broker: Saga, `192.168.5.241:1883`, anonymous, same subnet as the board — deliberately
+mirroring farm1 rather than rata, so the bench exercises the configuration that ships.
+
+### The fix that stopped the board reaching any broker
+
+`wifiClient.setConnectionTimeout()` — added as part of my R1 fix — **silently selects a different
+AT command**, and that command does not work with a dotted-quad host on this core:
+
+```
+WiFiClient.cpp:53   _connectionTimeout == 0  ->  +CLIENTCONNECTNAME   works
+                    _connectionTimeout != 0  ->  +CLIENTCONNECT       fails here
+```
+
+Symptom: `mqttClient.connect()` returned **-2 (MQTT_CONNECTION_REFUSED)** on every attempt while
+`tcpdump` at the broker saw **zero packets**. The connect failed at the coprocessor before any TCP
+was attempted. I first diagnosed this as a firewall problem — it was neither firewall nor network,
+it was the fix.
+
+Removed rather than worked around. Bounding the TCP connect is unnecessary now that the heartbeat
+watchdog covers blocking network calls, which is what it exists for.
+
+**The diagnostic that made it findable:** `mqtt_err` and `attempts` on the `net` verb. `-2` with
+nothing on the wire is a fingerprint; without it this is indistinguishable from a firewall drop,
+which is exactly where I looked first and wasted the time.
+
+### Verified end to end
+
+```
+plc4/jd5055e/telemetry {"w":2794,"psi":639,"counts":4432,"sensor":"ok","queued":0,...}
+plc4/jd5055e/weight    {"w":2795,"age_ms":0,"backlog":false,"sensor":"ok",...}
+```
+
+The topic arrives **complete and untruncated** at its full 19 characters. That closes X1: the
+audit's truncation finding was inferred from source and is now observed on the wire, and the
+`snprintf`-into-a-sized-buffer construction holds under the real root.
+
+### Backlog replay semantics — measured, not assumed
+
+Method: hold the subscriber connected and drop only the board with an `iptables` rule, so the
+capture spans the whole outage. Record three weights offline, age them, unblock.
+
+```
+plc4/jd5055e/weight {"w":2772,"age_ms":74701,"backlog":true,"id":"plc4-jd5055e"}
+plc4/jd5055e/weight {"w":2773,"age_ms":72119,"backlog":true,"id":"plc4-jd5055e"}
+plc4/jd5055e/weight {"w":2769,"age_ms":69535,"backlog":true,"id":"plc4-jd5055e"}
+```
+
+**Answer to "original timestamp or replay time": neither — age at replay, plus an explicit flag.**
+
+- `backlog: true` — a replayed sample is **never** indistinguishable from a live one. That is the
+  failure that has had PLC #2 reading healthy for 39 hours on retained replays, and this design
+  does not have it.
+- `age_ms` is the delta from capture to flush, so a consumer recovers capture time as
+  `receipt_time - age_ms` without the board needing a clock. It has no RTC and no NTP before the
+  network returns, so an absolute stamp would have been a fiction.
+- Order is FIFO, oldest first — ages descend, and the ~2.58 s gaps match the spacing at which the
+  weights were recorded, so relative timing survives the outage intact.
+- No `sensor` field on backlog records, by design: that state is current and the reading is not.
+
+Queue depth reported live by `net` (`queued = 3` while offline, `0` after flush), so the operator
+can see the backlog drain rather than having to trust it.
