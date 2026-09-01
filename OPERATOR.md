@@ -44,6 +44,15 @@ Sent over the Bluetooth console (HC-05, 9600 baud), or from the LCD keypad.
 | `w<value>` | Set the smoothing factor, 0 to 1. Stored. |
 | `sm<value>` | Set the transducer full-scale pressure in psi. **NOT stored — reverts to 3000 on every reset.** |
 
+### Service commands — not for the seat
+
+These exist for diagnosing the board and are typed, never on the keypad.
+
+| Command | Does |
+|---|---|
+| `keys` | Reports the raw keypad value and decoded button for 15 s. Use it to check the button ladder against a replacement shield. |
+| `hang` | **Deliberately stops the board.** It stops answering, the watchdog resets it after about 35 seconds, and it comes back reporting `WATCHDOG`. It exists to prove the watchdog still works. Nothing is lost — the tally and calibration are stored — but anything queued for upload goes. |
+
 **Note the renames:** `cal` became `kv` and `clear` became `b` on this firmware line.
 The Bluetooth macro set in `serial_bluetooth_terminal_cfg.txt` has been reissued to
 match — reload it on the phone, or two of the buttons will do nothing.
