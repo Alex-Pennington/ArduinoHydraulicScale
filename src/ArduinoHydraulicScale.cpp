@@ -209,6 +209,7 @@ unsigned long lastNetAttemptMs = 0;
 int  lastMqttError = 0;          // MqttClient::connectError() from the last attempt
 unsigned long netAttempts = 0;   // how many times netPoll has tried to connect
 const unsigned long NET_RETRY_MS = 30000;   // bounded attempt rate, never a loop
+const unsigned long STAGE_GAP_MS = 500;     // gap between association and broker stages
 unsigned long lastTelemetryMs = 0;
 const unsigned long TELEMETRY_MS = 5000;
 
@@ -229,6 +230,34 @@ WeightRecord queueBuf[QUEUE_DEPTH];
 int queueHead = 0;                        // oldest
 int queueCount = 0;
 unsigned long queueDropped = 0;           // overflow policy: drop OLDEST, and count it
+
+// ---------------------------------------------------------------------------
+// Why did we last reset? The RA4M1 records it in hardware, so this does not have
+// to be inferred. Distinguishes a watchdog bite from a brownout, which is exactly
+// the open question about the reset seen at first association.
+//   RSTSR0: PORF b0, LVD0RF b1, LVD1RF b2, LVD2RF b3   (power / voltage events)
+//   RSTSR1: IWDTRF b0, WDTRF b1, SWRF b2               (watchdog / software)
+// ---------------------------------------------------------------------------
+char resetCause[40] = "unknown";
+
+static void captureResetCause() {
+  uint8_t  r0 = R_SYSTEM->RSTSR0;
+  uint16_t r1 = R_SYSTEM->RSTSR1;
+  snprintf(resetCause, sizeof(resetCause), "%s%s%s%s%s%s (r0=%02X r1=%04X)",
+           (r1 & 0x0002) ? "WATCHDOG "   : "",
+           (r1 & 0x0001) ? "IWDT "       : "",
+           (r1 & 0x0004) ? "software "   : "",
+           (r0 & 0x0001) ? "power-on "   : "",
+           (r0 & 0x000E) ? "BROWNOUT "   : "",
+           (!(r0 & 0x000F) && !(r1 & 0x0007)) ? "none-flagged " : "",
+           r0, r1);
+  // Clear the flags so the NEXT boot reports its own cause, not this one.
+  // These live behind register write protection; PRC1 covers them.
+  R_SYSTEM->PRCR = 0xA50B;
+  R_SYSTEM->RSTSR0 = 0;
+  R_SYSTEM->RSTSR1 = 0;
+  R_SYSTEM->PRCR = 0xA500;
+}
 
 void  serialEvent();
 void printDebug();
@@ -338,11 +367,31 @@ static void netPoll() {
 
   WDT.refresh();   // the calls below block; give them a full watchdog period
 
+  // STAGE 1 — association. This RETURNS afterwards even on success, so the broker
+  // connect below always runs in a LATER loop() pass with a fresh heartbeat.
+  //
+  // Why that matters: loopHeartbeatMs is stamped once per loop() pass, so everything
+  // netPoll does accumulates against a single heartbeat. Running both halves in one
+  // pass gives a worst case of 23000 (WiFi.begin) + 10000 (connect) = 33000 ms against
+  // a 30000 ms tolerance — the ISR stops refreshing and the watchdog bites.
+  //
+  // That is the reset observed at FIRST ASSOCIATION and nowhere else: it needs both
+  // halves to run slow in the same pass, which only happens when the board has to
+  // associate AND then reach a broker. Split, each pass is bounded by the larger half
+  // alone and the margin comes back.
   if (WiFi.status() != WL_CONNECTED) {
     WiFi.begin(ssid, pass);        // single attempt, never a while loop (was C5)
     WDT.refresh();
-    if (WiFi.status() != WL_CONNECTED) { netState = NET_OFFLINE; return; }
+    if (WiFi.status() == WL_CONNECTED) {
+      netState = NET_WIFI_UP;
+      lastNetAttemptMs = now - NET_RETRY_MS + STAGE_GAP_MS;  // try the broker shortly, not in 30 s
+    } else {
+      netState = NET_OFFLINE;
+    }
+    return;
   }
+
+  // STAGE 2 — broker.
   netState = NET_WIFI_UP;
 
   mqttClient.setId(CLIENT_ID);                          // was unset: C7
@@ -421,7 +470,9 @@ void setup() {
   lcd.setCursor(0, 1);
   lcd.print("Press Key:");
 
-  Console.println("JD5055e OK");
+  captureResetCause();
+  Console.print("JD5055e OK  reset: ");
+  Console.println(resetCause);
   printDebug();
 
   // Both timeouts must be set before the watchdog is armed — see the comment on
@@ -777,6 +828,8 @@ void loop() {
       Console.println(netAttempts);
       Console.print("mqtt_err = ");
       Console.println(lastMqttError);
+      Console.print("last_reset = ");
+      Console.println(resetCause);
     }
     // The blocking delay(1000) that used to sit here is gone: it stalled the
     // whole loop, poll() included, after every keypress. The LCD message now

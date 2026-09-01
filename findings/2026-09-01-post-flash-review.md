@@ -340,3 +340,68 @@ plc4/jd5055e/weight {"w":2769,"age_ms":69535,"backlog":true,"id":"plc4-jd5055e"}
 
 Queue depth reported live by `net` (`queued = 3` while offline, `0` after flush), so the operator
 can see the backlog drain rather than having to trust it.
+
+---
+
+## The first-association reset: found, explained, fixed
+
+Chased rather than left open, because "only at first association" is the signature of something
+that fires in the field and not on the bench — and this tractor makes a first association every
+time it is keyed on.
+
+### Diagnosing it without guessing
+
+The RA4M1 records why it last reset, so this did not have to be inferred. `RSTSR0` carries
+power-on and brownout flags, `RSTSR1` carries watchdog and software. Reading and decoding them at
+boot — and clearing them so the next boot reports its own cause — distinguishes a watchdog bite
+from a brownout directly, which were the two candidates.
+
+Now reported at boot and on the `net` verb: `reset: software (r0=00 r1=0004)`.
+
+### The mechanism
+
+`loopHeartbeatMs` is stamped **once per `loop()` pass**, so everything `netPoll()` does
+accumulates against a single heartbeat. With both halves in the same pass:
+
+```
+WiFi.begin()          up to 23000 ms   (2 x modem.write @ 10000 + 3000 busy-wait)
+mqttClient.connect()  up to 10000 ms   (MODEM_TIMEOUT)
+                      -------------
+                            33000 ms   against HEARTBEAT_TOLERANCE_MS = 30000
+```
+
+Past 30 s the ISR stops refreshing and the watchdog bites ~5 s later.
+
+**That is why it appeared only at first association.** It needs *both* halves to run slow in the
+*same* pass, and that combination only occurs when the board must associate and then reach a
+broker in one go. Once associated, stage 1 is skipped and the pass costs 10 s at worst — which is
+exactly the "stable afterwards" behaviour observed.
+
+### The fix: split the stages
+
+`netPoll()` now returns after association **even on success**, so the broker connect always runs
+in a later pass with a fresh heartbeat. `STAGE_GAP_MS` (500 ms) means the broker attempt follows
+shortly rather than waiting out the 30 s retry.
+
+Worst case per pass is now bounded by the larger half alone — 23 s, against a 30 s tolerance.
+
+Raising the tolerance would also have "worked" and would have been the wrong fix: it buys margin
+by degrading hang detection, and leaves the accumulation problem in place for the next blocking
+call anyone adds.
+
+### Verified
+
+Fresh boot with the broker blocked at the firewall, so the board had to associate and then fail
+to reach a broker — the closest reproduction available on the bench:
+
+| | |
+|---|---|
+| boots in 160 s | **1** (the flash's own software reset) |
+| connect attempts | 5, all failing with `mqtt_err = -2` |
+| resets | **none** |
+
+**Stated honestly:** this does not reproduce the original 33 s condition, which needs a *slow*
+association, and no AP under our control can force that. The assurance here is structural — the
+split makes it arithmetically impossible for both halves to share a heartbeat — plus a passing
+test of the reachable half. That is a different and weaker kind of evidence than reproducing the
+failure and watching it stop, and it should be read that way.
