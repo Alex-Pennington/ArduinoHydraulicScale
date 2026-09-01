@@ -275,6 +275,17 @@ static bool publishTo(const char *leaf, const char *payload) {
   return mqttClient.endMessage() == 1;
 }
 
+// Ladder decode, shared by the keypad handler and the `keys` diagnostic so the two
+// can never disagree about what a reading means.
+static const char *keyName(int x) {
+  if (x < 60)  return "Right";
+  if (x < 200) return "Up";
+  if (x < 400) return "Down";
+  if (x < 600) return "Left";
+  if (x < 800) return "Select";
+  return "none";
+}
+
 static const char *sensorStateName() {
   switch (sensorState) {
     case SENSOR_OPEN:  return "NO SENSOR";
@@ -808,6 +819,30 @@ void loop() {
       lcd.setCursor(0, 1);
       lcd.print("sm = ");
       lcd.print(sensorMaxPSI);
+    }
+    else if (inputString == "keys") {
+      // Live ladder sampler. Press each button in turn; every change in the decoded
+      // key is reported with its raw A0 value, so the thresholds can be re-derived
+      // against the shield actually fitted rather than inherited from the R3 branch.
+      Console.println("keys: press each button. 15 s.");
+      analogReadResolution(10);          // the ladder is a 10-bit divider
+      int lastKey = -999;
+      unsigned long until = millis() + 15000UL;
+      while ((long)(millis() - until) < 0) {
+        int x = analogRead(0);
+        const char *k = keyName(x);
+        if (x / 8 != lastKey / 8) {      // report on a real change, not on jitter
+          Console.print("  raw = ");
+          Console.print(x);
+          Console.print("   -> ");
+          Console.println(k);
+          lastKey = x;
+        }
+        loopHeartbeatMs = millis();      // this loop is long; keep the heartbeat alive
+        WDT.refresh();
+        delay(60);
+      }
+      Console.println("keys: done");
     }
     else if (inputString == "net") {
       Console.print("wifi = ");
