@@ -144,11 +144,12 @@ bool calibrationDefaulted = false;
 
 const uint32_t WDT_TIMEOUT_MS            = 5000;   // ceiling on this part is 5592
 const unsigned long WIFI_CONNECT_TIMEOUT_MS = 3000;   // CWifi::begin association wait
-const unsigned long TCP_CONNECT_TIMEOUT_MS  = 2000;   // WiFiClient, passed to the coprocessor
 const unsigned long MQTT_CONNECT_TIMEOUT_MS = 2000;   // CONNACK wait only
 
 // R1: mqttClient.connect() does the TCP connect FIRST and only then enters its own
-// timeout loop, so the two above are SEQUENTIAL inside one call.
+// timeout loop. The TCP half is deliberately NOT bounded — see the note in setup()
+// on wifiClient.setConnectionTimeout(), which breaks the connect outright. The
+// heartbeat watchdog covers it instead.
 //
 // BUT BOUNDING ALONE CANNOT SOLVE THIS, and an earlier revision of this file claimed
 // it could. Proven on hardware 2026-09-01: the board reset-looped every 30 s against a
@@ -205,6 +206,8 @@ MqttClient mqttClient(wifiClient);
 enum NetState { NET_OFFLINE, NET_WIFI_UP, NET_ONLINE };
 NetState netState = NET_OFFLINE;
 unsigned long lastNetAttemptMs = 0;
+int  lastMqttError = 0;          // MqttClient::connectError() from the last attempt
+unsigned long netAttempts = 0;   // how many times netPoll has tried to connect
 const unsigned long NET_RETRY_MS = 30000;   // bounded attempt rate, never a loop
 unsigned long lastTelemetryMs = 0;
 const unsigned long TELEMETRY_MS = 5000;
@@ -351,10 +354,13 @@ static void netPoll() {
   // unreachable broker produced a 30-second reset cycle, and every reset wiped the
   // backlog AND the operator's tally, in exactly the case the queue exists for.
   WDT.refresh();
+  netAttempts++;
   if (!mqttClient.connect(broker, port)) {              // no while(1) on failure: C5
+    lastMqttError = mqttClient.connectError();
     WDT.refresh();
     return;
   }
+  lastMqttError = 0;
   WDT.refresh();
   netState = NET_ONLINE;
   queueFlush();                                          // was C6: no reconnect path at all
@@ -422,11 +428,21 @@ void setup() {
   // WDT_TIMEOUT_MS. The library defaults (10 s association) exceed the watchdog
   // ceiling and would reset the board on every failed connect.
   WiFi.setTimeout(WIFI_CONNECT_TIMEOUT_MS);
-  // R1: this one was missing, and it is the one that mattered. WiFiClient's own
-  // _connectionTimeout defaults to 0 (WiFiClient.h:251); it is passed to the
-  // coprocessor as the AT connect timeout, so without it the TCP connect is bounded
-  // only by MODEM_TIMEOUT = 10000 ms — nearly twice the watchdog ceiling.
-  wifiClient.setConnectionTimeout(TCP_CONNECT_TIMEOUT_MS);
+  // DO NOT call wifiClient.setConnectionTimeout() here. It looks like the obvious
+  // way to bound the TCP connect, and an earlier revision of this file did exactly
+  // that — but it SELECTS A DIFFERENT AT COMMAND, and that command does not work
+  // with a dotted-quad host on this core:
+  //
+  //   WiFiClient.cpp:53  _connectionTimeout == 0  ->  +CLIENTCONNECTNAME  (works)
+  //                      _connectionTimeout != 0  ->  +CLIENTCONNECT      (fails here)
+  //
+  // Measured: with it set, mqttClient.connect() returned -2 (MQTT_CONNECTION_REFUSED)
+  // on every attempt and tcpdump on the broker saw ZERO packets — the connect failed
+  // at the coprocessor before any TCP was attempted. The board could not reach any
+  // broker at all.
+  //
+  // Bounding it is no longer needed anyway: the heartbeat watchdog below is what
+  // covers blocking network calls. That is the whole reason it exists.
   mqttClient.setConnectionTimeout(MQTT_CONNECT_TIMEOUT_MS);
 
   // F1: the watchdog is armed BEFORE any networking exists, so that a hang in
@@ -755,6 +771,12 @@ void loop() {
       Console.println(queueDropped);
       Console.print("sensor = ");
       Console.println(sensorStateName());
+      Console.print("broker = ");
+      Console.println(broker);
+      Console.print("attempts = ");
+      Console.println(netAttempts);
+      Console.print("mqtt_err = ");
+      Console.println(lastMqttError);
     }
     // The blocking delay(1000) that used to sit here is gone: it stalled the
     // whole loop, poll() included, after every keypress. The LCD message now
