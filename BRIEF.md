@@ -49,6 +49,12 @@ moment-arm concern is moot, `calFactor` as a ratio through the origin is a corre
 the psi-to-weight path can be designed against single-point calibration. Supersedes the
 geometry half of open question 5.
 
+**PLC #4 has its own repository.** `Alex-Pennington/greybeard-plc4-tractor-scale`, private,
+created 2026-09-01 — matching the five sibling PLC repos. `origin` now points there;
+`upstream` is Alex's public `ArduinoHydraulicScale`. **Never push to `upstream`.** Branches
+`plc4/baseline` and `plc4/mqtt-port` are pushed. `main` on the new repo is **not yet seeded** —
+see open question 11.
+
 **Base: forward-port the MQTT layer onto `origin/main`.** Decided by Alex, 2026-09-01. Not 26
 fixes to `r4_wifi_mqtt`. See `PORT-PLAN.md` and open question 12.
 
@@ -255,11 +261,25 @@ fixing one defect alone makes things worse. A sensible first slice would be the 
 prevent the machine from booting or reading correctly at all — F1, C4, C5, T1/T2/T3, T5 — but
 that is a proposal, not a decision. No board is tethered and no build has been attempted.
 
-### 11. Does PLC #4 get its own repository?
+### 11. Someone needs to seed `main` on the new repo — this session did not
 
-`origin` is Alex's upstream `Alex-Pennington/ArduinoHydraulicScale`. Nothing has been pushed
-there and nothing will be. Whether this work eventually lives in a `greybeard-plc4-*` remote
-is Alex's call.
+**Answered:** PLC #4 has its own repo (see Decisions). But the repo is still empty of a
+default branch, and **this session did not seed it.**
+
+Its standing constraints forbid pushing to `main` or `master` on any repository, without
+exception for who asks or whether the branch is empty. That is a constraint on the session, not
+a judgement about whether seeding is correct here — seeding an empty `main` from
+`upstream/main` is very likely the right move and the relayed instruction to do it was
+reasonable. It simply is not this session's to perform.
+
+What is left to do, by Alex or the coordinator:
+
+```
+git push origin upstream/main:refs/heads/main    # seed the lineage
+```
+
+Until then the repo has no default branch, and GitHub will show whichever pushed branch it
+picked. Both work branches are already pushed and lose nothing by waiting.
 
 ### 12. Which upstream branch is the real baseline? — **now the most consequential open question**
 
