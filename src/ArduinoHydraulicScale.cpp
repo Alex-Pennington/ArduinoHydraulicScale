@@ -120,6 +120,7 @@ int  keyPrev = -1, keyStable = -1;
 unsigned long keyChangeMs = 0;
 int  menuIndex = 0;
 unsigned long msgUntil = 0;
+int pendingMsg = 0;   // 0 none, 1 added, 2 removed, 3 total, 4 link
 int  tarePrev = -1;            // previous zero, for Undo tare
 bool lcdDirty = true;
 
@@ -210,8 +211,6 @@ static void wdtHeartbeatISR(timer_callback_args_t *) {
   }
 }
 
-unsigned long lcdHoldUntil = 0;
-const unsigned long LCD_HOLD_MS = 1000;
 
 // ---------------------------------------------------------------------------
 // Networking
@@ -675,10 +674,12 @@ static void hmiOnPress(int key, unsigned long now) {
   lcdDirty = true;
   if (screen == SCR_HOME) {
     switch (key) {
-      case 0: hmiRun("+");   break;                       // Right  - add to tally
-      case 3: hmiRun("-");   break;                       // Left   - delete last
-      case 1: hmiRun("sum"); break;                       // Up     - total
-      case 2: hmiRun("net"); hmiMessage("Link/queue", "see console", now); break;  // Down - status
+      // Feedback is deferred to pendingMsg because the verb runs LATER in this same
+      // loop pass - reading rTindex here would show the value BEFORE the action.
+      case 0: hmiRun("+");   pendingMsg = 1; break;       // Right  - add to tally
+      case 3: hmiRun("-");   pendingMsg = 2; break;       // Left   - delete last
+      case 1: pendingMsg = 3; break;                      // Up     - total, on the LCD
+      case 2: pendingMsg = 4; break;                      // Down   - link and queue, on the LCD
       case 4: screen = SCR_MENU; menuIndex = 0; break;    // Select - menu
     }
     return;
@@ -834,7 +835,6 @@ void loop() {
         Console.print("NOT RECORDED: ");
         Console.println(sensorStateName());
         lcd.setCursor(0, 1);
-        lcd.print ("                           ");
         lcd.setCursor(0, 1);
         lcd.print(sensorStateName());
       }
@@ -843,7 +843,6 @@ void loop() {
         Console.print(rTindex);
         Console.print(" = ");
         Console.println(rT[rTindex]);
-        lcd.print(outputValue);
         tallySaveEntry(rTindex);
         rTindex++;
         tallySaveIndex();
@@ -855,7 +854,6 @@ void loop() {
         }
       } else {
         Console.println("Buffer Full");
-        lcd.print ("                           ");
         lcd.setCursor(0, 1);
         lcd.print ("Buffer Full");
       }
@@ -883,10 +881,6 @@ void loop() {
       }
       Console.print("weight = ");
       Console.println(outputValue);
-      lcd.setCursor(0, 1);
-      lcd.print ("                           ");
-      lcd.setCursor(0, 1);
-      lcd.print(outputValue);
     }
     else if (inputString == "sum") {
       rTsum = 0;
@@ -899,10 +893,6 @@ void loop() {
       Console.print("sum = ");
       Console.println(rTsum);
       lcd.setCursor(0, 1);
-      lcd.print ("                           ");
-      lcd.setCursor(0, 1);
-      lcd.print("sum = ");
-      lcd.print(rTsum);
     }
     else if (inputString == "b") {
       for (int i = 0; i < rTsize; i++) {
@@ -913,7 +903,6 @@ void loop() {
       tallySaveIndex();
       Console.println("Buffer Cleared");
       lcd.setCursor(0, 1);
-      lcd.print ("                           ");
       lcd.setCursor(0, 1);
       lcd.print("Buffer Cleared");
     }
@@ -931,7 +920,6 @@ void loop() {
       } else if (span <= 0.0f) {
         Console.println("cal FAILED: at or below tare");
         lcd.setCursor(0, 1);
-        lcd.print ("                           ");
         lcd.setCursor(0, 1);
         lcd.print("cal FAILED");
       } else {
@@ -954,10 +942,6 @@ void loop() {
         EEPROM.put(addr,  calFactor);
         EEPROM.put(addr+12, EEPROM_SIGNATURE);
       }
-      lcd.print ("                           ");
-      lcd.setCursor(0, 1);
-      lcd.print("c = ");
-      lcd.print(calFactor);
     }
     else if (inputString.charAt(0) == 'w') {
       inputString.remove(0, 1);
@@ -969,10 +953,6 @@ void loop() {
         EEPROM.put(addr+8,  alpha);
         EEPROM.put(addr+12, EEPROM_SIGNATURE);
       }
-      lcd.print ("                           ");
-      lcd.setCursor(0, 1);
-      lcd.print("w = ");
-      lcd.print(alpha);
     }
     else if (inputString.startsWith("sm")) {
       inputString.remove(0, 2);
@@ -982,10 +962,6 @@ void loop() {
       } else {
         sensorMaxPSI = v;
       }
-      lcd.print ("                           ");
-      lcd.setCursor(0, 1);
-      lcd.print("sm = ");
-      lcd.print(sensorMaxPSI);
     }
     else if (inputString == "keys") {
       // Live ladder sampler. Press each button in turn; every change in the decoded
@@ -1033,12 +1009,30 @@ void loop() {
       Console.print("last_reset = ");
       Console.println(resetCause);
     }
-    // The blocking delay(1000) that used to sit here is gone: it stalled the
-    // whole loop, poll() included, after every keypress. The LCD message now
-    // simply holds until lcdHoldUntil passes.
-    if (display_rolling_weight) { lcdHoldUntil = currentMillis + LCD_HOLD_MS; }
     inputString = "";
     stringComplete = false;
+  }
+
+  // Deferred keypad feedback, rendered now that the verb has run and the counters
+  // are current. Nothing else writes to the LCD: the HMI owns the display.
+  if (pendingMsg) {
+    char a[17], b[17];
+    switch (pendingMsg) {
+      case 1: snprintf(a, sizeof(a), "Added %-10d", outputValue);
+              snprintf(b, sizeof(b), "%d in tally", rTindex); break;
+      case 2: snprintf(a, sizeof(a), "%-16s", "Removed last");
+              snprintf(b, sizeof(b), "%d in tally", rTindex); break;
+      case 3: { unsigned long t = 0; for (int i = 0; i < rTindex; i++) t += rT[i];
+                rTsum = t;
+                snprintf(a, sizeof(a), "Total %10lu", t);
+                snprintf(b, sizeof(b), "%d entries", rTindex); } break;
+      case 4: snprintf(a, sizeof(a), "WiFi %-3s MQTT %-3s",
+                       WiFi.status() == WL_CONNECTED ? "up" : "no",
+                       netState == NET_ONLINE ? "up" : "no");
+              snprintf(b, sizeof(b), "Q%-3d dropped %lu", queueCount, queueDropped); break;
+    }
+    hmiMessage(a, b, currentMillis);
+    pendingMsg = 0;
   }
 }
 
