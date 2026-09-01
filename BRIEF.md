@@ -72,6 +72,27 @@ fixed local broker under a mobile machine turns the three blocking failure paths
 into certainties — see audit finding **F2**. As built, the first trip out of the yard ends
 with a blank LCD and a dead scale until someone power-cycles it in range.
 
+## The machine, and where the hardware actually is
+
+**John Deere 5055E with an M520 front loader.** Recorded from Alex 2026-09-01. The firmware
+already announced the tractor (`main :74`, `JD5055e OK`) and that it was a loader scale (`:70`),
+but the loader model was written down nowhere until now.
+
+**The hardware is NOT installed on the tractor. It is on the bench, with no transducer
+connected.** Every reading taken so far is bench work on a floating analog input and none of it
+is a hydraulic measurement.
+
+**The previous transducer failed by leaking at the electrical connection** — oil worked through
+the body and out of the cable entry, which is an internal element/seal failure rather than a
+thread or installation fault. See `notes/2026-09-01-transducer-failure-and-selection.md`; oil
+travels up a cable, so the harness and whatever it terminates in want checking before reuse.
+
+**Open defect, hardware: A1 needs a pull-down resistor or the NO SENSOR detection does not
+work.** Demonstrated on the bench — with nothing connected, A1 reads 4401 counts and the
+firmware reports `sensor = ok`. A floating CMOS input does not sit at 0 V. Until a 10k-47k
+pull-down to GND is fitted, `sensor = ok` means "in range", not "a sensor is present", and a cut
+sensor wire on the tractor would read as a valid pressure.
+
 ## Hardware — verified
 
 Read from the source at `c602655` unless marked otherwise.
