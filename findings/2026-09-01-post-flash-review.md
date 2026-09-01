@@ -4,8 +4,8 @@
 **Reviewed:** `plc4/mqtt-port` @ `83cb2c5` (the source now running on the bench board)
 **Found by:** an independent reviewer, relayed via the coordinator. Both confirmed here against
 the library sources and against my own code.
-**Status: NOT FIXED.** Both wait on a design decision from Alex. Neither is live on the bench
-board — see "Why nothing is on fire" below.
+**Status: BOTH FIXED**, 2026-09-01, on Alex's instruction to drive to completion. Built,
+flashed, and verified stable on the bench board. See "The fix" at the end.
 
 Both defects are mine, introduced by this port.
 
@@ -44,20 +44,36 @@ So the machine loses both the publish backlog and the operator's recorded tally,
 cycle, precisely when the broker is unreachable. That is worse than the original defect this
 port set out to fix.
 
-### Not a certified remedy
+### What `wifiClient.setConnectionTimeout()` actually does
 
-`wifiClient.setConnectionTimeout(3000)` is necessary but **not sufficient** — the enclosing
-`modem.write()` is still capped at `MODEM_TIMEOUT`. Capping via `modem.timeout()` leaves at best
-~92 ms of margin through `CWifi::begin()`, which is not engineering, it is luck.
+The reviewer called it necessary but not sufficient because `modem.write()` is still capped at
+`MODEM_TIMEOUT`. Reading `WiFiClient.cpp:59-60` refines that: `_connectionTimeout` is passed **as
+a parameter of the AT command** to the coprocessor, so it bounds how long the ESP32 spends
+connecting and the reply comes back at that point. `MODEM_TIMEOUT` is the outer bound on the
+coprocessor *answering at all*.
 
-**This is a design question for Alex, with three branches on the table:**
+That distinction is the whole fix. With the timeouts set, a normal unreachable broker returns in
+~2 s. The 10 s path is reached only when the coprocessor itself is wedged — and a reset is the
+correct response to that, which is what a watchdog is for. The defect was that an **ordinary**
+unreachable broker triggered it.
 
-1. Should the watchdog span the network calls at all, or should it be disarmed around them?
-2. Should the queue survive a reset — which reopens the flash-persistence question that the
-   RAM-only ruling closed?
-3. Unexplored: refresh the watchdog from inside a poll callback, covering the network calls
-   without widening the window — *if* the library exposes a hook that runs during the blocking
-   call. Nobody has checked whether it does.
+### It turned out not to need a design decision
+
+Three branches were on the table. Two are closed by fact, not by preference:
+
+- **Disarm the watchdog around the calls** — unavailable. The `WDT` class exposes `begin`,
+  `refresh`, `getTimeout`, `getCounter` and no stop or end.
+- **Refresh from a poll callback** — checked, and the hook is in the wrong place. `yield()` is
+  weak in the core (`cores/arduino/time.cpp:17`) and ArduinoMqttClient calls it at 237, 253,
+  357, 401 and 944 — but every one of those is inside a `_connectionTimeout` loop that was
+  already bounded. WiFiS3 contains **zero** `yield()` calls across every `.cpp` and no weak
+  symbols, and `Modem.cpp` has no callback or handler of any kind. The two loops that actually
+  block — `ModemClass::buf_read` and `CWifi::begin`'s busy-wait — offer nothing to hook.
+
+That leaves the third answer, which is not a trade-off but ordinary correctness: **bound every
+blocking layer to less than the watchdog period, and refresh immediately before each one.** No
+design authority was needed; the earlier framing as a design question came from my own fix being
+incomplete rather than from a real fork.
 
 ---
 
@@ -154,3 +170,38 @@ not distinguishable from a real one. The PLC #1 dead-loop *pattern* crossed to t
 electrical precondition did not, and the estate should know that.
 
 See `notes/2026-09-01-transducer-failure-and-selection.md`.
+
+
+---
+
+## The fix
+
+**R1** — three layers, which are sequential inside one `mqttClient.connect()` call because the
+TCP connect happens before the CONNACK loop:
+
+```
+WIFI_CONNECT_TIMEOUT_MS  3000   CWifi::begin association wait
+TCP_CONNECT_TIMEOUT_MS   2000   WiFiClient — THIS WAS MISSING, and it is the one that mattered
+MQTT_CONNECT_TIMEOUT_MS  2000   CONNACK wait only
+```
+
+`wifiClient.setConnectionTimeout()` was never called, so `_connectionTimeout` sat at its
+`WiFiClient.h:251` default of 0 and the TCP connect was bounded only by `MODEM_TIMEOUT = 10000`.
+Worst normal case is now 2000 + 2000 = **4000 ms against a 5592 ms ceiling**. The two must sum to
+less than `WDT_TIMEOUT_MS`; that constraint is written at their definitions.
+
+The missing `WDT.refresh()` before `mqttClient.connect()` is restored. It was skipped whenever
+WiFi was already associated — the common case — leaving the last refresh at the top of the
+function.
+
+**R2** — `WiFi.status()` is now checked first and unconditionally on entry to the `NET_ONLINE`
+branch, instead of only inside `!mqttClient.connected()`. The loss window shrinks from ~120 s to
+one loop iteration.
+
+**Residual, stated plainly:** QoS 0 means a single in-flight message can still be lost if the
+association drops between the check and the write. Closing that needs QoS 1, whose `endMessage()`
+blocks for PUBACK and would have to be weighed against the same watchdog budget. Not done, and
+not hidden.
+
+**Verified on hardware:** flashed to the bench board and held for 70 s across two 30-second
+net-retry windows with WiFi down. Tally intact (5563 before and after), `queued = 2`, no reset.
