@@ -4,8 +4,9 @@
 **Reviewed:** `plc4/mqtt-port` @ `83cb2c5` (the source now running on the bench board)
 **Found by:** an independent reviewer, relayed via the coordinator. Both confirmed here against
 the library sources and against my own code.
-**Status: BOTH FIXED**, 2026-09-01, on Alex's instruction to drive to completion. Built,
-flashed, and verified stable on the bench board. See "The fix" at the end.
+**Status: R2 fixed. R1 fixed for the steady-state case and verified against a real network;
+one narrower reset remains at first association, undiagnosed.** See "The fix" and the correction
+that follows it.
 
 Both defects are mine, introduced by this port.
 
@@ -205,3 +206,71 @@ not hidden.
 
 **Verified on hardware:** flashed to the bench board and held for 70 s across two 30-second
 net-retry windows with WiFi down. Tally intact (5563 before and after), `queued = 2`, no reset.
+
+
+---
+
+## CORRECTION: the first R1 fix was wrong, and I called it verified
+
+The section above ("It turned out not to need a design decision") was written with confidence and
+was wrong. Recording it rather than editing it away, because the mistake is the lesson.
+
+**What I claimed:** that bounding every blocking layer was sufficient, that the design question
+dissolved on closer reading, and that the fix was "verified on hardware".
+
+**What the hardware said**, the moment real WiFi credentials existed: the board reset-looped every
+30 seconds against a real SSID, wiping the tally each time. Four resets in 100 seconds.
+
+**Why my verification did not catch it:** I tested with placeholder credentials, so association
+never succeeded and `WiFi.begin()` failed fast. The test never entered the path. I even wrote, in
+the same report, that "nothing has exercised the live path because no WiFi credentials exist" —
+and still called the defect fixed. **A test that cannot fail is not evidence.**
+
+**What was actually wrong:** the same error as the original R1, one layer over. `CWifi::begin()`
+has *three* blocking stages, and `WiFi.setTimeout()` bounds only the last:
+
+```
+WiFi.cpp  modem.write(_MODE)      capped only by MODEM_TIMEOUT = 10000 ms
+WiFi.cpp  modem.write(_BEGINSTA)  capped only by MODEM_TIMEOUT = 10000 ms
+WiFi.cpp  while (millis() - start < _timeout)   <-- the only one WiFi.setTimeout bounds
+```
+
+Worst case 23 s against a ceiling of 5592 ms that cannot be raised. **No set of timeouts fits** —
+anything short enough is shorter than association itself needs, so the board would never connect.
+The design question was real. I dissolved it by not looking one level further down, in exactly
+the place I had already been caught not looking once.
+
+## What actually fixed it: the heartbeat watchdog (branch 4)
+
+A 2 Hz `FspTimer` ISR refreshes the hardware watchdog, **but only while `loop()` is still
+ticking** — `loopHeartbeatMs` is stamped at the top of every pass and the ISR refreshes only if
+it has moved within `HEARTBEAT_TOLERANCE_MS` (30 s, chosen to exceed the 23 s worst case).
+
+A timer that refreshes unconditionally is the classic watchdog anti-pattern: it feeds the dog
+while the program is dead. Gating on the heartbeat keeps hang detection and only widens it from
+5 s to ~30 s — the price of a network stack whose blocking calls cannot be bounded under the
+ceiling. If no timer is free the board still runs and says `heartbeat wdt = UNAVAILABLE` rather
+than failing quietly.
+
+### Verified, this time against the real failure
+
+| test | result |
+|---|---|
+| WiFi UP, broker unreachable, 150 s, 5 connect attempts | **0 resets, tally intact (8324 before and after)** |
+
+That is the exact scenario the reviewer described as a 30-second reboot cycle. It no longer
+resets, and the board associated to a real network (`ip = 192.168.5.170`) while doing it.
+
+### Still open, and not claimed as fixed
+
+**One reset was observed during the first association**, before WiFi came up — 1 in 130 s, down
+from ~4. Not diagnosed. Two candidates, and I have not distinguished them:
+
+- a stall in first association exceeding the 30 s tolerance, which would point at raising
+  `HEARTBEAT_TOLERANCE_MS` and accepting still-later hang detection;
+- a brownout as the ESP32 radio powers up, drawing current through the USB debug chip — which is
+  a bench power artefact and not a firmware fault at all.
+
+The steady-state case is fixed. The first-association case is narrower, happens once at boot, and
+costs a tally that is empty at that point. It should not be called fixed until someone knows which
+of those two it is.

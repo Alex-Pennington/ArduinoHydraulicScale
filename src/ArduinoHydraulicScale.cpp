@@ -13,6 +13,7 @@
 #include <WiFiS3.h>
 #include <ArduinoMqttClient.h>
 #include <WDT.h>
+#include "FspTimer.h"
 #include "arduino_secrets.h"
 
 // LCD pin to Arduino
@@ -147,9 +148,36 @@ const unsigned long TCP_CONNECT_TIMEOUT_MS  = 2000;   // WiFiClient, passed to t
 const unsigned long MQTT_CONNECT_TIMEOUT_MS = 2000;   // CONNACK wait only
 
 // R1: mqttClient.connect() does the TCP connect FIRST and only then enters its own
-// timeout loop, so the two above are SEQUENTIAL inside one call: worst normal case
-// 2000 + 2000 = 4000 ms against a 5592 ms ceiling, refreshed immediately before.
-// They must sum to less than WDT_TIMEOUT_MS. Do not raise either without checking that.
+// timeout loop, so the two above are SEQUENTIAL inside one call.
+//
+// BUT BOUNDING ALONE CANNOT SOLVE THIS, and an earlier revision of this file claimed
+// it could. Proven on hardware 2026-09-01: the board reset-looped every 30 s against a
+// real SSID. CWifi::begin has THREE blocking stages, not one —
+//
+//   WiFi.cpp  modem.write(_MODE)      capped only by MODEM_TIMEOUT = 10000 ms
+//   WiFi.cpp  modem.write(_BEGINSTA)  capped only by MODEM_TIMEOUT = 10000 ms
+//   WiFi.cpp  while (millis() - start < _timeout)   <-- the ONLY one WiFi.setTimeout bounds
+//
+// Worst case 23 s against a 5592 ms ceiling that cannot be raised. Lowering the modem
+// timeout far enough to fit would be shorter than association itself needs, so the
+// board would never connect. There is no set of timeouts that works.
+//
+// Hence the heartbeat watchdog below. The timeouts are still set — they keep the normal
+// case short — but they are no longer what keeps the board alive.
+const uint32_t HEARTBEAT_TOLERANCE_MS = 30000;   // must exceed the 23 s worst case above
+volatile uint32_t loopHeartbeatMs = 0;
+FspTimer wdtTimer;
+
+// Refresh the hardware watchdog from a timer ISR, but ONLY while loop() is still
+// ticking. A timer that refreshes unconditionally is the classic watchdog anti-pattern —
+// it keeps the dog fed while the program is dead. Gating on the heartbeat keeps hang
+// detection; it just widens it from 5 s to ~30 s, which is the price of a network stack
+// whose blocking calls cannot be bounded below the watchdog ceiling.
+static void wdtHeartbeatISR(timer_callback_args_t *) {
+  if ((uint32_t)(millis() - loopHeartbeatMs) < HEARTBEAT_TOLERANCE_MS) {
+    WDT.refresh();
+  }
+}
 
 unsigned long lcdHoldUntil = 0;
 const unsigned long LCD_HOLD_MS = 1000;
@@ -404,12 +432,28 @@ void setup() {
   // F1: the watchdog is armed BEFORE any networking exists, so that a hang in
   // the reconnect path has a floor under it. This is the whole reason the
   // watchdog was sequenced first in the work order.
+  loopHeartbeatMs = millis();
   WDT.begin(WDT_TIMEOUT_MS);
+
+  // Start the heartbeat refresher at 2 Hz. If no timer is free the board still runs,
+  // but it is back to resetting during network calls — so say so rather than fail quiet.
+  uint8_t timerType;
+  int8_t timerCh = FspTimer::get_available_timer(timerType);
+  bool hb = false;
+  if (timerCh >= 0) {
+    hb = wdtTimer.begin(TIMER_MODE_PERIODIC, timerType, (uint8_t)timerCh,
+                        2.0f, 0.0f, wdtHeartbeatISR)
+         && wdtTimer.setup_overflow_irq()
+         && wdtTimer.open()
+         && wdtTimer.start();
+  }
+  Console.print("heartbeat wdt = ");
+  Console.println(hb ? "on" : "UNAVAILABLE - resets during network calls");
 }
 
 void loop() {
-  WDT.refresh();
   unsigned long currentMillis = millis();
+  loopHeartbeatMs = currentMillis;   // the ISR refreshes the watchdog only while this moves
 
   // --- sampling: one reading per pass, no delay() ---------------------------
   if (currentMillis - lastSampleMs >= SAMPLE_SPACING_MS) {
