@@ -605,10 +605,18 @@ void setup() {
   // Second line of defence: reject anything physically impossible even if the
   // signature matched. A zero outside the transducer's own operating band cannot
   // be a zero, whatever the EEPROM says.
+  // Only calFactor and tareValue decide whether the CALIBRATION is trustworthy.
+  //
+  // alpha used to be in this test, and it caused a real fault in service: on a board
+  // where `w` had never been written, alpha read back NaN, `defaulted` went true, and the
+  // board announced CAL NOT SET with a perfectly good factor and zero still loaded. The
+  // operator was told to recalibrate a scale that did not need it — and did. A filter
+  // smoothing constant must never be able to condemn a calibration.
   bool defaulted = !eepromValid;
   if (isnan(calFactor) || calFactor <= 0.0001f || calFactor > 1000.0f) { calFactor = 1.0f; defaulted = true; }
   if (tareValue < SENSOR_COUNTS_OPEN || tareValue > SENSOR_COUNTS_FS)  { tareValue = SENSOR_COUNTS_ZERO; defaulted = true; }
-  if (isnan(alpha) || alpha <= 0.0f || alpha >= 1.0f)                  { alpha = 0.1f; defaulted = true; }
+  // alpha defaults silently: harmless on its own, and not evidence about the calibration.
+  if (isnan(alpha) || alpha <= 0.0f || alpha >= 1.0f)                  { alpha = 0.1f; }
 
   if (defaulted) {
     // Say so loudly. A silently defaulted calibration is the same failure the
@@ -693,6 +701,20 @@ void setup() {
 // whether or not the value changed, so rewriting a constant every bucket would have
 // tripled the wear for nothing.
 bool tallySigWritten = false;
+// Write the WHOLE calibration block, then the signature. Previously tare and kv wrote
+// their own field plus the signature, while alpha at addr+8 was written only by the `w`
+// verb — so on a board where `w` had never been used, the signature vouched for a slot
+// that had never been written. It read back as 0xFFFFFFFF, which is NaN as a float.
+//
+// Four puts per calibration change instead of two. Calibration happens a few times a day
+// at most, so the wear is irrelevant next to the correctness.
+static void saveCalibration() {
+  EEPROM.put(addr,     calFactor);
+  EEPROM.put(addr + 4, tareValue);
+  EEPROM.put(addr + 8, alpha);
+  EEPROM.put(addr + 12, EEPROM_SIGNATURE);
+}
+
 static void tallySaveIndex() {
   EEPROM.put(addr + 20, rTindex);
   if (!tallySigWritten) {
@@ -809,7 +831,7 @@ static void hmiOnPress(int key, unsigned long now) {
                   hmiMessage("Calibrated", "check it now", now); screen = SCR_HOME; break;
           case 2: screen = SCR_CHECKCAL; break;
           case 3: if (tarePrev >= 0) { int t = tareValue; tareValue = tarePrev; tarePrev = t;
-                    EEPROM.put(addr+4, tareValue); EEPROM.put(addr+12, EEPROM_SIGNATURE);
+                    saveCalibration();
                     hmiMessage("Zero restored", "", now); }
                   else hmiMessage("No previous", "zero to undo", now);
                   screen = SCR_HOME; break;
@@ -947,8 +969,7 @@ void loop() {
         Console.println(sensorStateName());
       } else {
         tareValue = sensorValue;
-        EEPROM.put(addr+4, tareValue);
-        EEPROM.put(addr+12, EEPROM_SIGNATURE);
+        saveCalibration();
         Console.println("tare");
       }
     }
@@ -1052,8 +1073,7 @@ void loop() {
         lcd.print("cal FAILED");
       } else {
         calFactor = float(calWeight) / span;
-        EEPROM.put(addr,  calFactor);
-        EEPROM.put(addr+12, EEPROM_SIGNATURE);
+        saveCalibration();
         calibrationDefaulted = false;
         Console.print("c = ");
         Console.println(calFactor);
@@ -1067,8 +1087,7 @@ void loop() {
         Console.println("c REJECTED");
       } else {
         calFactor = v;
-        EEPROM.put(addr,  calFactor);
-        EEPROM.put(addr+12, EEPROM_SIGNATURE);
+        saveCalibration();
       }
     }
     else if (inputString.charAt(0) == 'w') {
@@ -1078,8 +1097,7 @@ void loop() {
         Console.println("w REJECTED");
       } else {
         alpha = v;
-        EEPROM.put(addr+8,  alpha);
-        EEPROM.put(addr+12, EEPROM_SIGNATURE);
+        saveCalibration();
       }
     }
     else if (inputString.startsWith("sm")) {
