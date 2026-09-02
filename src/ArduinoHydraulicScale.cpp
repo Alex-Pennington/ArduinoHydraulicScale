@@ -251,6 +251,13 @@ const unsigned long STAGE_GAP_MS = 500;     // gap between association and broke
 unsigned long lastTelemetryMs = 0;
 unsigned long lastStatusMs = 0;
 bool willArmed = false;
+// Counts above SENSOR_COUNTS_FS mean the transducer output went past its assumed 4.5 V
+// full scale. That is NOT a fault — it is either a genuine pressure excursion above the
+// circuit's relief (spikes on valve closure do this) or evidence the assumed span is
+// wrong. Either way it must be VISIBLE rather than inferred from psi arithmetic, and it
+// must not gate weighing: an over-range sample is still a reading.
+unsigned long overRangeCount = 0;
+int overRangeMaxCounts = 0;
 const unsigned long STATUS_MS = 60000;   // heartbeat; also published immediately on connect
 const unsigned long TELEMETRY_MS = 5000;
 
@@ -384,11 +391,13 @@ static void publishStatus(unsigned long now) {
   snprintf(payload, sizeof(payload),
     "{\"up\":true,\"cal\":\"%s\",\"sensor\":\"%s\",\"tare\":%d,\"cf\":%.5f,"
     "\"n\":%d,\"q\":%d,\"dropped\":%lu,\"uptime_s\":%lu,\"rssi\":%d,"
+    "\"overrange\":%lu,\"overrange_max\":%d,"
     "\"reset\":\"%s\",\"id\":\"%s\"}",
     calibrationDefaulted ? "DEFAULT" : "ok",
     sensorStateName(), tareValue, calFactor,
     rTindex, queueCount, queueDropped,
     (unsigned long)(now / 1000UL), (int)WiFi.RSSI(),
+    overRangeCount, overRangeMaxCounts,
     resetCause, CLIENT_ID);
   char topic[64];
   if (!buildTopic("status", topic, sizeof(topic))) return;
@@ -863,6 +872,10 @@ void loop() {
 
     // T4: classify before converting. A cut wire must read as a fault, not as
     // a plausible weight. This is the likeliest hardware failure on a tractor.
+    if (sensorValue > SENSOR_COUNTS_FS && sensorValue <= SENSOR_COUNTS_SHORT) {
+      overRangeCount++;
+      if (sensorValue > overRangeMaxCounts) overRangeMaxCounts = sensorValue;
+    }
     if (sensorValue < SENSOR_COUNTS_OPEN)       sensorState = SENSOR_OPEN;
     else if (sensorValue > SENSOR_COUNTS_SHORT) sensorState = SENSOR_SHORT;
     else                                        sensorState = SENSOR_OK;
