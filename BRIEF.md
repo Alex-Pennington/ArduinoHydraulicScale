@@ -1,6 +1,18 @@
 # PLC #4 — tractor-mounted hydraulic scale
 
-**Status:** baseline audited, nothing fixed. Firmware changes are gated on Alex's approval.
+**Status, 2026-09-02: DEPLOYED AND RUNNING.** The firmware is on the tractor, associated to
+FOXTROTBRAVO, publishing to farm1 with a fitted transducer and a real calibration. The audit
+below describes the baseline it started from; the port, the HMI and the field results are in
+`PORT-PLAN.md` and `findings/`.
+
+**Two fixes are committed and await a flash** — `f7af2fc` (a calibration-validity bug that makes
+the LCD wrongly report `CAL NOT SET!` after every reboot) and `b10ec94` (over-range counters).
+Until the board next comes in, **check `cf` before acting on that warning**.
+
+**The transducer spec is confirmed against hardware** — see
+`findings/2026-09-02-field-commissioning.md`. The scaling constants are no longer provisional.
+
+**Original status:** baseline audited, nothing fixed. Firmware changes gated on Alex's approval.
 **Baseline:** `c602655` on `plc4/baseline`, branched from `origin/r4_wifi_mqtt`.
 **Caveat, added 2026-09-01:** `origin/main` already fixes eleven of the audited items and has
 no networking at all. Read **open question 12 before any fix-gate planning** — the likely work
@@ -143,7 +155,23 @@ constants calibrated against the old 10-bit ADC. Three separate defect clusters 
 single omission. `origin/uno-r3-swserial-lcd` is the pre-port line and is useful as a control
 when deciding whether a constant is a deliberate choice or a leftover.
 
-## Open questions for Alex
+## What is still open, 2026-09-02
+
+Most of the list below is answered. What actually remains, all physical:
+
+1. **The part marking** off the failed transducer — the only route to a datasheet, and the only
+   way to confirm the *span*. The zero is confirmed; single-point calibration hides a span error
+   entirely, so no amount of weighing can test it.
+2. **A pull-down resistor** on the transducer input. Without it a disconnected input floats
+   mid-rail and reports `sensor: ok`, so the fault detection cannot work.
+3. **A pressure snubber** on the transducer port. Now evidenced rather than precautionary: the
+   circuit was observed reaching the ADC rail during normal work, and the previous unit failed by
+   internal leakage — the failure overpressure produces.
+4. **The 3.6% calibration gap.** A 530-unit weight reads 511. Leak-down is eliminated; boom
+   position is the leading candidate. Test: lower fully, raise to the mark, read.
+5. **Units.** `calWeight` is 530 with no unit recorded anywhere. Carried unitless downstream.
+
+## Open questions for Alex — as originally raised
 
 Sharpest first. Nothing below is guessable from the repo, and several of them block work that
 would otherwise be straightforward.
