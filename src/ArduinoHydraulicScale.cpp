@@ -119,7 +119,13 @@ int  keyPrev = -1, keyStable = -1;
 unsigned long keyChangeMs = 0;
 int  menuIndex = 0;
 unsigned long msgUntil = 0;
-int pendingMsg = 0;   // 0 none, 1 added, 2 removed, 3 total, 4 link
+int pendingMsg = 0;   // 0 none, 1 added, 2 removed, 3 total, 4 link, 5 tare, 6 cal
+// Set by a verb that REFUSED, cleared by the keypress that queues the next one.
+// The keypad cannot read the outcome at press time -- the verb runs later in the
+// same loop pass -- so without this the deferred message painted "Added 4200"
+// over a refusal. Over-range is routine on this machine and `+` refuses on
+// LOOP_SATURATED, so that false success was an everyday event, not an exotic one.
+bool verbRefused = false;
 int  tarePrev = -1;            // previous zero, for Undo tare
 bool lcdDirty = true;
 
@@ -829,6 +835,7 @@ static void hmiDrawCheckCal() {
 
 static void hmiOnPress(int key, unsigned long now) {
   lcdDirty = true;
+  verbRefused = false;      // this press owns the next verdict, not the last one
   if (screen == SCR_HOME) {
     switch (key) {
       // Feedback is deferred to pendingMsg because the verb runs LATER in this same
@@ -848,10 +855,14 @@ static void hmiOnPress(int key, unsigned long now) {
       case 3: screen = SCR_HOME; break;                   // Left = back, always
       case 4:
         switch (menuIndex) {
+          // Deferred like `+` and `-` above, and for the same reason: these two
+          // verbs can REFUSE, and a message written here is written before the
+          // verb has run. "Tare taken" over a refused tare reached the operator
+          // while only the console saw the refusal.
           case 0: tarePrev = tareValue; hmiRun("tare");
-                  hmiMessage("Tare taken", "at the mark?", now); screen = SCR_HOME; break;
+                  pendingMsg = 5; screen = SCR_HOME; break;
           case 1: hmiRun("kv");
-                  hmiMessage("Calibrated", "check it now", now); screen = SCR_HOME; break;
+                  pendingMsg = 6; screen = SCR_HOME; break;
           case 2: screen = SCR_CHECKCAL; break;
           case 3: if (tarePrev >= 0) { int t = tareValue; tareValue = tarePrev; tarePrev = t;
                     saveCalibration();
@@ -1010,6 +1021,7 @@ void loop() {
       // unloaded pressure as well as the loaded pressure, so a tare taken
       // anywhere else puts a constant offset into every reading.
       if (loopState != LOOP_OK) {
+        verbRefused = true;
         Console.print("tare REFUSED: ");
         Console.println(sensorStateName());
       } else {
@@ -1026,6 +1038,7 @@ void loop() {
       // put a fabricated number into the tally and publish it as a real weight.
       // A fault must refuse the operation, not quietly produce a plausible value.
       if (loopState != LOOP_OK) {
+        verbRefused = true;
         Console.print("NOT RECORDED: ");
         Console.println(sensorStateName());
         lcd.setCursor(0, 1);
@@ -1107,6 +1120,7 @@ void loop() {
       // it straight to EEPROM.
       float span = (float)smoothedValue - (float)tareValue;
       if (loopState != LOOP_OK) {
+        verbRefused = true;
         // A short reads high and would yield a plausible-looking span. Both the
         // zero and the span are persisted, so a bad one survives the reboot.
         Console.print("cal REFUSED: ");
@@ -1218,7 +1232,21 @@ void loop() {
   // are current. Nothing else writes to the LCD: the HMI owns the display.
   if (pendingMsg) {
     char a[17], b[17];
-    switch (pendingMsg) {
+    // A refused verb NEVER paints a success message. OPERATOR.md promises the
+    // refusal names the state; the console kept that promise and the keypad did
+    // not, and the keypad is the operator's actual interface. Row 1 is
+    // sensorStateName() so the LCD, the console and the wire all say one thing.
+    if (verbRefused) {
+      const char *head = "REFUSED";
+      switch (pendingMsg) {
+        case 1: head = "NOT RECORDED"; break;
+        case 5: head = "TARE REFUSED"; break;
+        case 6: head = "CAL REFUSED";  break;
+      }
+      snprintf(a, sizeof(a), "%-16s", head);
+      snprintf(b, sizeof(b), "%-16s", sensorStateName());
+    }
+    else switch (pendingMsg) {
       case 1: snprintf(a, sizeof(a), "Added %-10d", outputValue);
               snprintf(b, sizeof(b), "%d in tally", rTindex); break;
       case 2: snprintf(a, sizeof(a), "%-16s", "Removed last");
@@ -1231,6 +1259,10 @@ void loop() {
                        WiFi.status() == WL_CONNECTED ? "up" : "no",
                        netState == NET_ONLINE ? "up" : "no");
               snprintf(b, sizeof(b), "Q%-3d dropped %lu", queueCount, queueDropped); break;
+      case 5: snprintf(a, sizeof(a), "%-16s", "Tare taken");
+              snprintf(b, sizeof(b), "%-16s", "at the mark?"); break;
+      case 6: snprintf(a, sizeof(a), "%-16s", "Calibrated");
+              snprintf(b, sizeof(b), "%-16s", "check it now"); break;
     }
     hmiMessage(a, b, currentMillis);
     pendingMsg = 0;
