@@ -15,6 +15,7 @@
 #include <WDT.h>
 #include "FspTimer.h"
 #include "arduino_secrets.h"
+#include "loop_scaling.h"
 
 // LCD pin to Arduino
 const int pin_RS = 8;
@@ -62,23 +63,12 @@ bool debug_flag = false;
 const int analogInPin = A2;
 
 // ---------------------------------------------------------------------------
-// Transducer scaling — SPEC-DEPENDENT, NOT YET CONFIRMED AGAINST A DATASHEET
-//
-// 0-3000 psi, 0.5-4.5 V ratiometric. Relayed from Alex; no part number was
-// supplied and no datasheet has been read. At AVCC = 5.0 V with 14-bit
-// resolution (0..16383) that gives the counts below. If the part number comes
-// back as anything else — a 4-20 mA variant especially — every constant in this
-// block has to be re-derived. Nothing else in the file hard-codes these values.
+// Transducer scaling lives in include/loop_scaling.h, in MILLIAMPS, with the
+// ADC counts derived from BURDEN_OHMS at compile time. Nothing here hard-codes
+// a count. See MA-LOOP-DESIGN.md for the design and
+// notes/2026-09-13-4-20ma-loop-decisions.md for why the burden is 150 ohm.
 // ---------------------------------------------------------------------------
-const int SENSOR_COUNTS_ZERO  = 1638;   // 0.5 V, 0 psi (live zero)
-const int SENSOR_COUNTS_FS    = 14745;  // 4.5 V, 3000 psi
-const int SENSOR_COUNTS_OPEN  = 1311;   // < 0.4 V: open circuit, cut wire, dead sensor
-const int SENSOR_COUNTS_SHORT = 15400;  // > 4.7 V: short to rail
-
-// T4: the live zero is what makes "no sensor" distinguishable from "no load".
-// Pattern ported from PLC #1's CURRENT_DEAD_LOOP_MA; the constant is ours.
-enum SensorState { SENSOR_OK, SENSOR_OPEN, SENSOR_SHORT };
-SensorState sensorState = SENSOR_OK;
+LoopState loopState = LOOP_OK;
 
 float vADC;  // the voltage
 float smoothedValue;  //the filtered value from the last reading
@@ -251,13 +241,22 @@ const unsigned long STAGE_GAP_MS = 500;     // gap between association and broke
 unsigned long lastTelemetryMs = 0;
 unsigned long lastStatusMs = 0;
 bool willArmed = false;
-// Counts above SENSOR_COUNTS_FS mean the transducer output went past its assumed 4.5 V
-// full scale. That is NOT a fault — it is either a genuine pressure excursion above the
-// circuit's relief (spikes on valve closure do this) or evidence the assumed span is
-// wrong. Either way it must be VISIBLE rather than inferred from psi arithmetic, and it
-// must not gate weighing: an over-range sample is still a reading.
+// Counts in the 20.0-21.0 mA NE43 band (COUNTS_FS..COUNTS_FAULT_HIGH, LOOP_SATURATED)
+// mean the transmitter is at or past its assumed 3000 psi full scale. That is NOT a
+// fault — it is either a genuine pressure excursion above the circuit's relief (spikes
+// on valve closure do this) or evidence the assumed span is wrong. Either way it must be
+// VISIBLE rather than inferred from psi arithmetic, and it must not gate weighing: an
+// over-range sample is still a reading.
 unsigned long overRangeCount = 0;
 int overRangeMaxCounts = 0;
+// The 3.5-4.0 mA dead band: below the live zero but above a dead loop. Reads as
+// a healthy 0 psi and is STRUCTURALLY UNCHANGED by the swap (playbook §8). What
+// the swap does remove is its dominant cause, excitation sensitivity -- a
+// current loop has no excitation dependency, so a sagging supply can no longer
+// move the reading. What can still land here is a transmitter drifting below
+// its own zero, which is a calibration problem rather than a wiring one.
+// Counting it is the mitigation, not a fix.
+unsigned long underRangeCount = 0;
 const unsigned long STATUS_MS = 60000;   // heartbeat; also published immediately on connect
 const unsigned long TELEMETRY_MS = 5000;
 
@@ -349,13 +348,7 @@ static const char *keyName(int x) {
   return "none";
 }
 
-static const char *sensorStateName() {
-  switch (sensorState) {
-    case SENSOR_OPEN:  return "NO SENSOR";
-    case SENSOR_SHORT: return "SENSOR SHORT";
-    default:           return "ok";
-  }
-}
+static const char *sensorStateName() { return loopStateName(loopState); }
 
 // A buffered reading MUST be distinguishable from a live one. Publishing
 // backlog bare is worse than not buffering, because the consumer cannot tell
@@ -420,7 +413,7 @@ static void queuePush(int32_t w) {
   // in that stamping CURRENT state on a past record would have been an undetectable
   // lie — but it left every weight taken out of radio range unusable as data, on the
   // one machine where being out of range is normal operation.
-  queueBuf[tail].sensorAtCapture = (uint8_t)sensorState;
+  queueBuf[tail].sensorAtCapture = (uint8_t)loopState;
   queueBuf[tail].calDefaultAtCapture = calibrationDefaulted ? 1 : 0;
   queueCount++;
 }
@@ -614,7 +607,7 @@ void setup() {
   // smoothing constant must never be able to condemn a calibration.
   bool defaulted = !eepromValid;
   if (isnan(calFactor) || calFactor <= 0.0001f || calFactor > 1000.0f) { calFactor = 1.0f; defaulted = true; }
-  if (tareValue < SENSOR_COUNTS_OPEN || tareValue > SENSOR_COUNTS_FS)  { tareValue = SENSOR_COUNTS_ZERO; defaulted = true; }
+  if (tareValue < COUNTS_DEAD || tareValue > COUNTS_FS) { tareValue = COUNTS_ZERO; defaulted = true; }
   // alpha defaults silently: harmless on its own, and not evidence about the calibration.
   if (isnan(alpha) || alpha <= 0.0f || alpha >= 1.0f)                  { alpha = 0.1f; }
 
@@ -772,8 +765,8 @@ static void hmiMessage(const char *a, const char *b, unsigned long now) {
 static void hmiDrawHome() {
   char l0[17], l1[17];
   // Row 0: the weight, or the fault that makes the weight meaningless.
-  if (sensorState != SENSOR_OK) snprintf(l0, sizeof(l0), "%-16s", sensorStateName());
-  else                          snprintf(l0, sizeof(l0), "%-11d n%-3d", outputValue, rTindex);
+  if (!loopIsMeasuring(loopState)) snprintf(l0, sizeof(l0), "%-16s", sensorStateName());
+  else                             snprintf(l0, sizeof(l0), "%-11d n%-3d", outputValue, rTindex);
 
   // Row 1: whatever the operator needs in order to trust row 0. Worst first —
   // an uncalibrated scale is wrong, a backlog is only late.
@@ -892,15 +885,19 @@ void loop() {
     sampleTotal = 0;
     sampleN = 0;
 
-    // T4: classify before converting. A cut wire must read as a fault, not as
-    // a plausible weight. This is the likeliest hardware failure on a tractor.
-    if (sensorValue > SENSOR_COUNTS_FS && sensorValue <= SENSOR_COUNTS_SHORT) {
+    // Classify before converting. The burden resistor makes an open loop read
+    // ~0 counts rather than floating mid-rail, so LOOP_DEAD is now a real
+    // measurement of loop integrity rather than a hopeful threshold.
+    loopState = classifyLoop(sensorValue);
+
+    // SATURATED is the 20.0-21.0 mA NE43 band: at or past full scale and STILL
+    // MEASURING. It is counted, not faulted. Counting it is how the question of
+    // how far past 3000 psi this circuit actually goes gets answered.
+    if (loopState == LOOP_SATURATED) {
       overRangeCount++;
       if (sensorValue > overRangeMaxCounts) overRangeMaxCounts = sensorValue;
     }
-    if (sensorValue < SENSOR_COUNTS_OPEN)       sensorState = SENSOR_OPEN;
-    else if (sensorValue > SENSOR_COUNTS_SHORT) sensorState = SENSOR_SHORT;
-    else                                        sensorState = SENSOR_OK;
+    if (loopState == LOOP_UNDER) underRangeCount++;
 
     // 14-bit full scale is 16383, not 16384.
     sensorVoltage = map((int)sensorValue, 0, 16383, 0, (int)(vReference * 1000.0));
@@ -927,8 +924,7 @@ void loop() {
     // The live hazard is not the arithmetic, it is that `sm` is NOT PERSISTED: it
     // reverts to the compile-time default on every reset. So a non-default sensor
     // wants the default below changed, not `sm` typed after each boot.
-    pressureValue = map((int)smoothedValue, SENSOR_COUNTS_ZERO, SENSOR_COUNTS_FS,
-                        0, sensorMaxPSI);
+    pressureValue = countsToPSI((int)smoothedValue, sensorMaxPSI);
     outputValue = (float)calFactor * ((float)smoothedValue - (float)tareValue);
 
     // The weight is drawn by hmiDrawHome(); nothing else writes to the LCD here.
@@ -964,7 +960,7 @@ void loop() {
       // Procedure: tare AT THE BOOM MARK, empty. Boom position changes the
       // unloaded pressure as well as the loaded pressure, so a tare taken
       // anywhere else puts a constant offset into every reading.
-      if (sensorState != SENSOR_OK) {
+      if (loopState != LOOP_OK) {
         Console.print("tare REFUSED: ");
         Console.println(sensorStateName());
       } else {
@@ -980,7 +976,7 @@ void loop() {
       // T4 again: recording while the transducer reads as open or shorted would
       // put a fabricated number into the tally and publish it as a real weight.
       // A fault must refuse the operation, not quietly produce a plausible value.
-      if (sensorState != SENSOR_OK) {
+      if (loopState != LOOP_OK) {
         Console.print("NOT RECORDED: ");
         Console.println(sensorStateName());
         lcd.setCursor(0, 1);
@@ -1061,7 +1057,7 @@ void loop() {
       // zero or negative; the old code produced inf or a sign flip and wrote
       // it straight to EEPROM.
       float span = (float)smoothedValue - (float)tareValue;
-      if (sensorState != SENSOR_OK) {
+      if (loopState != LOOP_OK) {
         // A short reads high and would yield a plausible-looking span. Both the
         // zero and the span are persisted, so a bad one survives the reboot.
         Console.print("cal REFUSED: ");
