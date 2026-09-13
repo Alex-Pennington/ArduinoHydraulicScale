@@ -84,7 +84,7 @@ int pressureValue = 0; // pressure
 int outputValue = 0;
 int tareValue = 0;
 float calFactor = 1.0; //calibration factor
-int sensorMaxPSI = 3000; // maximum pressure in PSI
+int sensorMaxPSI = 3000; // Rosemount 1151 span, 0-3000 psi. See MA-LOOP-DESIGN.md §5.
 int addr = 10;
 #define rTsize 50
 int rT[rTsize];
@@ -903,27 +903,22 @@ void loop() {
     sensorVoltage = map((int)sensorValue, 0, 16383, 0, (int)(vReference * 1000.0));
     smoothedValue = (smoothedValue * alpha) + (sensorValue * (1 - alpha));
 
-    // The psi conversion must start at the sensor's LIVE ZERO, not at zero counts.
-    // Mapping from 0 counts reported 299 psi at true 0 psi and 2699 psi at true
-    // 3000 — wrong at both ends, an offset AND a compressed span. It reached this
-    // firmware from the pre-14-bit line and nobody had followed it through; it is
-    // the third instance of the same unfinished resolution change, after the map
-    // in-max and the 10-bit filter seed.
+    // The psi conversion starts at the LIVE ZERO (4 mA), not at zero counts.
+    // Mapping from 0 counts reported 299 psi at true 0 psi and 2699 at true
+    // 3000 -- an offset AND a compressed span. DO NOT UNDO THAT.
     //
     // This value is PUBLISHED as `psi`, so it is not display-only cosmetics.
     //
-    // What `sm` can and cannot rescale — an earlier revision of this comment was
-    // over-broad and said it could not rescale a different transducer at all:
+    // What `sm` can rescale, and it is CLEANER than the voltage front end it
+    // replaces: a different PRESSURE range with the same 4-20 mA output needs
+    // `sm` ALONE. The count endpoints come from the burden resistor and do not
+    // move when the psi span does. Under the old 0.5-4.5 V part a different
+    // OUTPUT range would have moved both endpoints too.
     //
-    //   different PRESSURE range, same 0.5-4.5 V output  -> `sm` alone IS sufficient.
-    //     SENSOR_COUNTS_ZERO/FS are the counts for 0.5 V and 4.5 V; they do not move
-    //     when the psi range does. A 3500 psi unit needs only sensorMaxPSI = 3500.
-    //   different OUTPUT VOLTAGE range (e.g. 1-5 V)      -> both count endpoints must
-    //     change too, and `sm` alone would silently leave the scale wrong.
-    //
-    // The live hazard is not the arithmetic, it is that `sm` is NOT PERSISTED: it
-    // reverts to the compile-time default on every reset. So a non-default sensor
-    // wants the default below changed, not `sm` typed after each boot.
+    // The live hazard is unchanged and it is not the arithmetic: `sm` is NOT
+    // PERSISTED and reverts to the compile-time default on every reset. A
+    // non-default range wants the default below changed, not `sm` typed after
+    // each boot.
     pressureValue = countsToPSI((int)smoothedValue, sensorMaxPSI);
     outputValue = (float)calFactor * ((float)smoothedValue - (float)tareValue);
 
