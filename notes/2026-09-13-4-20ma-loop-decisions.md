@@ -4,7 +4,7 @@ Recorded 2026-09-13, during brainstorming, on branch `feat/plc4-4-20ma-loop`
 (cut from `plc4/mqtt-port` at 7e7f2f4).
 
 **Status: NO CODE WRITTEN.** This is a decisions record, not a design spec. The design
-is blocked on one open constant (sensor range, §5). Nothing in `src/ArduinoHydraulicScale.cpp`
+is blocked on the unresolved range contradiction in §5. Nothing in `src/ArduinoHydraulicScale.cpp`
 has been edited.
 
 **Base branch is `plc4/mqtt-port`, not `main`.** `main` is stale upstream refactor history
@@ -71,6 +71,10 @@ NAMUR NE43 banding separates them. See §4.
 | Burden resistor | **150 ohm, 0.1%, <=25 ppm/degC**, A2 to GND | Alex | 2026-09-13 |
 | Circuit exceeds 3000 psi | Assumed true, over the spec-sheet figure | Alex | 2026-09-13 |
 | ADC input pin | A2, unchanged (`:62`) | already settled | 2026-09-01 |
+| Approach | mA is source of truth, counts derived (§4) | Alex | 2026-09-13 |
+| Transmitter | **Rosemount 1151, 0-3000 psi** -- see §5 | Alex | 2026-09-13 |
+| `EEPROM_SIGNATURE` | Bump it; forces a recalibration (§6.1) | Alex | 2026-09-13 |
+| Filter on fault | Freeze it; hold last reading (§6.2) | Alex | 2026-09-13 |
 
 ### Why 150 ohm
 
@@ -224,28 +228,82 @@ it is the mitigation.
 
 ---
 
-## 5. OPEN: sensor range
+## 5. Sensor range: Rosemount 1151, 0-3000 psi -- AND AN UNRESOLVED CONTRADICTION
 
-**Blocking the design.** Alex's ruling in §3 is "size with real margin above 3000", without a
-number yet.
+**Alex named the part 2026-09-13: a Rosemount 1151 at 0-3000 psi.**
 
-**The 2026-09-01 note's "resolution is not a criterion" conclusion does not transfer here.**
-That is about ADC quantisation. Sensor accuracy is +/-1.0% **of full scale**, so it scales
-directly with range, and on a machine whose job is weighing that is real:
+### The contradiction, recorded rather than resolved
+
+Four hours earlier, in the same brainstorm, Alex ruled (§3) **"assume the circuit really does
+exceed 3000 psi"** and chose to size the new sensor **"with real margin above 3000"**, taking his
+own field observation over the spec sheet. A 0-3000 psi transmitter has **no margin above 3000**.
+
+Both statements are his and they do not reconcile. Neither has been withdrawn. **Do not read
+the later answer as superseding the earlier one** -- a part number given in answer to a range
+question is not obviously a retraction of a ruling about the circuit, and guessing which he meant
+is exactly the class of silent assumption this file exists to prevent.
+
+What follows from the pair, if both hold: the transmitter saturates routinely in normal loader
+work. Under the §4 banding that is survivable -- it reports `SATURATED` and keeps reading, rather
+than being mistaken for a wiring fault as it is today -- but **the scale is pinned and wrong for
+the duration of every excursion.** The `overrange` counter measures how often.
+
+### What the 1151 changes, and what must be confirmed before any of it is coded
+
+**None of the following has been read from a datasheet or a calibration plate.** Per `CLAUDE.md`:
+do not reason from a part number you have not seen. These are the questions the part raises, not
+answers about it.
+
+1. **Span comes from the calibration plate, not the model number.** The 1151 is a re-rangeable
+   analog transmitter with zero and span adjustments, so its *calibrated* span is whatever it was
+   last set to -- which on a second-hand or legacy unit is unknown. Playbook §4 is explicit and
+   was written after this went wrong: *"Span comes from the calibration plate, not from a sibling
+   repo... Span silently scales every pressure decision a machine makes; it is the last constant
+   that should be copied."* **`sensorMaxPSI` must come off the plate.**
+2. **Re-ranging may dissolve the contradiction.** If the unit's range code spans past 3000 psi,
+   it can be re-spanned to put 20 mA above the circuit's actual peak. That would satisfy the §3
+   ruling without buying another part. Needs the range code.
+3. **NE43 applicability is unconfirmed for this variant.** A plain analog 1151 does not
+   self-diagnose and will not deliberately drive a fault current. The §4 bands remain correct --
+   `FAULT_HIGH` still means "current outside any valid range" -- but on an analog unit it catches
+   a hard-over rather than a transmitter announcing its own failure. The threshold does not
+   change; its *meaning* narrows. A 1151S / smart variant would differ.
+4. **Overpressure rating is the question the failure history makes urgent.** The previous unit
+   died by pressurised oil working through the sensor body and out of the cable entry -- element
+   or internal seal failure, with overpressure and cycling fatigue the usual causes. The 1151's
+   over-range and static pressure limits come from its range code. **If the circuit exceeds 3000
+   psi routinely, the margin between "routine" and "rated" is the number that matters.**
+5. **Loop supply is comfortable.** A 1151-class 2-wire transmitter wants roughly 12 V minimum at
+   its terminals; 24 V less the 3.00 V burden drop leaves ~21 V. The 150 ohm choice is unaffected.
+6. **Mounting and vibration are open.** The 1151 is a large cast-housing industrial transmitter
+   with conduit entries, designed for pipe or panel mounting in a plant. A loader boom is a
+   shock-and-vibration environment. Not a firmware question, but it is not nothing.
+
+### The accuracy argument, retained because it will come up again
+
+**The 2026-09-01 note's "resolution is not a criterion" conclusion is about ADC quantisation and
+does not transfer to range selection.** Sensor accuracy is +/-1.0% **of full scale**, so it scales
+directly with range:
 
 | range | overload | accuracy | ~weight error* | behaviour above span |
 |---|---|---|---|---|
-| 3500 psi | 5250 | +/-35 psi | +/-41 lb | saturates; reported `SATURATED`, still reads |
+| 3000 psi | 4500 | +/-30 psi | +/-35 lb | saturates; `SATURATED`, still reads |
+| 3500 psi | 5250 | +/-35 psi | +/-41 lb | saturates; `SATURATED`, still reads |
 | 5000 psi | 7500 | +/-50 psi | +/-58 lb | effectively never saturates |
 
-\* scaled against ~3500 lb lift capacity from the sheet; indicative, not calibrated.
+\* scaled against ~3500 lb lift capacity from the sheet; indicative, not calibrated. Overload
+figures are the 150% typical of the ceramic family in the 2026-09-01 note, **not** the 1151's --
+see item 4 above.
 
-3000 -> 3500 was the 5 psi difference the note rightly dismissed. **3000 -> 5000 is not** -- it
-is a 67% increase in absolute error and it is not inside any noise floor.
+3000 -> 3500 was the 5 psi difference the note rightly dismissed. **3000 -> 5000 is not** -- a 67%
+increase in absolute error, not inside any noise floor. This is the real cost of buying margin,
+and it is why the §3 ruling and the 0-3000 part are a genuine trade rather than a slip.
 
-Countervailing: the previous unit failed by pressurised oil working through the sensor body and
-out of the cable entry, i.e. the element or its internal seal gave up, with overpressure and
-pressure-cycling fatigue the usual causes. Margin is the thing that failure argues for buying.
+**Under a current loop, changing the psi range later is a ONE CONSTANT recompile.** The count
+endpoints are set by the burden and do not move when the psi span does, so `sensorMaxPSI` alone
+rescales it -- cleaner than the voltage case, where both endpoints would have to move too. The
+live hazard is that `sm` (`:1103`) is **not persisted** and reverts on every reset, so a
+non-default range wants the compile-time default changed, not `sm` typed after each boot.
 
 ---
 
@@ -253,14 +311,14 @@ pressure-cycling fatigue the usual causes. Margin is the thing that failure argu
 
 Per `CLAUDE.md`: nothing in the `.ino` changes without Alex approving that specific change.
 
-1. **`EEPROM_SIGNATURE` (`:176`, `0x504C4334` 'PLC4') must change.** Counts-per-psi moves by
+1. **APPROVED by Alex 2026-09-13.** **`EEPROM_SIGNATURE` (`:176`, `0x504C4334` 'PLC4') must change.** Counts-per-psi moves by
    ~1.67x, so a voltage-era `tareValue` and `calFactor` restore cleanly, pass the bounds check
    at `:617`, and publish `"cal":"ok"` (`:396`) over a scale wrong by that ratio -- the same
    class of failure as the 16256 leftover already documented at `:581-592`, which the signature
    was added to catch and would not. Bumping it makes existing machinery do the right thing:
    `calibrationDefaulted` -> `CAL NOT SET!` (`:780`). **Consequence: the board demands a full
    recalibration after flashing, and will not weigh correctly until it gets one.**
-2. **Freezing the filter on fault (`:907`) is a behaviour change to the weight path.** Today
+2. **APPROVED by Alex 2026-09-13.** **Freezing the filter on fault (`:907`) is a behaviour change to the weight path.** Today
    `smoothedValue` is fed unconditionally, so a dead loop drags the weight smoothly down to a
    plausible number rather than stopping. Playbook §6's rule is that a faulted read returns
    early without touching the filtered value, so the channel holds its last reading. This is
