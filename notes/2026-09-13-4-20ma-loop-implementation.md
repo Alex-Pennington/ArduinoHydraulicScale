@@ -176,6 +176,16 @@ tolerance sitting beside it.** The two copies of the constant were collapsed int
 
 ## 7. Before this is flashed
 
+**THE GATE, ruled by Alex 2026-09-13: `greybeard-plc-consumer#5` IS UPDATED BEFORE THIS IS
+FLASHED.** Not "should be" — he was asked about the ordering explicitly and chose it. That
+consumer nulls both `w` and `psi` whenever `sensor != "ok"`, which now includes `SATURATED`, so
+flashing first means the ingest silently discards the first stretch of over-range excursions —
+the exact measurement this feature exists to produce, and the one nobody has ever had.
+**As of this commit that work is NOT STARTED.**
+
+**Acknowledged by Alex 2026-09-13: transmitter fitted FIRST, then flash.**
+
+
 - **Do not flash current-mode firmware before the transmitter is physically fitted.** PLC #3's
   playbook §2 makes this a procedure, not a commit message; it cost them a morning.
 - **`greybeard-plc-consumer#5` wants actioning at or before the flash**, or the first over-range
