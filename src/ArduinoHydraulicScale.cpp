@@ -774,6 +774,12 @@ static void hmiMessage(const char *a, const char *b, unsigned long now) {
 static void hmiDrawHome() {
   char l0[17], l1[17];
   // Row 0: the weight, or the fault that makes the weight meaningless.
+  //
+  // SATURATED and UNDER ZERO deliberately do NOT take this row. They are real
+  // measurements — over-range, or below the live zero, but measuring — and
+  // withholding a weight from the operator because the transmitter is pinned
+  // was the old defect, not a safeguard. They stay visible in telemetry and in
+  // the overrange/underrange counters.
   if (!loopIsMeasuring(loopState)) snprintf(l0, sizeof(l0), "%-16s", sensorStateName());
   else                             snprintf(l0, sizeof(l0), "%-11d n%-3d", outputValue, rTindex);
 
