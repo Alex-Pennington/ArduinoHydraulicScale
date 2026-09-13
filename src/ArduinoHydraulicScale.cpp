@@ -125,6 +125,12 @@ int pendingMsg = 0;   // 0 none, 1 added, 2 removed, 3 total, 4 link, 5 tare, 6 
 // over a refusal. Over-range is routine on this machine and `+` refuses on
 // LOOP_SATURATED, so that false success was an everyday event, not an exotic one.
 bool verbRefused = false;
+// Set alongside verbRefused when the reason is NOT the loop state -- kv's
+// span<=0.0f failure and a full tally are both refusals with nothing to do
+// with sensorStateName(). Empty means "use sensorStateName(), as before";
+// non-empty overrides it. Reset with verbRefused so a stale reason from one
+// press can never be shown against a different one.
+char verbRefusedReason[17] = "";
 int  tarePrev = -1;            // previous zero, for Undo tare
 bool lcdDirty = true;
 
@@ -835,6 +841,7 @@ static void hmiDrawCheckCal() {
 static void hmiOnPress(int key, unsigned long now) {
   lcdDirty = true;
   verbRefused = false;      // this press owns the next verdict, not the last one
+  verbRefusedReason[0] = '\0';
   if (screen == SCR_HOME) {
     switch (key) {
       // Feedback is deferred to pendingMsg because the verb runs LATER in this same
@@ -1068,6 +1075,11 @@ void loop() {
           queuePush(outputValue);
         }
       } else {
+        // Full is a refusal too, from a different cause than a bad loop -- the
+        // deferred render must not paint "Added <n>" over it, and the reason it
+        // gives must say the tally is full, not name a sensor state.
+        verbRefused = true;
+        snprintf(verbRefusedReason, sizeof(verbRefusedReason), "TALLY FULL");
         Console.println("Buffer Full");
         lcd.setCursor(0, 1);
         lcd.print ("Buffer Full");
@@ -1134,6 +1146,13 @@ void loop() {
         Console.print("cal REFUSED: ");
         Console.println(sensorStateName());
       } else if (span <= 0.0f) {
+        // Failed, not refused by a loop state -- the deferred render must not
+        // paint "Calibrated / check it now" over this, and the reason it gives
+        // must say WHY the arithmetic was rejected, not name a sensor state.
+        // calFactor is untouched here: the old factor stands, so the lie this
+        // guards against is purely in the report, not in what gets used.
+        verbRefused = true;
+        snprintf(verbRefusedReason, sizeof(verbRefusedReason), "at or below tare");
         Console.println("cal FAILED: at or below tare");
         lcd.setCursor(0, 1);
         lcd.setCursor(0, 1);
@@ -1252,7 +1271,11 @@ void loop() {
         case 6: head = "CAL REFUSED";  break;
       }
       snprintf(a, sizeof(a), "%-16s", head);
-      snprintf(b, sizeof(b), "%-16s", sensorStateName());
+      // verbRefusedReason overrides sensorStateName() when the refusal was NOT
+      // about the loop state (kv's span<=0.0f, a full tally) -- see where it is
+      // set. Empty means the old behaviour: name the sensor state.
+      snprintf(b, sizeof(b), "%-16s",
+               verbRefusedReason[0] ? verbRefusedReason : sensorStateName());
     }
     else switch (pendingMsg) {
       case 1: snprintf(a, sizeof(a), "Added %-10d", outputValue);
