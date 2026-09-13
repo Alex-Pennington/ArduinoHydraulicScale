@@ -281,7 +281,7 @@ const unsigned long TELEMETRY_MS = 5000;
 struct WeightRecord {
   int32_t  weight;
   uint32_t capturedAtMs;
-  uint8_t  sensorAtCapture;   // SensorState AS IT WAS when this weight was taken
+  uint8_t  sensorAtCapture;   // LoopState AS IT WAS when this weight was taken
   uint8_t  calDefaultAtCapture;
 };
 const int QUEUE_DEPTH = 200;              // ~4 working days at 50 buckets/day
@@ -436,12 +436,11 @@ static void queueFlush() {
     // sensor and cal are the values AT CAPTURE, carried in the record — not the
     // current ones. That keeps the record honest and still lets a consumer decide
     // whether the reading was valid, which the earlier omit-entirely form could not.
-    static const char *names[] = { "ok", "NO SENSOR", "SENSOR SHORT" };
     snprintf(payload, sizeof(payload),
              "{\"w\":%ld,\"age_ms\":%lu,\"backlog\":true,\"sensor\":\"%s\","
              "\"cal\":\"%s\",\"id\":\"%s\"}",
              (long)r.weight, (unsigned long)age,
-             names[r.sensorAtCapture <= 2 ? r.sensorAtCapture : 0],
+             loopStateName((LoopState)r.sensorAtCapture),
              r.calDefaultAtCapture ? "DEFAULT" : "ok", CLIENT_ID);
     if (!publishTo("weight", payload)) return;   // stop on first failure; keep the rest
     queueHead = (queueHead + 1) % QUEUE_DEPTH;

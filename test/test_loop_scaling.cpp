@@ -17,6 +17,7 @@
 
 #include "loop_scaling.h"
 #include <cstdio>
+#include <cstring>
 
 static int failures = 0;
 
@@ -35,6 +36,14 @@ static void check_state(const char *what, LoopState got, LoopState want) {
   if (got == want) { printf("  ok    %-44s %s\n", what, loopStateName(got)); }
   else { printf("  FAIL  %-44s got %s want %s\n", what,
                 loopStateName(got), loopStateName(want)); failures++; }
+}
+
+static void check_str(const char *what, const char *got, const char *want) {
+  if (got == want || (got && want && strcmp(got, want) == 0)) {
+    printf("  ok    %-44s %s\n", what, got);
+  } else {
+    printf("  FAIL  %-44s got %s want %s\n", what, got, want); failures++;
+  }
 }
 
 // The derived counts, against the values in MA-LOOP-DESIGN.md §2. If the burden
@@ -80,6 +89,22 @@ int main() {
   check_int("LOOP_SATURATED MEASURES",  loopIsMeasuring(LOOP_SATURATED),  1);
   check_int("LOOP_DEAD does not",       loopIsMeasuring(LOOP_DEAD),       0);
   check_int("LOOP_FAULT_HIGH does not", loopIsMeasuring(LOOP_FAULT_HIGH), 0);
+
+  printf("\nloopStateName -- the wire/LCD string for every state, by name\n");
+  // Regression cover for queueFlush(), which hands loopStateName() a raw byte
+  // pulled out of a RAM record (WeightRecord::sensorAtCapture) rather than a
+  // value classifyLoop() produced. Before this round LOOP_OK fell through to
+  // the same "ok" default as anything out of range, so a corrupted or stale
+  // record and a healthy reading were indistinguishable on the wire.
+  check_str("LOOP_OK",         loopStateName(LOOP_OK),         "ok");
+  check_str("LOOP_DEAD",       loopStateName(LOOP_DEAD),       "NO SENSOR");
+  check_str("LOOP_UNDER",      loopStateName(LOOP_UNDER),      "UNDER ZERO");
+  check_str("LOOP_SATURATED",  loopStateName(LOOP_SATURATED),  "SATURATED");
+  check_str("LOOP_FAULT_HIGH", loopStateName(LOOP_FAULT_HIGH), "XMTR FAULT");
+  // Out-of-range: a corrupted or stale sensorAtCapture byte must fail safe,
+  // not masquerade as "ok". This is the case classifyLoop() itself can never
+  // produce -- only a raw byte from a record can reach it.
+  check_str("(LoopState)7 -- out of range", loopStateName((LoopState)7), "BAD STATE");
 
   printf("\ncounts back to milliamps\n");
   check_near("live zero is 4 mA",  countsToMilliamps(COUNTS_ZERO),  4.0,  0.01);

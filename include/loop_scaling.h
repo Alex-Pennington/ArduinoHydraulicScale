@@ -88,11 +88,18 @@ inline bool loopIsMeasuring(LoopState s) {
 // current loop is current-limited and has no rail to short to.
 inline const char *loopStateName(LoopState s) {
   switch (s) {
+    case LOOP_OK:         return "ok";
     case LOOP_DEAD:       return "NO SENSOR";
     case LOOP_UNDER:      return "UNDER ZERO";
     case LOOP_SATURATED:  return "SATURATED";
     case LOOP_FAULT_HIGH: return "XMTR FAULT";
-    default:              return "ok";
+    // Reachable only from a raw byte pulled out of a RAM record (queueFlush's
+    // WeightRecord::sensorAtCapture) rather than from classifyLoop(), which never
+    // returns anything outside the five cases above. A corrupted or stale record
+    // must not be able to masquerade as a healthy reading -- "BAD STATE" is a
+    // deliberate wire value, 10 characters so it fits the 16-column LCD, and any
+    // consumer treating non-"ok" as invalid fails safe on it.
+    default:              return "BAD STATE";
   }
 }
 
