@@ -5,6 +5,12 @@ Recorded 2026-09-13 on `feat/plc4-4-20ma-loop-impl`. Companion to
 `MA-LOOP-DESIGN.md` (the firmware design). **This file is the implementation record — read it
 instead of a session transcript.**
 
+**THE BRANCH OF RECORD IS `feat/plc4-4-20ma-loop-impl`.** Ruled by Alex 2026-09-13. It contains
+every commit from `feat/plc4-4-20ma-loop`, which is a redundant pointer at one of its ancestors —
+the work is not split across the two. A fast-forward to unify the names was approved but blocked
+by a repo guard that reserves merges for the session owning the repository root; it was left
+rather than worked around, because the only thing it would change is a branch name.
+
 **Status: IMPLEMENTED AND COMPILED. NOT FLASHED. NO BOARD HAS BEEN TETHERED.** Every claim about
 runtime behaviour here is read from source or from host arithmetic, and says so.
 
