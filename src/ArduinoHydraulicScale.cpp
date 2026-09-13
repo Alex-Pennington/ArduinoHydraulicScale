@@ -390,17 +390,17 @@ static bool publishWeight(int32_t w, uint32_t ageMs, bool backlog) {
 // ---------------------------------------------------------------------------
 static void publishStatus(unsigned long now) {
   lastStatusMs = now;
-  char payload[320];
+  char payload[384];
   snprintf(payload, sizeof(payload),
     "{\"up\":true,\"cal\":\"%s\",\"sensor\":\"%s\",\"tare\":%d,\"cf\":%.5f,"
     "\"n\":%d,\"q\":%d,\"dropped\":%lu,\"uptime_s\":%lu,\"rssi\":%d,"
-    "\"overrange\":%lu,\"overrange_max\":%d,"
+    "\"overrange\":%lu,\"overrange_max\":%d,\"underrange\":%lu,"
     "\"reset\":\"%s\",\"id\":\"%s\"}",
     calibrationDefaulted ? "DEFAULT" : "ok",
     sensorStateName(), tareValue, calFactor,
     rTindex, queueCount, queueDropped,
     (unsigned long)(now / 1000UL), (int)WiFi.RSSI(),
-    overRangeCount, overRangeMaxCounts,
+    overRangeCount, overRangeMaxCounts, underRangeCount,
     resetCause, CLIENT_ID);
   char topic[64];
   if (!buildTopic("status", topic, sizeof(topic))) return;
@@ -955,11 +955,26 @@ void loop() {
     // A flush that failed part-way through would otherwise sit until the next
     // reconnect, which may never come if the link never actually drops.
     if (queueCount > 0) queueFlush();
-    char payload[128];
+    char payload[192];
+    // psi publishes JSON null, NEVER 0, when the loop is not measuring. A real
+    // zero and a dead transmitter are different things and must be reported
+    // differently at every layer (playbook §6). psi_fault carries the DIRECTION
+    // because fail-low is a wiring question and fail-high is not -- they lead to
+    // different first checks at the machine. Both field names match PLC #3.
+    // mA is the unit a person with a meter at the machine is comparing against.
+    char psiField[12];
+    if (loopIsMeasuring(loopState)) snprintf(psiField, sizeof(psiField), "%d", pressureValue);
+    else                            snprintf(psiField, sizeof(psiField), "null");
+
+    const char *psiFault = "null";
+    if (loopState == LOOP_DEAD)            psiFault = "\"low\"";
+    else if (loopState == LOOP_FAULT_HIGH) psiFault = "\"high\"";
+
     snprintf(payload, sizeof(payload),
-             "{\"w\":%d,\"psi\":%d,\"counts\":%d,\"sensor\":\"%s\",\"queued\":%d,\"id\":\"%s\"}",
-             outputValue, pressureValue, sensorValue, sensorStateName(),
-             queueCount, CLIENT_ID);
+             "{\"w\":%d,\"psi\":%s,\"mA\":%.2f,\"counts\":%d,\"sensor\":\"%s\","
+             "\"psi_fault\":%s,\"queued\":%d,\"id\":\"%s\"}",
+             outputValue, psiField, (double)countsToMilliamps(sensorValue),
+             sensorValue, sensorStateName(), psiFault, queueCount, CLIENT_ID);
     // A5: the periodic stream is telemetry, not debug. The deliberate record
     // goes to /weight. The old firmware had these inverted.
     publishTo("telemetry", payload);
