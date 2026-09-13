@@ -73,7 +73,6 @@ LoopState loopState = LOOP_OK;
 float vADC;  // the voltage
 float smoothedValue;  //the filtered value from the last reading
 float alpha = 0.1; //the weight (between 0 and 1) given to the previous filter value
-float vReference = 5.0; //using the supply voltage as the reference
 unsigned long previousMillis = 0;
 int interval = 500; //choose the time between readings in milliseconds
 bool display_rolling_weight = true;
@@ -941,7 +940,16 @@ void loop() {
     if (loopState == LOOP_UNDER) underRangeCount++;
 
     // 14-bit full scale is 16383, not 16384.
-    sensorVoltage = map((int)sensorValue, 0, 16383, 0, (int)(vReference * 1000.0));
+    //
+    // ADC_VREF_V, not a second copy of 5.0. This file used to carry its own
+    // `vReference` feeding this line while loop_scaling.h's ADC_VREF_V fed every
+    // threshold and countsToMilliamps(). AVCC is the one constant here most
+    // likely to be corrected -- it is an UNMEASURED DIRECT GAIN TERM now that a
+    // burden resistor has replaced a ratiometric sensor, so its error no longer
+    // cancels -- and with two copies, metering the rail and fixing one would have
+    // silently desynchronised the printed `mA` from the printed `v`. One edit in
+    // the header now moves both.
+    sensorVoltage = map((int)sensorValue, 0, 16383, 0, (int)(ADC_VREF_V * 1000.0f));
     // A faulted read must not touch the filter. Fed unconditionally, a dead
     // loop drags the weight SMOOTHLY DOWN to a plausible-looking number -- it
     // looks like a load being set down, which is this machine's characteristic
