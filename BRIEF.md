@@ -128,6 +128,15 @@ different physical interface, not a different constant. What the two machines do
 engineering full scale of 3000 psi, and that coincidence is exactly what would make a careless
 copy of a conversion constant look correct. **Do not assume the sensors interchange.**
 
+**Superseded, 2026-09-13: the front end is a 4-20 mA current loop, not the 0.5-4.5 V
+ratiometric transducer above.** Transmitter: **Rosemount 1151, 0-3000 psi, 2-wire 4-20 mA**.
+Burden resistor: **150 ohm, 0.1%, <=25 ppm/degC, across A2 to GND**. Loop supply: a
+**dedicated 24 V supply, negative bonded to the board's GND**. This also answers open
+question 6 for PLC #4's own part number, independent of whatever PLC #1 turns out to use.
+The reasoning behind each of these figures — why 150 ohm, why 0.1%, why a dedicated supply
+rather than the board's own rail — is in `MA-LOOP-DESIGN.md` and
+`notes/2026-09-13-4-20ma-loop-decisions.md`, not restated here.
+
 **Display — 16x2 LCD + keypad shield.** `LiquidCrystal(8,9,4,5,6,7)` (:126-133), backlight on
 pin 10 (declared, never driven), button ladder on A0 (:201). The ladder thresholds are 10-bit
 values read at 14-bit resolution, so only "Right" registers. The LCD never shows a weight.
