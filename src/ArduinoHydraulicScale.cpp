@@ -163,7 +163,17 @@ float sampleTotal = 0;
 // ---------------------------------------------------------------------------
 // Bump this if the EEPROM layout ever changes, and old stored values are ignored
 // rather than reinterpreted.
-const uint32_t EEPROM_SIGNATURE = 0x504C4334;   // 'PLC4'  calibration block
+//
+// BUMPED 2026-09-13 for the 4-20 mA front end, with Alex's specific approval.
+// Counts-per-psi moved by ~1.67x (13107 counts of span became 7864), so a
+// voltage-era tareValue and calFactor would restore CLEANLY, pass the bounds
+// check below, and publish "cal":"ok" over a scale wrong by that ratio. That is
+// the same failure as the 16256 leftover documented at the EEPROM restore --
+// which this signature was added to catch, and which the OLD value would miss.
+//
+// CONSEQUENCE, ACCEPTED: the board demands a full recalibration after flashing
+// and will not weigh correctly until it gets one.
+const uint32_t EEPROM_SIGNATURE = 0x504C3441;   // 'PL4A'  4-20 mA calibration block
 // The tally gets its OWN signature so clearing or rejecting calibration cannot
 // silently discard the operator's recorded work, and vice versa.
 const uint32_t TALLY_SIGNATURE  = 0x544C5934;   // 'TLY4'
@@ -901,7 +911,16 @@ void loop() {
 
     // 14-bit full scale is 16383, not 16384.
     sensorVoltage = map((int)sensorValue, 0, 16383, 0, (int)(vReference * 1000.0));
-    smoothedValue = (smoothedValue * alpha) + (sensorValue * (1 - alpha));
+    // A faulted read must not touch the filter. Fed unconditionally, a dead
+    // loop drags the weight SMOOTHLY DOWN to a plausible-looking number -- it
+    // looks like a load being set down, which is this machine's characteristic
+    // failure: a plausible wrong answer rather than a visible one. Holding the
+    // last reading is playbook §6's rule and what PLC #3 does. The LCD writes
+    // the fault over the weight either way, so a held value is never shown as
+    // current.
+    if (loopIsMeasuring(loopState)) {
+      smoothedValue = (smoothedValue * alpha) + (sensorValue * (1 - alpha));
+    }
 
     // The psi conversion starts at the LIVE ZERO (4 mA), not at zero counts.
     // Mapping from 0 counts reported 299 psi at true 0 psi and 2699 at true
