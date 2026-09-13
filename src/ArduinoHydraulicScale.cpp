@@ -1228,6 +1228,10 @@ void printDebug()
     Console.println(sensorValue);
     Console.print("v = ");
     Console.println(sensorVoltage);
+    // mV stays: it's the direct check that the burden resistor is the value
+    // it is supposed to be -- a calibration term now, which it was not before.
+    Console.print("mA = ");
+    Console.println(countsToMilliamps(sensorValue), 2);
     Console.print("p = ");
     Console.println(pressureValue);
     Console.print("t = ");
