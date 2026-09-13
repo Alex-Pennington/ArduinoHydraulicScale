@@ -806,8 +806,23 @@ static void hmiDrawMenu() {
 
 static void hmiDrawCheckCal() {
   char l0[17], l1[17];
-  snprintf(l0, sizeof(l0), "Should be %-6d", calWeight);
-  snprintf(l1, sizeof(l1), "Reads %-6d Lt=x", outputValue);
+  // This screen has to carry its own fault. hmiPoll() returns here without ever
+  // reaching hmiDrawHome(), which is the only other place a fault takes row 0 —
+  // so before this guard a faulted loop showed `Reads 528` held indefinitely,
+  // with nothing on either row saying the transmitter was gone. The filter freeze
+  // made that worse, not better: the held number is rock-steady rather than
+  // visibly decaying, which reads as a good scale. There is no timeout on this
+  // screen; only Left or Select leaves it.
+  //
+  // sensorStateName() is deliberate — the LCD and the wire must never disagree
+  // about which state this is.
+  if (!loopIsMeasuring(loopState)) {
+    snprintf(l0, sizeof(l0), "%-16s", sensorStateName());
+    snprintf(l1, sizeof(l1), "%-16s", "NO READING Lt=x");
+  } else {
+    snprintf(l0, sizeof(l0), "Should be %-6d", calWeight);
+    snprintf(l1, sizeof(l1), "Reads %-6d Lt=x", outputValue);
+  }
   lcd.setCursor(0, 0); lcd.print(l0);
   lcd.setCursor(0, 1); lcd.print(l1);
 }
