@@ -189,8 +189,18 @@ dead loop drags the weight smoothly down to a plausible-looking number rather th
 `LOOP_DEAD` and `LOOP_FAULT_HIGH` the sample is discarded without touching `smoothedValue`, so the
 channel holds its last reading. Playbook §6's rule, and what PLC #3 does.
 
-The LCD writes the fault over row 0 either way (`:775`), so a held value is never presented as
-current.
+**Corrected after the final whole-branch review.** This section originally justified the freeze
+with "the LCD writes the fault over row 0 either way, so a held value is never presented as
+current." That was false, and the freeze is what made it dangerous: `hmiPoll()` returns before
+`hmiDrawHome()` whenever the screen is `SCR_CHECKCAL`, so Menu -> Check cal showed a frozen —
+therefore rock-steady, therefore convincing — weight with no fault anywhere on the display, and
+nothing times that screen out.
+
+Both drawing paths now carry the fault themselves. `hmiDrawHome()` puts `sensorStateName()` on
+row 0 of the home screen; `hmiDrawCheckCal()` replaces both rows with `sensorStateName()` and
+`NO READING Lt=x` on the calibration-check screen. Neither prints a number that could be read as
+a reading while `loopIsMeasuring()` is false, so the freeze cannot present a held value as
+current on any screen.
 
 ### 6.2 `EEPROM_SIGNATURE` is bumped (`:176`)
 

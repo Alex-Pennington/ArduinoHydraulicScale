@@ -57,6 +57,10 @@ These exist for diagnosing the board and are typed, never on the keypad.
 The Bluetooth macro set in `serial_bluetooth_terminal_cfg.txt` has been reissued to
 match — reload it on the phone, or two of the buttons will do nothing.
 
+**`tare`, `+` and `kv` all refuse unless the loop reads `ok`** — including when it
+reads `SATURATED`. The refusal names the state. A reading pinned at full scale
+understates the load, so it is not a safe basis for a new zero or span.
+
 **If you ever change `sm`, you must set it again after every reset.** It is the only
 setting that looks permanent and is not. If a transducer with a range other than the
 built-in default is fitted and `sm` silently reverts, the scale keeps working and reads
@@ -78,11 +82,25 @@ belongs in the firmware, so it survives every reset without anyone remembering.
 ## What the display tells you
 
 - A number — the current weight.
-- **`NO SENSOR`** — the transducer reads below its live zero. Open circuit, cut or
-  chafed wire, or a dead sensor. **This is not a zero reading; it is a fault.** The
-  scale cannot weigh until it is fixed.
-- **`SENSOR SHORT`** — the input is near the supply rail. Shorted wiring.
+- **`NO SENSOR`** — dead loop, below 3.5 mA: cut wire, no loop supply, or the
+  transmitter removed. **This is not a zero reading; it is a fault.** Blanks the
+  weight; the scale cannot weigh until it is fixed.
+- **`XMTR FAULT`** — loop at or above 21 mA (NAMUR NE43). The transmitter is not
+  giving a usable reading. Blanks the weight.
+- **`BAD STATE`** — should never appear. It means a corrupted record, not a live
+  fault. Report it if you see it.
+- **`CAL NOT SET!`** (row 1) — shown after every flash, until the scale is tared
+  and calibrated. Deliberate, not a fault: the stored calibration belongs to the
+  old voltage front end and is wrong by about 1.67x, so the firmware refuses to
+  use it rather than silently weighing wrong.
 - `Buffer Full` — the 50-entry tally is full. Use `sum`, then `b`.
+
+**`SATURATED` and `UNDER ZERO` never reach the LCD.** Both are still real
+measurements — pinned at full scale, or below the 4 mA live zero — and the weight
+stays on screen through both, on purpose: blanking it because the transmitter was
+pinned was the old defect this front end exists to fix. Don't wait for a display
+that is never coming; `net` and the MQTT telemetry both carry the state if you
+need to know which of the two you're in.
 
 ## Working out of radio range
 
@@ -163,11 +181,21 @@ nothing on the display to say so.
 ## What the display tells you
 
 - A number — the current weight.
-- **`NO SENSOR`** — the transducer reads below its live zero. Open circuit, cut or
-  chafed wire, or a dead sensor. **This is not a zero reading; it is a fault.** The
-  scale cannot weigh until it is fixed.
-- **`SENSOR SHORT`** — the input is near the supply rail. Shorted wiring.
+- **`NO SENSOR`** — dead loop, below 3.5 mA: cut wire, no loop supply, or the
+  transmitter removed. **This is not a zero reading; it is a fault.** Blanks the
+  weight; the scale cannot weigh until it is fixed.
+- **`XMTR FAULT`** — loop at or above 21 mA (NAMUR NE43). The transmitter is not
+  giving a usable reading. Blanks the weight.
+- **`BAD STATE`** — should never appear. It means a corrupted record, not a live
+  fault. Report it if you see it.
 - `Buffer Full` — the 50-entry tally is full. Use `sum`, then `b`.
+
+**`SATURATED` and `UNDER ZERO` never reach the LCD.** Both are still real
+measurements — pinned at full scale, or below the 4 mA live zero — and the weight
+stays on screen through both, on purpose: blanking it because the transmitter was
+pinned was the old defect this front end exists to fix. Don't wait for a display
+that is never coming; `net` and the MQTT telemetry both carry the state if you
+need to know which of the two you're in.
 
 ## Working out of radio range
 

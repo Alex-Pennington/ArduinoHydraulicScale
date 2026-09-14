@@ -15,6 +15,7 @@
 #include <WDT.h>
 #include "FspTimer.h"
 #include "arduino_secrets.h"
+#include "loop_scaling.h"
 
 // LCD pin to Arduino
 const int pin_RS = 8;
@@ -62,28 +63,16 @@ bool debug_flag = false;
 const int analogInPin = A2;
 
 // ---------------------------------------------------------------------------
-// Transducer scaling — SPEC-DEPENDENT, NOT YET CONFIRMED AGAINST A DATASHEET
-//
-// 0-3000 psi, 0.5-4.5 V ratiometric. Relayed from Alex; no part number was
-// supplied and no datasheet has been read. At AVCC = 5.0 V with 14-bit
-// resolution (0..16383) that gives the counts below. If the part number comes
-// back as anything else — a 4-20 mA variant especially — every constant in this
-// block has to be re-derived. Nothing else in the file hard-codes these values.
+// Transducer scaling lives in include/loop_scaling.h, in MILLIAMPS, with the
+// ADC counts derived from BURDEN_OHMS at compile time. Nothing here hard-codes
+// a count. See MA-LOOP-DESIGN.md for the design and
+// notes/2026-09-13-4-20ma-loop-decisions.md for why the burden is 150 ohm.
 // ---------------------------------------------------------------------------
-const int SENSOR_COUNTS_ZERO  = 1638;   // 0.5 V, 0 psi (live zero)
-const int SENSOR_COUNTS_FS    = 14745;  // 4.5 V, 3000 psi
-const int SENSOR_COUNTS_OPEN  = 1311;   // < 0.4 V: open circuit, cut wire, dead sensor
-const int SENSOR_COUNTS_SHORT = 15400;  // > 4.7 V: short to rail
-
-// T4: the live zero is what makes "no sensor" distinguishable from "no load".
-// Pattern ported from PLC #1's CURRENT_DEAD_LOOP_MA; the constant is ours.
-enum SensorState { SENSOR_OK, SENSOR_OPEN, SENSOR_SHORT };
-SensorState sensorState = SENSOR_OK;
+LoopState loopState = LOOP_OK;
 
 float vADC;  // the voltage
 float smoothedValue;  //the filtered value from the last reading
 float alpha = 0.1; //the weight (between 0 and 1) given to the previous filter value
-float vReference = 5.0; //using the supply voltage as the reference
 unsigned long previousMillis = 0;
 int interval = 500; //choose the time between readings in milliseconds
 bool display_rolling_weight = true;
@@ -94,7 +83,7 @@ int pressureValue = 0; // pressure
 int outputValue = 0;
 int tareValue = 0;
 float calFactor = 1.0; //calibration factor
-int sensorMaxPSI = 3000; // maximum pressure in PSI
+int sensorMaxPSI = 3000; // Rosemount 1151 span, 0-3000 psi. See MA-LOOP-DESIGN.md §5.
 int addr = 10;
 #define rTsize 50
 int rT[rTsize];
@@ -129,7 +118,19 @@ int  keyPrev = -1, keyStable = -1;
 unsigned long keyChangeMs = 0;
 int  menuIndex = 0;
 unsigned long msgUntil = 0;
-int pendingMsg = 0;   // 0 none, 1 added, 2 removed, 3 total, 4 link
+int pendingMsg = 0;   // 0 none, 1 added, 2 removed, 3 total, 4 link, 5 tare, 6 cal
+// Set by a verb that REFUSED, cleared by the keypress that queues the next one.
+// The keypad cannot read the outcome at press time -- the verb runs later in the
+// same loop pass -- so without this the deferred message painted "Added 4200"
+// over a refusal. Over-range is routine on this machine and `+` refuses on
+// LOOP_SATURATED, so that false success was an everyday event, not an exotic one.
+bool verbRefused = false;
+// Set alongside verbRefused when the reason is NOT the loop state -- kv's
+// span<=0.0f failure and a full tally are both refusals with nothing to do
+// with sensorStateName(). Empty means "use sensorStateName(), as before";
+// non-empty overrides it. Reset with verbRefused so a stale reason from one
+// press can never be shown against a different one.
+char verbRefusedReason[17] = "";
 int  tarePrev = -1;            // previous zero, for Undo tare
 bool lcdDirty = true;
 
@@ -173,7 +174,17 @@ float sampleTotal = 0;
 // ---------------------------------------------------------------------------
 // Bump this if the EEPROM layout ever changes, and old stored values are ignored
 // rather than reinterpreted.
-const uint32_t EEPROM_SIGNATURE = 0x504C4334;   // 'PLC4'  calibration block
+//
+// BUMPED 2026-09-13 for the 4-20 mA front end, with Alex's specific approval.
+// Counts-per-psi moved by ~1.67x (13107 counts of span became 7864), so a
+// voltage-era tareValue and calFactor would restore CLEANLY, pass the bounds
+// check below, and publish "cal":"ok" over a scale wrong by that ratio. That is
+// the same failure as the 16256 leftover documented at the EEPROM restore --
+// which this signature was added to catch, and which the OLD value would miss.
+//
+// CONSEQUENCE, ACCEPTED: the board demands a full recalibration after flashing
+// and will not weigh correctly until it gets one.
+const uint32_t EEPROM_SIGNATURE = 0x504C3441;   // 'PL4A'  4-20 mA calibration block
 // The tally gets its OWN signature so clearing or rejecting calibration cannot
 // silently discard the operator's recorded work, and vice versa.
 const uint32_t TALLY_SIGNATURE  = 0x544C5934;   // 'TLY4'
@@ -251,13 +262,22 @@ const unsigned long STAGE_GAP_MS = 500;     // gap between association and broke
 unsigned long lastTelemetryMs = 0;
 unsigned long lastStatusMs = 0;
 bool willArmed = false;
-// Counts above SENSOR_COUNTS_FS mean the transducer output went past its assumed 4.5 V
-// full scale. That is NOT a fault — it is either a genuine pressure excursion above the
-// circuit's relief (spikes on valve closure do this) or evidence the assumed span is
-// wrong. Either way it must be VISIBLE rather than inferred from psi arithmetic, and it
-// must not gate weighing: an over-range sample is still a reading.
+// Counts in the 20.0-21.0 mA NE43 band (COUNTS_FS..COUNTS_FAULT_HIGH, LOOP_SATURATED)
+// mean the transmitter is at or past its assumed 3000 psi full scale. That is NOT a
+// fault — it is either a genuine pressure excursion above the circuit's relief (spikes
+// on valve closure do this) or evidence the assumed span is wrong. Either way it must be
+// VISIBLE rather than inferred from psi arithmetic, and it must not gate weighing: an
+// over-range sample is still a reading.
 unsigned long overRangeCount = 0;
 int overRangeMaxCounts = 0;
+// The 3.5-4.0 mA dead band: below the live zero but above a dead loop. Reads as
+// a healthy 0 psi and is STRUCTURALLY UNCHANGED by the swap (playbook §8). What
+// the swap does remove is its dominant cause, excitation sensitivity -- a
+// current loop has no excitation dependency, so a sagging supply can no longer
+// move the reading. What can still land here is a transmitter drifting below
+// its own zero, which is a calibration problem rather than a wiring one.
+// Counting it is the mitigation, not a fix.
+unsigned long underRangeCount = 0;
 const unsigned long STATUS_MS = 60000;   // heartbeat; also published immediately on connect
 const unsigned long TELEMETRY_MS = 5000;
 
@@ -272,7 +292,7 @@ const unsigned long TELEMETRY_MS = 5000;
 struct WeightRecord {
   int32_t  weight;
   uint32_t capturedAtMs;
-  uint8_t  sensorAtCapture;   // SensorState AS IT WAS when this weight was taken
+  uint8_t  sensorAtCapture;   // LoopState AS IT WAS when this weight was taken
   uint8_t  calDefaultAtCapture;
 };
 const int QUEUE_DEPTH = 200;              // ~4 working days at 50 buckets/day
@@ -349,13 +369,7 @@ static const char *keyName(int x) {
   return "none";
 }
 
-static const char *sensorStateName() {
-  switch (sensorState) {
-    case SENSOR_OPEN:  return "NO SENSOR";
-    case SENSOR_SHORT: return "SENSOR SHORT";
-    default:           return "ok";
-  }
-}
+static const char *sensorStateName() { return loopStateName(loopState); }
 
 // A buffered reading MUST be distinguishable from a live one. Publishing
 // backlog bare is worse than not buffering, because the consumer cannot tell
@@ -387,17 +401,17 @@ static bool publishWeight(int32_t w, uint32_t ageMs, bool backlog) {
 // ---------------------------------------------------------------------------
 static void publishStatus(unsigned long now) {
   lastStatusMs = now;
-  char payload[320];
+  char payload[384];
   snprintf(payload, sizeof(payload),
     "{\"up\":true,\"cal\":\"%s\",\"sensor\":\"%s\",\"tare\":%d,\"cf\":%.5f,"
     "\"n\":%d,\"q\":%d,\"dropped\":%lu,\"uptime_s\":%lu,\"rssi\":%d,"
-    "\"overrange\":%lu,\"overrange_max\":%d,"
+    "\"overrange\":%lu,\"overrange_max\":%d,\"underrange\":%lu,"
     "\"reset\":\"%s\",\"id\":\"%s\"}",
     calibrationDefaulted ? "DEFAULT" : "ok",
     sensorStateName(), tareValue, calFactor,
     rTindex, queueCount, queueDropped,
     (unsigned long)(now / 1000UL), (int)WiFi.RSSI(),
-    overRangeCount, overRangeMaxCounts,
+    overRangeCount, overRangeMaxCounts, underRangeCount,
     resetCause, CLIENT_ID);
   char topic[64];
   if (!buildTopic("status", topic, sizeof(topic))) return;
@@ -420,7 +434,7 @@ static void queuePush(int32_t w) {
   // in that stamping CURRENT state on a past record would have been an undetectable
   // lie — but it left every weight taken out of radio range unusable as data, on the
   // one machine where being out of range is normal operation.
-  queueBuf[tail].sensorAtCapture = (uint8_t)sensorState;
+  queueBuf[tail].sensorAtCapture = (uint8_t)loopState;
   queueBuf[tail].calDefaultAtCapture = calibrationDefaulted ? 1 : 0;
   queueCount++;
 }
@@ -433,12 +447,11 @@ static void queueFlush() {
     // sensor and cal are the values AT CAPTURE, carried in the record — not the
     // current ones. That keeps the record honest and still lets a consumer decide
     // whether the reading was valid, which the earlier omit-entirely form could not.
-    static const char *names[] = { "ok", "NO SENSOR", "SENSOR SHORT" };
     snprintf(payload, sizeof(payload),
              "{\"w\":%ld,\"age_ms\":%lu,\"backlog\":true,\"sensor\":\"%s\","
              "\"cal\":\"%s\",\"id\":\"%s\"}",
              (long)r.weight, (unsigned long)age,
-             names[r.sensorAtCapture <= 2 ? r.sensorAtCapture : 0],
+             loopStateName((LoopState)r.sensorAtCapture),
              r.calDefaultAtCapture ? "DEFAULT" : "ok", CLIENT_ID);
     if (!publishTo("weight", payload)) return;   // stop on first failure; keep the rest
     queueHead = (queueHead + 1) % QUEUE_DEPTH;
@@ -614,7 +627,7 @@ void setup() {
   // smoothing constant must never be able to condemn a calibration.
   bool defaulted = !eepromValid;
   if (isnan(calFactor) || calFactor <= 0.0001f || calFactor > 1000.0f) { calFactor = 1.0f; defaulted = true; }
-  if (tareValue < SENSOR_COUNTS_OPEN || tareValue > SENSOR_COUNTS_FS)  { tareValue = SENSOR_COUNTS_ZERO; defaulted = true; }
+  if (tareValue < COUNTS_DEAD || tareValue > COUNTS_FS) { tareValue = COUNTS_ZERO; defaulted = true; }
   // alpha defaults silently: harmless on its own, and not evidence about the calibration.
   if (isnan(alpha) || alpha <= 0.0f || alpha >= 1.0f)                  { alpha = 0.1f; }
 
@@ -772,8 +785,14 @@ static void hmiMessage(const char *a, const char *b, unsigned long now) {
 static void hmiDrawHome() {
   char l0[17], l1[17];
   // Row 0: the weight, or the fault that makes the weight meaningless.
-  if (sensorState != SENSOR_OK) snprintf(l0, sizeof(l0), "%-16s", sensorStateName());
-  else                          snprintf(l0, sizeof(l0), "%-11d n%-3d", outputValue, rTindex);
+  //
+  // SATURATED and UNDER ZERO deliberately do NOT take this row. They are real
+  // measurements — over-range, or below the live zero, but measuring — and
+  // withholding a weight from the operator because the transmitter is pinned
+  // was the old defect, not a safeguard. They stay visible in telemetry and in
+  // the overrange/underrange counters.
+  if (!loopIsMeasuring(loopState)) snprintf(l0, sizeof(l0), "%-16s", sensorStateName());
+  else                             snprintf(l0, sizeof(l0), "%-11d n%-3d", outputValue, rTindex);
 
   // Row 1: whatever the operator needs in order to trust row 0. Worst first —
   // an uncalibrated scale is wrong, a backlog is only late.
@@ -798,14 +817,31 @@ static void hmiDrawMenu() {
 
 static void hmiDrawCheckCal() {
   char l0[17], l1[17];
-  snprintf(l0, sizeof(l0), "Should be %-6d", calWeight);
-  snprintf(l1, sizeof(l1), "Reads %-6d Lt=x", outputValue);
+  // This screen has to carry its own fault. hmiPoll() returns here without ever
+  // reaching hmiDrawHome(), which is the only other place a fault takes row 0 —
+  // so before this guard a faulted loop showed `Reads 528` held indefinitely,
+  // with nothing on either row saying the transmitter was gone. The filter freeze
+  // made that worse, not better: the held number is rock-steady rather than
+  // visibly decaying, which reads as a good scale. There is no timeout on this
+  // screen; only Left or Select leaves it.
+  //
+  // sensorStateName() is deliberate — the LCD and the wire must never disagree
+  // about which state this is.
+  if (!loopIsMeasuring(loopState)) {
+    snprintf(l0, sizeof(l0), "%-16s", sensorStateName());
+    snprintf(l1, sizeof(l1), "%-16s", "NO READING Lt=x");
+  } else {
+    snprintf(l0, sizeof(l0), "Should be %-6d", calWeight);
+    snprintf(l1, sizeof(l1), "Reads %-6d Lt=x", outputValue);
+  }
   lcd.setCursor(0, 0); lcd.print(l0);
   lcd.setCursor(0, 1); lcd.print(l1);
 }
 
 static void hmiOnPress(int key, unsigned long now) {
   lcdDirty = true;
+  verbRefused = false;      // this press owns the next verdict, not the last one
+  verbRefusedReason[0] = '\0';
   if (screen == SCR_HOME) {
     switch (key) {
       // Feedback is deferred to pendingMsg because the verb runs LATER in this same
@@ -825,10 +861,14 @@ static void hmiOnPress(int key, unsigned long now) {
       case 3: screen = SCR_HOME; break;                   // Left = back, always
       case 4:
         switch (menuIndex) {
+          // Deferred like `+` and `-` above, and for the same reason: these two
+          // verbs can REFUSE, and a message written here is written before the
+          // verb has run. "Tare taken" over a refused tare reached the operator
+          // while only the console saw the refusal.
           case 0: tarePrev = tareValue; hmiRun("tare");
-                  hmiMessage("Tare taken", "at the mark?", now); screen = SCR_HOME; break;
+                  pendingMsg = 5; screen = SCR_HOME; break;
           case 1: hmiRun("kv");
-                  hmiMessage("Calibrated", "check it now", now); screen = SCR_HOME; break;
+                  pendingMsg = 6; screen = SCR_HOME; break;
           case 2: screen = SCR_CHECKCAL; break;
           case 3: if (tarePrev >= 0) { int t = tareValue; tareValue = tarePrev; tarePrev = t;
                     saveCalibration();
@@ -892,43 +932,59 @@ void loop() {
     sampleTotal = 0;
     sampleN = 0;
 
-    // T4: classify before converting. A cut wire must read as a fault, not as
-    // a plausible weight. This is the likeliest hardware failure on a tractor.
-    if (sensorValue > SENSOR_COUNTS_FS && sensorValue <= SENSOR_COUNTS_SHORT) {
+    // Classify before converting. The burden resistor makes an open loop read
+    // ~0 counts rather than floating mid-rail, so LOOP_DEAD is now a real
+    // measurement of loop integrity rather than a hopeful threshold.
+    loopState = classifyLoop(sensorValue);
+
+    // SATURATED is the 20.0-21.0 mA NE43 band: at or past full scale and STILL
+    // MEASURING. It is counted, not faulted. Counting it is how the question of
+    // how far past 3000 psi this circuit actually goes gets answered.
+    if (loopState == LOOP_SATURATED) {
       overRangeCount++;
       if (sensorValue > overRangeMaxCounts) overRangeMaxCounts = sensorValue;
     }
-    if (sensorValue < SENSOR_COUNTS_OPEN)       sensorState = SENSOR_OPEN;
-    else if (sensorValue > SENSOR_COUNTS_SHORT) sensorState = SENSOR_SHORT;
-    else                                        sensorState = SENSOR_OK;
+    if (loopState == LOOP_UNDER) underRangeCount++;
 
     // 14-bit full scale is 16383, not 16384.
-    sensorVoltage = map((int)sensorValue, 0, 16383, 0, (int)(vReference * 1000.0));
-    smoothedValue = (smoothedValue * alpha) + (sensorValue * (1 - alpha));
+    //
+    // ADC_VREF_V, not a second copy of 5.0. This file used to carry its own
+    // `vReference` feeding this line while loop_scaling.h's ADC_VREF_V fed every
+    // threshold and countsToMilliamps(). AVCC is the one constant here most
+    // likely to be corrected -- it is an UNMEASURED DIRECT GAIN TERM now that a
+    // burden resistor has replaced a ratiometric sensor, so its error no longer
+    // cancels -- and with two copies, metering the rail and fixing one would have
+    // silently desynchronised the printed `mA` from the printed `v`. One edit in
+    // the header now moves both.
+    sensorVoltage = map((int)sensorValue, 0, 16383, 0, (int)(ADC_VREF_V * 1000.0f));
+    // A faulted read must not touch the filter. Fed unconditionally, a dead
+    // loop drags the weight SMOOTHLY DOWN to a plausible-looking number -- it
+    // looks like a load being set down, which is this machine's characteristic
+    // failure: a plausible wrong answer rather than a visible one. Holding the
+    // last reading is playbook §6's rule and what PLC #3 does. The LCD writes
+    // the fault over the weight either way, so a held value is never shown as
+    // current.
+    if (loopIsMeasuring(loopState)) {
+      smoothedValue = (smoothedValue * alpha) + (sensorValue * (1 - alpha));
+    }
 
-    // The psi conversion must start at the sensor's LIVE ZERO, not at zero counts.
-    // Mapping from 0 counts reported 299 psi at true 0 psi and 2699 psi at true
-    // 3000 — wrong at both ends, an offset AND a compressed span. It reached this
-    // firmware from the pre-14-bit line and nobody had followed it through; it is
-    // the third instance of the same unfinished resolution change, after the map
-    // in-max and the 10-bit filter seed.
+    // The psi conversion starts at the LIVE ZERO (4 mA), not at zero counts.
+    // Mapping from 0 counts reported 299 psi at true 0 psi and 2699 at true
+    // 3000 -- an offset AND a compressed span. DO NOT UNDO THAT.
     //
     // This value is PUBLISHED as `psi`, so it is not display-only cosmetics.
     //
-    // What `sm` can and cannot rescale — an earlier revision of this comment was
-    // over-broad and said it could not rescale a different transducer at all:
+    // What `sm` can rescale, and it is CLEANER than the voltage front end it
+    // replaces: a different PRESSURE range with the same 4-20 mA output needs
+    // `sm` ALONE. The count endpoints come from the burden resistor and do not
+    // move when the psi span does. Under the old 0.5-4.5 V part a different
+    // OUTPUT range would have moved both endpoints too.
     //
-    //   different PRESSURE range, same 0.5-4.5 V output  -> `sm` alone IS sufficient.
-    //     SENSOR_COUNTS_ZERO/FS are the counts for 0.5 V and 4.5 V; they do not move
-    //     when the psi range does. A 3500 psi unit needs only sensorMaxPSI = 3500.
-    //   different OUTPUT VOLTAGE range (e.g. 1-5 V)      -> both count endpoints must
-    //     change too, and `sm` alone would silently leave the scale wrong.
-    //
-    // The live hazard is not the arithmetic, it is that `sm` is NOT PERSISTED: it
-    // reverts to the compile-time default on every reset. So a non-default sensor
-    // wants the default below changed, not `sm` typed after each boot.
-    pressureValue = map((int)smoothedValue, SENSOR_COUNTS_ZERO, SENSOR_COUNTS_FS,
-                        0, sensorMaxPSI);
+    // The live hazard is unchanged and it is not the arithmetic: `sm` is NOT
+    // PERSISTED and reverts to the compile-time default on every reset. A
+    // non-default range wants the default below changed, not `sm` typed after
+    // each boot.
+    pressureValue = countsToPSI((int)smoothedValue, sensorMaxPSI);
     outputValue = (float)calFactor * ((float)smoothedValue - (float)tareValue);
 
     // The weight is drawn by hmiDrawHome(); nothing else writes to the LCD here.
@@ -945,11 +1001,26 @@ void loop() {
     // A flush that failed part-way through would otherwise sit until the next
     // reconnect, which may never come if the link never actually drops.
     if (queueCount > 0) queueFlush();
-    char payload[128];
+    char payload[192];
+    // psi publishes JSON null, NEVER 0, when the loop is not measuring. A real
+    // zero and a dead transmitter are different things and must be reported
+    // differently at every layer (playbook §6). psi_fault carries the DIRECTION
+    // because fail-low is a wiring question and fail-high is not -- they lead to
+    // different first checks at the machine. Both field names match PLC #3.
+    // mA is the unit a person with a meter at the machine is comparing against.
+    char psiField[12];
+    if (loopIsMeasuring(loopState)) snprintf(psiField, sizeof(psiField), "%d", pressureValue);
+    else                            snprintf(psiField, sizeof(psiField), "null");
+
+    const char *psiFault = "null";
+    if (loopState == LOOP_DEAD)            psiFault = "\"low\"";
+    else if (loopState == LOOP_FAULT_HIGH) psiFault = "\"high\"";
+
     snprintf(payload, sizeof(payload),
-             "{\"w\":%d,\"psi\":%d,\"counts\":%d,\"sensor\":\"%s\",\"queued\":%d,\"id\":\"%s\"}",
-             outputValue, pressureValue, sensorValue, sensorStateName(),
-             queueCount, CLIENT_ID);
+             "{\"w\":%d,\"psi\":%s,\"mA\":%.2f,\"counts\":%d,\"sensor\":\"%s\","
+             "\"psi_fault\":%s,\"queued\":%d,\"id\":\"%s\"}",
+             outputValue, psiField, (double)countsToMilliamps(sensorValue),
+             sensorValue, sensorStateName(), psiFault, queueCount, CLIENT_ID);
     // A5: the periodic stream is telemetry, not debug. The deliberate record
     // goes to /weight. The old firmware had these inverted.
     publishTo("telemetry", payload);
@@ -964,7 +1035,8 @@ void loop() {
       // Procedure: tare AT THE BOOM MARK, empty. Boom position changes the
       // unloaded pressure as well as the loaded pressure, so a tare taken
       // anywhere else puts a constant offset into every reading.
-      if (sensorState != SENSOR_OK) {
+      if (loopState != LOOP_OK) {
+        verbRefused = true;
         Console.print("tare REFUSED: ");
         Console.println(sensorStateName());
       } else {
@@ -980,7 +1052,8 @@ void loop() {
       // T4 again: recording while the transducer reads as open or shorted would
       // put a fabricated number into the tally and publish it as a real weight.
       // A fault must refuse the operation, not quietly produce a plausible value.
-      if (sensorState != SENSOR_OK) {
+      if (loopState != LOOP_OK) {
+        verbRefused = true;
         Console.print("NOT RECORDED: ");
         Console.println(sensorStateName());
         lcd.setCursor(0, 1);
@@ -1002,6 +1075,11 @@ void loop() {
           queuePush(outputValue);
         }
       } else {
+        // Full is a refusal too, from a different cause than a bad loop -- the
+        // deferred render must not paint "Added <n>" over it, and the reason it
+        // gives must say the tally is full, not name a sensor state.
+        verbRefused = true;
+        snprintf(verbRefusedReason, sizeof(verbRefusedReason), "TALLY FULL");
         Console.println("Buffer Full");
         lcd.setCursor(0, 1);
         lcd.print ("Buffer Full");
@@ -1061,12 +1139,20 @@ void loop() {
       // zero or negative; the old code produced inf or a sign flip and wrote
       // it straight to EEPROM.
       float span = (float)smoothedValue - (float)tareValue;
-      if (sensorState != SENSOR_OK) {
+      if (loopState != LOOP_OK) {
+        verbRefused = true;
         // A short reads high and would yield a plausible-looking span. Both the
         // zero and the span are persisted, so a bad one survives the reboot.
         Console.print("cal REFUSED: ");
         Console.println(sensorStateName());
       } else if (span <= 0.0f) {
+        // Failed, not refused by a loop state -- the deferred render must not
+        // paint "Calibrated / check it now" over this, and the reason it gives
+        // must say WHY the arithmetic was rejected, not name a sensor state.
+        // calFactor is untouched here: the old factor stands, so the lie this
+        // guards against is purely in the report, not in what gets used.
+        verbRefused = true;
+        snprintf(verbRefusedReason, sizeof(verbRefusedReason), "at or below tare");
         Console.println("cal FAILED: at or below tare");
         lcd.setCursor(0, 1);
         lcd.setCursor(0, 1);
@@ -1173,7 +1259,25 @@ void loop() {
   // are current. Nothing else writes to the LCD: the HMI owns the display.
   if (pendingMsg) {
     char a[17], b[17];
-    switch (pendingMsg) {
+    // A refused verb NEVER paints a success message. OPERATOR.md promises the
+    // refusal names the state; the console kept that promise and the keypad did
+    // not, and the keypad is the operator's actual interface. Row 1 is
+    // sensorStateName() so the LCD, the console and the wire all say one thing.
+    if (verbRefused) {
+      const char *head = "REFUSED";
+      switch (pendingMsg) {
+        case 1: head = "NOT RECORDED"; break;
+        case 5: head = "TARE REFUSED"; break;
+        case 6: head = "CAL REFUSED";  break;
+      }
+      snprintf(a, sizeof(a), "%-16s", head);
+      // verbRefusedReason overrides sensorStateName() when the refusal was NOT
+      // about the loop state (kv's span<=0.0f, a full tally) -- see where it is
+      // set. Empty means the old behaviour: name the sensor state.
+      snprintf(b, sizeof(b), "%-16s",
+               verbRefusedReason[0] ? verbRefusedReason : sensorStateName());
+    }
+    else switch (pendingMsg) {
       case 1: snprintf(a, sizeof(a), "Added %-10d", outputValue);
               snprintf(b, sizeof(b), "%d in tally", rTindex); break;
       case 2: snprintf(a, sizeof(a), "%-16s", "Removed last");
@@ -1186,6 +1290,10 @@ void loop() {
                        WiFi.status() == WL_CONNECTED ? "up" : "no",
                        netState == NET_ONLINE ? "up" : "no");
               snprintf(b, sizeof(b), "Q%-3d dropped %lu", queueCount, queueDropped); break;
+      case 5: snprintf(a, sizeof(a), "%-16s", "Tare taken");
+              snprintf(b, sizeof(b), "%-16s", "at the mark?"); break;
+      case 6: snprintf(a, sizeof(a), "%-16s", "Calibrated");
+              snprintf(b, sizeof(b), "%-16s", "check it now"); break;
     }
     hmiMessage(a, b, currentMillis);
     pendingMsg = 0;
@@ -1198,6 +1306,10 @@ void printDebug()
     Console.println(sensorValue);
     Console.print("v = ");
     Console.println(sensorVoltage);
+    // mV stays: it's the direct check that the burden resistor is the value
+    // it is supposed to be -- a calibration term now, which it was not before.
+    Console.print("mA = ");
+    Console.println(countsToMilliamps(sensorValue), 2);
     Console.print("p = ");
     Console.println(pressureValue);
     Console.print("t = ");

@@ -1,0 +1,149 @@
+# 4-20 mA loop: deployment runbook
+
+Written 2026-09-13 for **the agent that installs the firmware**, which Alex has said will also
+perform the migrations. Everything here was verified read-only on 2026-09-13; anything that was
+not is labelled.
+
+Companion to `notes/2026-09-13-4-20ma-loop-implementation.md` (what was built and why).
+
+**Nothing in this runbook has been executed.** No migration has been applied, no consumer
+deployed, no board flashed.
+
+---
+
+## 0. THE ORDERING CONSTRAINT THAT BITES FIRST
+
+**Deploying the new consumer BEFORE migration 061 makes the consumer refuse to start.** Not
+degrade — refuse.
+
+`consumer/plc1_consumer.py` builds its required-column set by PARSING its own INSERT statements
+(`required_columns()`), and `Store.require_schema()` asserts at start-up that every one of them
+exists, raising `RuntimeError` — explicitly "not a transient condition" — so `main()` exits
+rather than ingesting. The new statements name the new columns:
+
+    PLC4_TELEMETRY_SQL  ... (w, psi, psi_fault, ma, counts, sensor, queued, valid, ts_kind)
+    PLC4_STATUS_SQL     ... (..., overrange, overrange_max, underrange, ts_kind)
+
+So `psi_fault`, `ma` and `underrange` are **start-up requirements**, not optional extras.
+
+This fails SAFE — a loud exit rather than a wrong ingest — but it takes the estate's only ingest
+down until the migration lands. **Migration first, consumer second. Always.**
+
+---
+
+## 1. PRECONDITION: PR #11 must be merged
+
+`Alex-Pennington/greybeard-plc-consumer` PR #11 carries both the consumer change and migration
+061. **Alex ruled 2026-09-13 that it is merged BEFORE anything is applied to production**, so
+that no host ever runs a migration existing in no merged commit.
+
+This matters more than usual because `db/migrations/README.md` rule 2 forbids editing a migration
+that has been applied ANYWHERE. Apply from an unmerged branch and a later review change can only
+be corrected by a 062.
+
+Pre-merge review returned DO NOT MERGE on three items; all were cleared in `7c1353e` and all four
+gates pass. **Do not apply anything until the PR is merged.**
+
+---
+
+## 2. THE MIGRATION IS NAMED `061_add_plc4_six_state_sensor`
+
+**It was renamed.** Earlier references — including the body of consumer issue #12 — say
+`061_add_plc4_five_state_sensor`. That name is dead. The file, the ledger version string and the
+postconditions manifest row all say **six**.
+
+### Use `--only`, NEVER `--apply --expect N`
+
+Measured 2026-09-13 with the script's own read-only plan mode:
+
+| host | outstanding per plan | `/opt/plc1-monitoring` |
+|---|---|---|
+| Saga | **19** | git checkout, was at `6a41841` |
+| farm1 | **26** | **root-owned, NOT a git repo** |
+
+Those counts are not a backlog to work through. `scripts/apply-migrations.sh`'s own header
+records why: the ledger begins at 021 and the pre-021 set was applied and never recorded. It
+also records that on 2026-09-06 one migration was authorised and `--apply` would have run
+twenty-one. **`--apply --expect 19` or `--expect 26` would be catastrophic and is not what is
+wanted here.**
+
+    cd /opt/plc1-monitoring
+    ./scripts/apply-migrations.sh                                     # plan; changes nothing
+    ./scripts/apply-migrations.sh --only 061_add_plc4_six_state_sensor
+
+Run it **on each host** — the script drives `docker exec` against the LOCAL database container,
+so it cannot be pointed at a remote host.
+
+The migration is additive and idempotent: three `ADD COLUMN IF NOT EXISTS`, five `COMMENT ON`, one
+`INSERT ... ON CONFLICT DO NOTHING`, all in one transaction. A reviewer applied it three times to
+a scratch database: rc=0 each time, one ledger row.
+
+### Verify, per host
+
+    SELECT column_name FROM information_schema.columns
+     WHERE table_name='plc4_telemetry' AND column_name IN ('psi_fault','ma');    -- expect 2 rows
+    SELECT column_name FROM information_schema.columns
+     WHERE table_name='plc4_status' AND column_name='underrange';                -- expect 1 row
+    SELECT version FROM schema_migration WHERE version='061_add_plc4_six_state_sensor';
+
+---
+
+## 3. WIDEN THE REPLICATION SPEC — consumer issue #12
+
+`scripts/replicate-host.sh` names plc4 columns **explicitly** (around `:349-351`) and is a
+hardcoded per-table allowlist. Until it names `psi_fault`, `ma` and `underrange`, those columns
+populate on farm1 and stay **silently NULL on Saga** — no error, no warning. The script's own
+header describes that exact defect costing two days on `variant`.
+
+Do this only AFTER step 2 has succeeded on BOTH hosts. A premature widening is no longer a run
+failure — a preflight added since September turns it into a named per-table SKIP — but a skip
+still stops plc4 replication until the columns exist.
+
+---
+
+## 4. REBUILD THE CONSUMER — a REBUILD, not a restart
+
+    docker compose up -d --build consumer
+
+`plc1_consumer.py` is **COPYed into the image**. A plain restart runs the OLD code against the NEW
+schema, which is the one combination nobody wants: the old code still decides validity by string
+equality to `"ok"` and would discard every `SATURATED` reading.
+
+Verify it actually started, rather than assuming: `require_schema()` exits the process on a
+missing column, so a container that is not running means step 2 did not land.
+
+**UNVERIFIED BY ME:** whether farm1's consumer is managed by that same `docker compose`
+invocation. farm1's `/opt/plc1-monitoring` is root-owned and is not a git checkout, so its deploy
+mechanism is not the one Saga uses and I did not establish what it is. **Establish that before
+running anything on farm1.** There is a `deploy-service.git` in `/opt/repos` on Saga that may be
+the answer.
+
+---
+
+## 5. ONLY THEN, THE FIRMWARE
+
+- **Do not flash before the transmitter is physically fitted.** PLC #3's playbook §2 makes this a
+  procedure rather than a commit message, because it cost them a morning.
+- **The burden resistor is load-bearing.** With it open or unfitted, A2 floats and the old
+  mid-rail defect returns exactly as it was. Firmware cannot detect that.
+- **Check the old harness for oil** before reuse — the previous transducer leaked through its
+  cable entry, and capillary action carries oil to whatever the far end is.
+- **The board will demand a full recalibration.** `EEPROM_SIGNATURE` moved to `PL4A`, so the
+  voltage-era `tareValue` and `calFactor` are refused rather than silently used. `CAL NOT SET!` on
+  the LCD is expected, not a fault — tare and `kv` at the boom mark before it will weigh.
+- Firmware branch of record: **`feat/plc4-4-20ma-loop-impl`**, also on the `saga` remote at
+  `/opt/repos/greybeard-plc4-tractor-scale.git`. Compiles at 85668 flash / 11216 RAM via
+  `tools/build-check.sh`.
+
+---
+
+## 6. WHAT NOT TO DO
+
+- Do not `--apply --expect` anything on either host. See §2.
+- Do not edit migration 061 after applying it anywhere — `db/migrations/README.md` rule 2. Write a
+  062.
+- Do not restart the consumer in place of rebuilding it. See §4.
+- Do not treat the Grafana dashboard as correct — it still teaches the retired vocabulary and has
+  `SENSOR SHORT` and `NO SENSOR` exactly backwards. Consumer issue #13.
+- Do not skip §3 because the firmware works without it. It fails silently, which is the whole
+  reason it is written down.
