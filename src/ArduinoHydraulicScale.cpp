@@ -167,9 +167,14 @@ float sampleTotal = 0;
 // the same failure as the 16256 leftover documented at the EEPROM restore --
 // which this signature was added to catch, and which the OLD value would miss.
 //
+// BUMPED AGAIN 2026-09-16 for the MCP3421 front end. Counts-per-psi moved from a
+// 7864-count span to 4352, so a PL4A calibration would restore cleanly, pass the
+// bounds check, and publish "cal":"ok" over a scale wrong by that ratio -- the
+// same trap PL4A itself was created to close.
+//
 // CONSEQUENCE, ACCEPTED: the board demands a full recalibration after flashing
 // and will not weigh correctly until it gets one.
-const uint32_t EEPROM_SIGNATURE = 0x504C3441;   // 'PL4A'  4-20 mA calibration block
+const uint32_t EEPROM_SIGNATURE = 0x504C3442;   // 'PL4B'  4-20 mA calibration block, MCP3421
 // The tally gets its OWN signature so clearing or rejecting calibration cannot
 // silently discard the operator's recorded work, and vice versa.
 const uint32_t TALLY_SIGNATURE  = 0x544C5934;   // 'TLY4'
@@ -375,17 +380,18 @@ static bool publishWeight(int32_t w, uint32_t ageMs, bool backlog) {
 // ---------------------------------------------------------------------------
 static void publishStatus(unsigned long now) {
   lastStatusMs = now;
-  char payload[384];
+  char payload[448];
   snprintf(payload, sizeof(payload),
     "{\"up\":true,\"cal\":\"%s\",\"sensor\":\"%s\",\"tare\":%d,\"cf\":%.5f,"
     "\"n\":%d,\"q\":%d,\"dropped\":%lu,\"uptime_s\":%lu,\"rssi\":%d,"
-    "\"overrange\":%lu,\"overrange_max\":%d,\"underrange\":%lu,"
+    "\"overrange\":%lu,\"overrange_max\":%d,\"underrange\":%lu,\"i2c_err\":%lu,"
     "\"reset\":\"%s\",\"id\":\"%s\"}",
     calibrationDefaulted ? "DEFAULT" : "ok",
     sensorStateName(), tareValue, calFactor,
     rTindex, queueCount, queueDropped,
     (unsigned long)(now / 1000UL), (int)WiFi.RSSI(),
     overRangeCount, overRangeMaxCounts, underRangeCount,
+    (unsigned long)mcpFailCount(),
     resetCause, CLIENT_ID);
   char topic[64];
   if (!buildTopic("status", topic, sizeof(topic))) return;
