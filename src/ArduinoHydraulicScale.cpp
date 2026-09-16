@@ -16,6 +16,7 @@
 #include "FspTimer.h"
 #include "arduino_secrets.h"
 #include "loop_scaling.h"
+#include "mcp3421.h"
 
 // LCD pin to Arduino
 const int pin_RS = 8;
@@ -51,16 +52,6 @@ class DualPrint : public Print {
 DualPrint Console;
 
 bool debug_flag = false;
-
-// These constants won't change. They're used to give names to the pins used:
-// Pressure transducer: A2, AS WIRED. Confirmed by Alex 2026-09-01.
-//
-// The history, because this flip-flopped and the next reader deserves to know why:
-// `main` had A2, the r4_wifi_mqtt branch had A1, this file was briefly set to A1 on
-// an early answer, and Alex then confirmed the harness is actually landing on A2.
-// `main` was right all along. Every bench reading taken before this change was on a
-// floating A1 and means nothing.
-const int analogInPin = A2;
 
 // ---------------------------------------------------------------------------
 // Transducer scaling lives in include/loop_scaling.h, in MILLIAMPS, with the
@@ -585,11 +576,8 @@ void setup() {
   Serial1.begin(9600);   // HC-05 field console
   Serial.begin(115200);  // USB console for bring-up and service. No wait-for-host.
   inputString.reserve(200);
-  // Set the resolution BEFORE seeding the filter: main seeded smoothedValue from
-  // a 10-bit read and then ran the loop at 14 bits, so the filter started ~16x
-  // low and took several seconds to converge.
-  analogReadResolution(14);
-  smoothedValue = analogRead(analogInPin);
+  if (!mcpBegin()) Console.println("MCP3421 NOT FOUND on Wire1");
+  { int c = 0; if (mcpRead(c)) smoothedValue = c; else smoothedValue = COUNTS_ZERO; }
 
   // -------------------------------------------------------------------------
   // EEPROM restore, with a signature.
@@ -921,9 +909,8 @@ void loop() {
   // --- sampling: one reading per pass, no delay() ---------------------------
   if (currentMillis - lastSampleMs >= SAMPLE_SPACING_MS) {
     lastSampleMs = currentMillis;
-    analogReadResolution(14);
-    sampleTotal += analogRead(analogInPin);
-    sampleN++;
+    int c = 0;
+    if (mcpRead(c)) { sampleTotal += c; sampleN++; }
   }
 
   if (sampleN >= SAMPLE_COUNT) {
