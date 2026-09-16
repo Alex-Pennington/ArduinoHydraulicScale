@@ -149,6 +149,12 @@ the answer.
   procedure rather than a commit message, because it cost them a morning.
 - **The burden resistor is load-bearing.** With it open or unfitted, A2 floats and the old
   mid-rail defect returns exactly as it was. Firmware cannot detect that.
+- **Updated 2026-09-16: the burden is 68 ohm, 0.1%, <=25 ppm/degC — not the 150 ohm of the
+  original 4-20 mA design.** The loop is now read by an MCP3421 on its own 2.048 V reference,
+  not the board's 5 V rail. **Do not fit 150 ohm here.** Against 2.048 V, 150 ohm clips at
+  13.65 mA — BELOW the 20 mA span end — so the fault is silent: the transmitter simply looks
+  like it never exceeds about two-thirds of full scale, with no error anywhere to point at the
+  resistor. That is a hard failure mode to diagnose from the symptom alone.
 - **Check the old harness for oil** before reuse — the previous transducer leaked through its
   cable entry, and capillary action carries oil to whatever the far end is.
 - **The board will demand a full recalibration.** `EEPROM_SIGNATURE` moved to `PL4A`, so the

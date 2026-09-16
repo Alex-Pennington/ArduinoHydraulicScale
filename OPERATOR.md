@@ -71,6 +71,9 @@ belongs in the firmware, so it survives every reset without anyone remembering.
 
 ## Keypad
 
+**Updated 2026-09-16.** Five discrete buttons to GND, on pins freed by the I2C
+display — no longer part of a display-shield ladder. Same order as before.
+
 | Key | Command |
 |---|---|
 | Right | `+` |
@@ -81,6 +84,12 @@ belongs in the firmware, so it survives every reset without anyone remembering.
 
 ## What the display tells you
 
+**Updated 2026-09-16: the display is now 20x4, and row 4 is a permanent status
+row.** It is written on every screen — home, menu, and the calibration-check
+screen alike — so a fault stays visible even while you are off the home screen.
+It shows the loop state below when the loop is not measuring, `CAL NOT SET!`, or
+an I2C error count, and is otherwise blank.
+
 - A number — the current weight.
 - **`NO SENSOR`** — dead loop, below 3.5 mA: cut wire, no loop supply, or the
   transmitter removed. **This is not a zero reading; it is a fault.** Blanks the
@@ -89,18 +98,29 @@ belongs in the firmware, so it survives every reset without anyone remembering.
   giving a usable reading. Blanks the weight.
 - **`BAD STATE`** — should never appear. It means a corrupted record, not a live
   fault. Report it if you see it.
-- **`CAL NOT SET!`** (row 1) — shown after every flash, until the scale is tared
-  and calibrated. Deliberate, not a fault: the stored calibration belongs to the
-  old voltage front end and is wrong by about 1.67x, so the firmware refuses to
-  use it rather than silently weighing wrong.
+- **`CAL NOT SET!`** (row 4, the status row) — shown after every flash, until the
+  scale is tared and calibrated. Deliberate, not a fault: the stored calibration
+  belongs to the old voltage front end and is wrong by about 1.67x, so the
+  firmware refuses to use it rather than silently weighing wrong.
+  **Updated 2026-09-16:** the same refusal fires again on this branch, for the
+  same reason. The MCP3421 front end moved counts-per-psi again — the previous
+  4-20 mA signature's 7864-count span became 4352 — so a calibration stored under
+  that previous signature would restore cleanly and read wrong by roughly 1.8x.
+  Tare and `kv` at the boom mark before trusting the scale after any flash that
+  changes this message.
+- **an I2C error count** (row 4, the status row) — `I2C ERR` followed by a
+  count, shown once calibration is set if the Qwiic bus to the ADC has logged a
+  failure. It does not blank the weight; treat a rising count as the warning to
+  act on before the bus fails outright.
 - `Buffer Full` — the 50-entry tally is full. Use `sum`, then `b`.
 
-**`SATURATED` and `UNDER ZERO` never reach the LCD.** Both are still real
-measurements — pinned at full scale, or below the 4 mA live zero — and the weight
-stays on screen through both, on purpose: blanking it because the transmitter was
-pinned was the old defect this front end exists to fix. Don't wait for a display
-that is never coming; `net` and the MQTT telemetry both carry the state if you
-need to know which of the two you're in.
+**`SATURATED` and `UNDER ZERO` never reach the LCD, and the status row does not
+blank the weight for either of them.** Both are still real measurements — pinned
+at full scale, or below the 4 mA live zero — and the weight stays on screen
+through both, on purpose: blanking it because the transmitter was pinned was the
+old defect this front end exists to fix. Don't wait for a display that is never
+coming; `net` and the MQTT telemetry both carry the state if you need to know
+which of the two you're in.
 
 ## Working out of radio range
 
@@ -205,6 +225,13 @@ waiting. Published backlog is marked as such with its age, so it cannot be mista
 for a live reading.
 
 ## NOTHING YOU RECORD SURVIVES A POWER CYCLE
+
+**SUPERSEDED 2026-09-16 — do not follow this section.** The tally now survives a
+power cycle: `tallySaveEntry()` and `tallySaveIndex()` write each recorded weight
+to EEPROM as `+` runs, and `tallyRestore()` reads it back in `setup()`, guarded by
+`TALLY_SIGNATURE` and a bounds check. Everything below this banner describes the
+firmware as it was before the tally was made persistent. The correct section is
+"What survives a reset, and what does not," above. Filed as issue #2.
 
 **Read this before you key off.**
 
