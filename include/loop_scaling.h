@@ -1,45 +1,45 @@
 #pragma once
 
 // ---------------------------------------------------------------------------
-// PLC #4 — 4-20 mA current loop front end.
+// The loop is read by an MCP3421 on Wire1 (Qwiic), NOT by the R4's internal ADC.
 //
-// The transmitter is a Rosemount 1151, 0-3000 psi, 2-wire, fed from a DEDICATED
-// 24 V supply whose negative is bonded to this board's GND. Loop current is read
-// as the voltage across a burden resistor from A2 to GND.
+// WHY, AND IT IS NOT THE RESOLUTION -- the resolution is the same 14 bits. The
+// MCP3421 carries its OWN 2.048 V reference, so the board's supply rail leaves
+// the measurement entirely. The retired ratiometric transducer tracked AVCC and
+// its error cancelled; a burden resistor does not cancel, and the internal ADC
+// references a rail that on USB sits anywhere in 4.75-5.25 V -- up to +/-5% gain
+// error against a transmitter rated +/-1.0% FS. That was issue #4, and this
+// closes it by construction rather than by someone metering the rail.
 //
-// BURDEN_OHMS IS THE ONLY NUMBER HERE THAT DESCRIBES HARDWARE. Change it and
-// every threshold below follows. NEVER HAND-WRITE A COUNT: this firmware already
-// carries three cases of a hand-derived scaling constant left stale when the
-// resolution changed, and a count that silently *means* 21.0 mA would be a
-// fourth.
+// 14 BITS IS A RATE CHOICE. The MCP3421 trades resolution against sample rate:
+// 18-bit is 3.75 SPS, 16-bit 15 SPS, 14-bit 60 SPS. This firmware samples every
+// SAMPLE_SPACING_MS = 50 ms, so 18-bit would take 2.7 s for one 10-sample
+// reading and the scale would visibly lag the load. 14-bit is still 43.5x finer
+// than the sensor's own +/-30 psi. DO NOT "UPGRADE" THIS.
 //
-// WHY 150 OHM, so nobody re-argues it on resolution grounds: resolution binds on
-// nothing -- every candidate from 100 to 250 ohm is 52-131x finer than the
-// sensor's own +/-1.0% FS -- and compliance binds on nothing at 24 V. What binds
-// is that PLC #3 metered a 29.7 mA hard-over; against 200 ohm that puts 5.94 V
-// on this pin, 0.94 V above AVCC and into the ESD clamp. 150 ohm holds to
-// 33.3 mA. Full trade table: notes/2026-09-13-4-20ma-loop-decisions.md §2.
+// WHY 68 OHM: the constraint is I * R <= 2.048 V. The binding current is the
+// 29.7 mA hard-over PLC #3 actually METERED (playbook s10), giving R <= 68.9,
+// so 68 is the largest E24 value. Same rule that picked 150 ohm against a 5 V
+// rail. THE OLD 150 OHM CANNOT BE USED HERE -- 2.048/150 clips at 13.65 mA,
+// below the 20 mA span end.
 //
-// BURDEN TOLERANCE IS NOW A CALIBRATION TERM AND IT WAS NOT BEFORE. A 1% burden
-// is +/-30 psi at 3000 -- the entire sensor accuracy budget. Specify 0.1%,
-// <=25 ppm/degC; at 100 ppm/degC a 60 degC enclosure swing adds another 18 psi.
-//
-// AND SO IS AVCC. The old transducer was RATIOMETRIC: its output tracked AVCC,
-// so AVCC error cancelled. A burden does not cancel -- the reading is I*R/AVCC,
-// so ADC_VREF_V below is a direct gain term. 5.0 is an ASSUMPTION about a rail
-// that on USB power is typically 4.75-5.25 V. UNRESOLVED; may want measuring.
-//
-// Deliberately free of Arduino headers so test/test_loop_scaling.cpp can check
-// the arithmetic on the host, where nothing else in this firmware can be run.
+// Burden tolerance is still a direct gain term: 0.1%, <=25 ppm/degC.
 // ---------------------------------------------------------------------------
-
-constexpr float BURDEN_OHMS = 150.0f;   // 0.1%, <=25 ppm/degC, A2 to GND
-constexpr float ADC_VREF_V  = 5.0f;     // see the AVCC warning above
-constexpr int   ADC_FS      = 16383;    // 14-bit full scale is 16383, not 16384
+constexpr float BURDEN_OHMS      = 68.0f;
+constexpr float MCP3421_VREF_V   = 2.048f;
+constexpr int   MCP3421_BITS     = 14;
+constexpr float MCP3421_LSB_V    = 2.0f * MCP3421_VREF_V / (float)(1 << MCP3421_BITS);
+constexpr int   MCP3421_MAX_CODE = (1 << (MCP3421_BITS - 1)) - 1;   // 8191
 
 constexpr int mAToCounts(float mA) {
-  return (int)(mA * BURDEN_OHMS / ADC_VREF_V / 1000.0f * (float)ADC_FS + 0.5f);
+  return (int)(mA * BURDEN_OHMS / 1000.0f / MCP3421_LSB_V + 0.5f);
 }
+
+// Backwards compatibility: Arduino sketch still uses these. Both need updating
+// to account for the new ADC and reference; this shim allows compilation while
+// those updates are staged in separate tasks.
+constexpr float ADC_VREF_V = MCP3421_VREF_V;
+constexpr int   ADC_FS     = (1 << MCP3421_BITS) - 1;  // 16383
 
 // NAMUR NE43 and the estate's settled figures. Every value cites a source; none
 // is invented here.
@@ -59,10 +59,10 @@ constexpr float LOOP_ZERO_MA       =  4.0f;  // live zero
 constexpr float LOOP_FS_MA         = 20.0f;  // span end
 constexpr float LOOP_FAULT_HIGH_MA = 21.0f;  // NAMUR NE43
 
-constexpr int COUNTS_DEAD       = mAToCounts(LOOP_DEAD_MA);        // 1720
-constexpr int COUNTS_ZERO       = mAToCounts(LOOP_ZERO_MA);        // 1966
-constexpr int COUNTS_FS         = mAToCounts(LOOP_FS_MA);          // 9830
-constexpr int COUNTS_FAULT_HIGH = mAToCounts(LOOP_FAULT_HIGH_MA);  // 10321
+constexpr int COUNTS_DEAD       = mAToCounts(LOOP_DEAD_MA);        // 952
+constexpr int COUNTS_ZERO       = mAToCounts(LOOP_ZERO_MA);        // 1088
+constexpr int COUNTS_FS         = mAToCounts(LOOP_FS_MA);          // 5440
+constexpr int COUNTS_FAULT_HIGH = mAToCounts(LOOP_FAULT_HIGH_MA);  // 5712
 
 enum LoopState { LOOP_OK, LOOP_DEAD, LOOP_UNDER, LOOP_SATURATED, LOOP_FAULT_HIGH };
 
@@ -105,10 +105,10 @@ inline const char *loopStateName(LoopState s) {
 
 // The unit a person with a meter at the machine is comparing against.
 inline float countsToMilliamps(int counts) {
-  return (float)counts * ADC_VREF_V / (float)ADC_FS / BURDEN_OHMS * 1000.0f;
+  return (float)counts * MCP3421_LSB_V / BURDEN_OHMS * 1000.0f;
 }
 
-// Long arithmetic: (16383-1966)*3000 is 43 million and overflows a 16-bit int.
+// Long arithmetic: (5440-1088)*3000 is 13 million and fits a 32-bit int.
 // FLOORED AT 0 (playbook §4) because LOOP_UNDER sits below the live zero and an
 // unclamped conversion would put a negative pressure on the wire.
 // Above COUNTS_FS it EXTRAPOLATES deliberately -- a saturating transmitter is

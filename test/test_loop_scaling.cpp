@@ -46,38 +46,32 @@ static void check_str(const char *what, const char *got, const char *want) {
   }
 }
 
-// The derived counts, against the values in MA-LOOP-DESIGN.md §2. If the burden
-// is ever changed these must be recomputed there and here together.
-static_assert(COUNTS_DEAD       == 1720,  "3.5 mA against 150 ohm");
-static_assert(COUNTS_ZERO       == 1966,  "4.0 mA against 150 ohm");
-static_assert(COUNTS_FS         == 9830,  "20.0 mA against 150 ohm");
-static_assert(COUNTS_FAULT_HIGH == 10321, "21.0 mA against 150 ohm");
+static_assert(COUNTS_DEAD       ==  952, "3.5 mA against 68 ohm, 14-bit, 2.048 V");
+static_assert(COUNTS_ZERO       == 1088, "4.0 mA");
+static_assert(COUNTS_FS         == 5440, "20.0 mA");
+static_assert(COUNTS_FAULT_HIGH == 5712, "21.0 mA NE43");
 
 int main() {
   printf("counts derived from BURDEN_OHMS\n");
-  check_int("3.5 mA  live-zero floor", COUNTS_DEAD,        1720);
-  check_int("4.0 mA  live zero",       COUNTS_ZERO,        1966);
-  check_int("20.0 mA full scale",      COUNTS_FS,          9830);
-  check_int("21.0 mA NE43 fault-high", COUNTS_FAULT_HIGH, 10321);
-  check_int("25.0 mA stays on scale",  mAToCounts(25.0f) <= 16383, 1);
+  check_int("3.5 mA  live-zero floor", COUNTS_DEAD,        952);
+  check_int("4.0 mA  live zero",       COUNTS_ZERO,       1088);
+  check_int("20.0 mA full scale",      COUNTS_FS,         5440);
+  check_int("21.0 mA NE43 fault-high", COUNTS_FAULT_HIGH, 5712);
+  // 29.7 mA is the hard-over PLC #3 actually METERED. It must stay on scale;
+  // that is what sized the burden. 14-bit positive full scale is 8191.
+  check_int("29.7 mA measured hard-over stays on scale", mAToCounts(29.7f) < 8191, 1);
 
   printf("\nclassifier boundaries -- every band edge, both sides\n");
-  // AN OPEN LOOP READS ZERO, AND THAT IS THE WHOLE POINT OF THE SWAP.
-  // The old front end's open-circuit defect was a floating CMOS input sitting
-  // near mid-rail at ~4401 counts and reporting ok. There is deliberately NO
-  // test for 4401 here: with a 150 ohm burden across the input a broken loop
-  // CANNOT produce it -- 0 mA develops 0 V. The hardware closed that path, not
-  // the classifier, and a test asserting otherwise would misrepresent the fix.
-  check_state("0 counts -- open loop",        classifyLoop(0),     LOOP_DEAD);
-  check_state("1719 -- just under 3.5 mA",    classifyLoop(1719),  LOOP_DEAD);
-  check_state("1720 -- exactly 3.5 mA",       classifyLoop(1720),  LOOP_UNDER);
-  check_state("1965 -- just under live zero", classifyLoop(1965),  LOOP_UNDER);
-  check_state("1966 -- exactly live zero",    classifyLoop(1966),  LOOP_OK);
-  check_state("9829 -- just under full scale",classifyLoop(9829),  LOOP_OK);
-  check_state("9830 -- exactly full scale",   classifyLoop(9830),  LOOP_SATURATED);
-  check_state("10320 -- just under NE43",     classifyLoop(10320), LOOP_SATURATED);
-  check_state("10321 -- exactly NE43 21 mA",  classifyLoop(10321), LOOP_FAULT_HIGH);
-  check_state("16383 -- ADC rail",            classifyLoop(16383), LOOP_FAULT_HIGH);
+  check_state("0 counts -- open loop",         classifyLoop(0),    LOOP_DEAD);
+  check_state("951 -- just under 3.5 mA",      classifyLoop(951),  LOOP_DEAD);
+  check_state("952 -- exactly 3.5 mA",         classifyLoop(952),  LOOP_UNDER);
+  check_state("1087 -- just under live zero",  classifyLoop(1087), LOOP_UNDER);
+  check_state("1088 -- exactly live zero",     classifyLoop(1088), LOOP_OK);
+  check_state("5439 -- just under full scale", classifyLoop(5439), LOOP_OK);
+  check_state("5440 -- exactly full scale",    classifyLoop(5440), LOOP_SATURATED);
+  check_state("5711 -- just under NE43",       classifyLoop(5711), LOOP_SATURATED);
+  check_state("5712 -- exactly NE43 21 mA",    classifyLoop(5712), LOOP_FAULT_HIGH);
+  check_state("8191 -- ADC positive rail",     classifyLoop(8191), LOOP_FAULT_HIGH);
 
   printf("\nwhich states are still measuring\n");
   // SATURATED IS MEASURING. NE43 puts 20.0-20.5 mA in the valid measuring range
@@ -112,17 +106,12 @@ int main() {
   check_near("zero counts is 0 mA",countsToMilliamps(0),            0.0,  0.01);
 
   printf("\ncounts to psi, span 3000\n");
-  check_int("live zero is 0 psi",      countsToPSI(COUNTS_ZERO, 3000),    0);
-  check_int("full scale is 3000 psi",  countsToPSI(COUNTS_FS,   3000), 3000);
-  check_int("midspan is 1500 psi",     countsToPSI(5898,        3000), 1500);
-  // The floor. map() does not clamp, and LOOP_UNDER sits below the live zero,
-  // so without this a healthy-looking negative pressure reaches the wire.
-  check_int("below live zero floors at 0", countsToPSI(COUNTS_DEAD, 3000), 0);
-  check_int("zero counts floors at 0",     countsToPSI(0,           3000), 0);
-  // Above full scale it EXTRAPOLATES, deliberately: a saturating transmitter is
-  // proportional up to its clamp. Per playbook §10 this is a validity boundary,
-  // not a scale marking -- read it as "at least this much".
-  check_int("saturated extrapolates",  countsToPSI(10000, 3000), 3064);
+  check_int("live zero is 0 psi",          countsToPSI(COUNTS_ZERO, 3000),    0);
+  check_int("full scale is 3000 psi",      countsToPSI(COUNTS_FS,   3000), 3000);
+  check_int("midspan is 1500 psi",         countsToPSI(3264,        3000), 1500);
+  check_int("below live zero floors at 0", countsToPSI(COUNTS_DEAD, 3000),    0);
+  check_int("zero counts floors at 0",     countsToPSI(0,           3000),    0);
+  check_int("saturated extrapolates",      countsToPSI(5600,        3000), 3110);
 
   printf("\n%s\n", failures ? "FAILURES" : "all checks passed");
   return failures ? 1 : 0;
