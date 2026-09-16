@@ -137,14 +137,18 @@ const int MENU_COUNT = 6;
 const int SAMPLE_COUNT = 10;
 const unsigned long SAMPLE_SPACING_MS = 50;   // 10 x 50 ms = the old 500 ms period
 unsigned long lastSampleMs = 0;
-unsigned long lastGoodSampleMs = 0;   // millis() of the last successful mcpRead(); see READING_STALE_MS
+unsigned long lastReadingMs = 0;   // millis() of the last COMPLETED sample cycle; see READING_STALE_MS
 int  sampleN = 0;
 float sampleTotal = 0;
 
-// A healthy cycle is SAMPLE_COUNT 10 x SAMPLE_SPACING_MS 50 = 500 ms. 2000 ms
-// is four full cycles -- about forty consecutive failed reads -- which is
-// decisively a real fault, not a transient bus hiccup, and it bounds how long
-// a stale weight can sit on screen to two seconds.
+// A nominal cycle is SAMPLE_COUNT 10 x SAMPLE_SPACING_MS 50 = 500 ms, so
+// 2000 ms is four cycles of headroom -- decisively a real fault, not a
+// transient bus hiccup or one slow cycle. This bounds the age of the
+// DISPLAYED READING (the last completed sample cycle), not the age of the
+// last successful individual read -- an intermittent contact can keep
+// mcpRead() succeeding often enough to never look stale by that measure
+// while the reading itself goes many seconds without updating. See F1 in
+// .superpowers/sdd/2026-09-16-mcp3421-lcd2004/review-9-10.md.
 const unsigned long READING_STALE_MS = 2000;
 
 // --- LCD message hold (replaces the blocking delay(1000) after a command) ---
@@ -367,12 +371,16 @@ static bool publishTo(const char *leaf, const char *payload) {
 
 static const char *sensorStateName() { return loopStateName(loopState); }
 
-// Whether the reading is fresh enough to mean anything. Distinct from loop
-// state: the loop can be perfectly healthy while the ADC that reads it has
-// stopped answering, and a held sample is not a measurement. Unsigned
-// subtraction is deliberate and handles millis() rollover correctly -- do
-// not "fix" it by comparing absolute values.
-static bool readingFresh()       { return millis() - lastGoodSampleMs <= READING_STALE_MS; }
+// Whether the DISPLAYED READING is fresh enough to mean anything. Distinct
+// from loop state: the loop can be perfectly healthy while the ADC that
+// reads it has stopped answering, and a held sample is not a measurement.
+// Gated on lastReadingMs -- stamped once per COMPLETED sample cycle, not per
+// successful individual mcpRead() -- because an intermittent contact can
+// keep individual reads succeeding often enough to never look stale while
+// the reading itself sits unchanged for many seconds. Unsigned subtraction
+// is deliberate and handles millis() rollover correctly -- do not "fix" it
+// by comparing absolute values.
+static bool readingFresh()       { return millis() - lastReadingMs <= READING_STALE_MS; }
 static bool readingTrustworthy() { return loopIsMeasuring(loopState) && readingFresh(); }
 static bool operatorMayAct()     { return loopState == LOOP_OK && readingFresh(); }
 
@@ -717,8 +725,8 @@ void setup() {
   Console.println(hb ? "on" : "UNAVAILABLE - resets during network calls");
 
   // Seeds the freshness clock so the first READING_STALE_MS after boot is not
-  // reported stale before any sample has been attempted.
-  lastGoodSampleMs = millis();
+  // reported stale before any sample cycle has completed.
+  lastReadingMs = millis();
 }
 
 // ---------------------------------------------------------------------------
@@ -822,10 +830,16 @@ static void hmiMessage(const char *a, const char *b, unsigned long now) {
 // rock-steady rather than visibly decaying -- more convincing, not less.
 static void hmiRenderFaultRow() {
   char l3[21];
+  // keyStuck() outranks mcpFailCount(): a stuck button is an actionable fault
+  // the operator can clear on the spot (mud, water, a failed switch), while
+  // mcpFailCount() is a LIFETIME counter (include/mcp3421.h:24) that never
+  // resets -- so a single transient I2C error, at any point since boot,
+  // would otherwise latch "I2C ERR" over row 3 for the rest of the power
+  // cycle and KEY STUCK could never render again (F3).
   if (!readingTrustworthy())         snprintf(l3, sizeof(l3), "%-20s", displayStateName());
   else if (calibrationDefaulted)     snprintf(l3, sizeof(l3), "%-20s", "CAL NOT SET!");
-  else if (mcpFailCount() > 0)       snprintf(l3, sizeof(l3), "I2C ERR %-12lu", (unsigned long)mcpFailCount());
   else if (keyStuck())               snprintf(l3, sizeof(l3), "%-20s", "KEY STUCK");
+  else if (mcpFailCount() > 0)       snprintf(l3, sizeof(l3), "I2C ERR %-12lu", (unsigned long)mcpFailCount());
   else                               snprintf(l3, sizeof(l3), "%-20s", "");
   lcdLine(3, l3);
 }
@@ -982,11 +996,12 @@ void loop() {
   if (currentMillis - lastSampleMs >= SAMPLE_SPACING_MS) {
     lastSampleMs = currentMillis;
     int c = 0;
-    if (mcpRead(c)) { sampleTotal += c; sampleN++; lastGoodSampleMs = currentMillis; }
+    if (mcpRead(c)) { sampleTotal += c; sampleN++; }
   }
 
   if (sampleN >= SAMPLE_COUNT) {
     previousMillis = currentMillis;
+    lastReadingMs = currentMillis;   // stamp on a COMPLETED cycle, not a single successful read -- see F1
     sensorValue = sampleTotal / sampleN;
     sampleTotal = 0;
     sampleN = 0;
@@ -1162,8 +1177,11 @@ void loop() {
       {
         printDebug();
       }
+      // Same treatment as `net`: this is the field interface and a bare
+      // outputValue over a dead ADC is a confident frozen weight (F2).
       Console.print("weight = ");
-      Console.println(outputValue);
+      if (readingTrustworthy()) Console.println(outputValue);
+      else                      Console.println(displayStateName());
     }
     else if (inputString == "sum") {
       rTsum = 0;
@@ -1267,8 +1285,11 @@ void loop() {
       Console.println(queueCount);
       Console.print("dropped = ");
       Console.println(queueDropped);
+      // displayStateName(), not sensorStateName(): this is the field interface
+      // (see the HC-05/Bluetooth note above `net`'s handler) and an operator
+      // reading a stale ADC as "sensor = ok" over the phone is exactly F2.
       Console.print("sensor = ");
-      Console.println(sensorStateName());
+      Console.println(displayStateName());
       Console.print("broker = ");
       Console.println(broker);
       Console.print("attempts = ");
@@ -1354,8 +1375,15 @@ void printDebug()
     Console.println(alpha, 4);
     Console.print("i = ");
     Console.println(rTindex);
+    // sensorStateName() here is deliberate: this is the deep diagnostic dump
+    // and it must show the raw LOOP state even when the ADC has gone stale.
+    // The explicit stale line below is what keeps that raw state from being
+    // misread as current (F2) -- readingFresh() qualifies every field above,
+    // "sensor" included.
     Console.print("sensor = ");
     Console.println(sensorStateName());
+    Console.print("stale = ");
+    Console.println(readingFresh() ? "no" : "yes");
     Console.print("cal = ");
     Console.println(calibrationDefaulted ? "DEFAULTED - tare and kv needed" : "stored");
   }

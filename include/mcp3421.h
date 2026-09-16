@@ -49,6 +49,22 @@ inline bool mcpRead(int &countsOut) {
 
   if (cfg & MCP3421_RDY_BIT) return false;   // RDY=1 -> stale, not a failure
 
+  // The MCP3421's power-on default configuration is 0x10 -- continuous,
+  // 12-bit, gain x1 -- not the 0x14 (14-bit) this driver writes in
+  // mcpBegin(). A Qwiic power glitch that resets the chip without resetting
+  // the board silently returns it to that default: every count comes back
+  // quartered (12-bit vs 14-bit), a loaded bucket reads LOW, and nothing else
+  // here would notice -- RDY still clears normally. Compare the low 5 bits
+  // (O/C, S1-S0, G1-G0; bit 7 is RDY and already consumed above) against what
+  // we actually configured, and treat a mismatch as a bus failure so the
+  // caller's fault path -- not a fabricated quarter-scale reading -- is what
+  // the operator sees.
+  if ((cfg & 0x1F) != (MCP3421_CONFIG & 0x1F)) {
+    mcpFailCountRef()++;
+    mcpBegin();   // re-issue the config write so the chip can recover on its own
+    return false;
+  }
+
   int16_t raw = (int16_t)(((uint16_t)hi << 8) | lo);
   raw = (int16_t)(raw << 2) >> 2;            // sign-extend the 14-bit result
   countsOut = (int)raw;

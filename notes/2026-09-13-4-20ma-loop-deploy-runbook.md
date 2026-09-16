@@ -190,8 +190,8 @@ stream, is a schema change nobody has scoped yet — not covered by migration 06
 - **The board will demand a full recalibration.** `EEPROM_SIGNATURE` moved to `PL4A`, so the
   voltage-era `tareValue` and `calFactor` are refused rather than silently used. `CAL NOT SET!` on
   the LCD is expected, not a fault — tare and `kv` at the boom mark before it will weigh.
-- Firmware branch of record: **`feat/plc4-4-20ma-loop-impl`**, also on the `saga` remote at
-  `/opt/repos/greybeard-plc4-tractor-scale.git`. Compiles at 85668 flash / 11216 RAM via
+- Firmware branch of record: **`feat/plc4-mcp3421-lcd2004`**, also on the `saga` remote at
+  `/opt/repos/greybeard-plc4-tractor-scale.git`. Compiles at 91232 flash / 13472 RAM via
   `tools/build-check.sh`.
 
 ---
