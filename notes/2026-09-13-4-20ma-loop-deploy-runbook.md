@@ -171,6 +171,14 @@ working with no migration and no consumer change required for this field alone �
 additive. (Landing it as a real, non-NULL column, rather than reading it only off the live MQTT
 stream, is a schema change nobody has scoped yet — not covered by migration 061.)
 
+The retained `status` payload now carries the same `stale` field, same form, same place — right
+after `sensor`. It was the more urgent gap of the two: `status` is published RETAINED, so before
+this fix a board whose ADC died could publish `"sensor":"ok"` once and the broker would hand that
+claim to every subscriber that connected afterward, indefinitely, with no ADC fault visible except
+by inferring it from `i2c_err`. **Because `status` is retained, `stale:true` there is what a
+subscriber gets on connect if the board's ADC had already failed before it subscribed** — the
+consumer must treat that the same way it treats `stale:true` on `telemetry`, not as a one-off.
+
 ---
 
 ## 5. ONLY THEN, THE FIRMWARE

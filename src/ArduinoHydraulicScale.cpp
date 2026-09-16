@@ -435,13 +435,18 @@ static bool publishWeight(int32_t w, uint32_t ageMs, bool backlog) {
 static void publishStatus(unsigned long now) {
   lastStatusMs = now;
   char payload[448];
+  // `stale` is a bare JSON boolean, not a string, and sits right after
+  // `sensor` -- same form and placement as the telemetry payload, so the
+  // two agree. This message is RETAINED: a subscriber that connects after
+  // the ADC has already died gets stale:true on its very first delivery,
+  // instead of a last-known-good "sensor":"ok" that lingers forever.
   snprintf(payload, sizeof(payload),
-    "{\"up\":true,\"cal\":\"%s\",\"sensor\":\"%s\",\"tare\":%d,\"cf\":%.5f,"
+    "{\"up\":true,\"cal\":\"%s\",\"sensor\":\"%s\",\"stale\":%s,\"tare\":%d,\"cf\":%.5f,"
     "\"n\":%d,\"q\":%d,\"dropped\":%lu,\"uptime_s\":%lu,\"rssi\":%d,"
     "\"overrange\":%lu,\"overrange_max\":%d,\"underrange\":%lu,\"i2c_err\":%lu,"
     "\"reset\":\"%s\",\"id\":\"%s\"}",
     calibrationDefaulted ? "DEFAULT" : "ok",
-    sensorStateName(), tareValue, calFactor,
+    sensorStateName(), readingFresh() ? "false" : "true", tareValue, calFactor,
     rTindex, queueCount, queueDropped,
     (unsigned long)(now / 1000UL), (int)WiFi.RSSI(),
     overRangeCount, overRangeMaxCounts, underRangeCount,
