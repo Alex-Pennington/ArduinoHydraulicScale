@@ -82,13 +82,31 @@ display — no longer part of a display-shield ladder. Same order as before.
 | Left | `-` |
 | Select | `tare` |
 
+**Updated 2026-09-16: press one button at a time, and let it come all the
+way back up before the next.** Rolling from one held button onto another, or
+releasing a button while a different one is still held, now does nothing —
+it used to fire whichever button the keypad scan landed on. Press, then
+release, then press the next one. A phantom press could tare the scale or
+record the tally against a loaded bucket; a press that simply fails to
+register is the safer of the two failures, which is why it works this way
+now.
+
+**A button held down more than 10 seconds is treated as stuck**, not held on
+purpose — nothing on this keypad repeats while held, so a long hold is never
+meaningful. A stuck button is ignored so the other four keep working, and
+the status row (row 4) shows `KEY STUCK` for as long as it stays down.
+Releasing it clears the fault immediately — no reset needed.
+
 ## What the display tells you
 
 **Updated 2026-09-16: the display is now 20x4, and row 4 is a permanent status
 row.** It is written on every screen — home, menu, and the calibration-check
 screen alike — so a fault stays visible even while you are off the home screen.
-It shows the loop state below when the loop is not measuring, `CAL NOT SET!`, or
-an I2C error count, and is otherwise blank.
+Row 4 shows worst first, one thing at a time, in this order: the loop or ADC
+state (`NO SENSOR`, `XMTR FAULT`, or `NO ADC`), then `CAL NOT SET!`, then an
+I2C error count, then `KEY STUCK`, and otherwise blank. If two of these are
+true at once — say a stuck key while the sensor is also down — you only see
+the higher one on the list; clearing it is what reveals the next.
 
 - A number — the current weight.
 - **`NO SENSOR`** — dead loop, below 3.5 mA: cut wire, no loop supply, or the
@@ -96,6 +114,17 @@ an I2C error count, and is otherwise blank.
   weight; the scale cannot weigh until it is fixed.
 - **`XMTR FAULT`** — loop at or above 21 mA (NAMUR NE43). The transmitter is not
   giving a usable reading. Blanks the weight.
+- **`NO ADC`** (new 2026-09-16) — the board has lost contact with the MCP3421
+  chip that reads the loop, most likely a loose Qwiic connector. **This is not
+  the same problem as `NO SENSOR`, and the first check at the machine is
+  different for each:** `NO SENSOR` means the 4-20 mA loop itself is dead —
+  check the transducer's wiring and loop supply. `NO ADC` means the board
+  cannot talk to the chip that *reads* that loop — check the Qwiic cable
+  first. It appears about 2 seconds after the board stops hearing from the
+  chip; until then the last good reading just sits there, unmoving, which is
+  what a loose connector actually looks like — not a jump to a fault message.
+  Blanks the weight, same as `NO SENSOR`, and `tare`, `+` and calibration are
+  all refused while it shows.
 - **`BAD STATE`** — should never appear. It means a corrupted record, not a live
   fault. Report it if you see it.
 - **`CAL NOT SET!`** (row 4, the status row) — shown after every flash, until the
@@ -112,7 +141,17 @@ an I2C error count, and is otherwise blank.
   count, shown once calibration is set if the Qwiic bus to the ADC has logged a
   failure. It does not blank the weight; treat a rising count as the warning to
   act on before the bus fails outright.
-- `Buffer Full` — the 50-entry tally is full. Use `sum`, then `b`.
+- **`KEY STUCK`** (new 2026-09-16, row 4, the status row) — a button has been
+  held down more than 10 seconds. The other four keys still work; let the
+  stuck one go and the message clears on its own.
+- **`TALLY n LEFT`** (new 2026-09-16, row 3, just above the status row) —
+  shown once 5 or fewer tally slots remain, so you get warning before you hit
+  the wall. At 50 recorded entries it changes to **`TALLY FULL`** and `+`
+  stops recording — `sum` the tally, then `b` to clear it, before you can
+  record another.
+- `Buffer Full` — the one-time message on pressing `+` after the tally is
+  already full (the `TALLY FULL` line above is the standing warning; this is
+  what you see if you press `+` anyway). Use `sum`, then `b`.
 
 **`SATURATED` and `UNDER ZERO` never reach the LCD, and the status row does not
 blank the weight for either of them.** Both are still real measurements — pinned

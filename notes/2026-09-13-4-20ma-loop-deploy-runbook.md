@@ -143,6 +143,36 @@ the answer.
 
 ---
 
+## 4a. THE NEW `stale` FIELD ON TELEMETRY — read this before subscribing to the live feed
+
+Firmware commit `7e291cf` (branch `feat/plc4-mcp3421-lcd2004`, not yet the branch of record named
+in §5 below) adds a bare JSON boolean `stale` to the periodic `telemetry` payload, sitting right
+after `sensor`:
+
+    {"w":1834,"psi":812,"mA":11.4,"counts":4021,"sensor":"ok","stale":true,"psi_fault":null,"queued":0,"id":"..."}
+
+`stale` is true whenever the board has gone `READING_STALE_MS` (2000 ms) without a successful read
+from the MCP3421 — a loose Qwiic connector, most likely. `sensor` keeps meaning the LOOP state
+(`ok`/`NO SENSOR`/`UNDER ZERO`/`SATURATED`/`XMTR FAULT`/`BAD STATE`, unchanged, see below) and is
+**not** overridden when the ADC goes stale, so `sensor` can read `"ok"` — the last loop state it
+actually measured — while `stale` is `true` and every field around it (`w`, `psi`, `mA`, `counts`)
+is a frozen value from before the ADC stopped answering, not a live one.
+
+**A consumer that ignores `stale` will bank a frozen weight as live.** The firmware itself refuses
+to let `+` record while stale, and blanks the weight on the LCD — but neither of those protections
+reaches a consumer that is only subscribed to the `telemetry` stream. Any code that reads this
+payload must check `stale` before treating `w` (or `psi`, or `mA`) as a current measurement, the
+same way it already checks `sensor` before treating a reading as trustworthy.
+
+**The six `sensor` wire values are UNCHANGED** — `ok`, `NO SENSOR`, `UNDER ZERO`, `SATURATED`,
+`XMTR FAULT`, `BAD STATE` (`loopStateName()` in `include/loop_scaling.h`, untouched by this
+branch). Migration 061's enum and the consumer's existing `sensor`-based validity check both keep
+working with no migration and no consumer change required for this field alone — `stale` is
+additive. (Landing it as a real, non-NULL column, rather than reading it only off the live MQTT
+stream, is a schema change nobody has scoped yet — not covered by migration 061.)
+
+---
+
 ## 5. ONLY THEN, THE FIRMWARE
 
 - **Do not flash before the transmitter is physically fitted.** PLC #3's playbook §2 makes this a
@@ -163,6 +193,23 @@ the answer.
 - Firmware branch of record: **`feat/plc4-4-20ma-loop-impl`**, also on the `saga` remote at
   `/opt/repos/greybeard-plc4-tractor-scale.git`. Compiles at 85668 flash / 11216 RAM via
   `tools/build-check.sh`.
+
+---
+
+## 5a. BENCH CHECK FOR `NO ADC`
+
+A minimal check that the ADC-staleness path (§4a) actually behaves as described, once the board
+is flashed and running with the loop live:
+
+1. With the transducer loop live and the board reading normally, unplug the Qwiic connector
+   between the board and the MCP3421.
+2. Confirm the weight on the LCD blanks and `NO ADC` appears on the status row, after a roughly
+   2-second delay (not instantly).
+3. Confirm `+` is refused while `NO ADC` is showing.
+4. Reconnect the Qwiic connector and confirm the display recovers on its own.
+
+This is a bench check of the firmware behavior only — it is not a commissioning test, and no
+commissioning procedure is scoped here. That is Alex's to run.
 
 ---
 
