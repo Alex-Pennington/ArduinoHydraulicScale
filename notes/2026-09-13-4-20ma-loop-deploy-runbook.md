@@ -11,6 +11,29 @@ deployed, no board flashed.
 
 ---
 
+## 0a. THE MACHINE IS BENCHED, AND THAT CHANGES THE URGENCY
+
+**Alex, 2026-09-16: "I'll be installing the hardware in the next few days, currently the system
+is unusable with the current sensor so we will be benching the plc4 for upgrades."**
+
+So there is **no running machine to protect** during this deployment, and **no working scale to
+regress** — the fitted 0.5-4.5 V transducer is already unusable. That is worth knowing in both
+directions:
+
+- It removes the time pressure. Nothing is weighing today, so getting the order right matters
+  more than getting it done quickly.
+- It is independent corroboration of the contradiction in §3 of the decisions note. The reason
+  the machine is unusable is the same reason `2828 psi` and "it rails routinely" could not both
+  be true: that sensor is not reporting usefully. Nothing here settles WHY — the new firmware's
+  `overrange` / `overrange_max` counters are still what will.
+
+The consumer-side precondition below is unchanged by this. A benched machine does not publish,
+so nothing is being lost while it is down — but the moment it comes back, the first over-range
+excursions are the measurement this whole change exists to produce, and they are discarded
+silently if the consumer has not landed first.
+
+---
+
 ## 0. THE ORDERING CONSTRAINT THAT BITES FIRST
 
 **Deploying the new consumer BEFORE migration 061 makes the consumer refuse to start.** Not
