@@ -9,7 +9,6 @@
 #define calWeight 530 // the weight of the calibration object
 #include <Arduino.h>
 #include <EEPROM.h>
-#include <LiquidCrystal.h>
 #include <WiFiS3.h>
 #include <ArduinoMqttClient.h>
 #include <WDT.h>
@@ -17,16 +16,7 @@
 #include "arduino_secrets.h"
 #include "loop_scaling.h"
 #include "mcp3421.h"
-
-// LCD pin to Arduino
-const int pin_RS = 8;
-const int pin_EN = 9;
-const int pin_d4 = 4;
-const int pin_d5 = 5;
-const int pin_d6 = 6;
-const int pin_d7 = 7;
-const int pin_BL = 10;
-LiquidCrystal lcd( pin_RS,  pin_EN,  pin_d4,  pin_d5,  pin_d6,  pin_d7);
+#include "lcd2004.h"
 
 // ---------------------------------------------------------------------------
 // Console: the HC-05 on Serial1 (D0/D1) is the field interface, but the board
@@ -625,11 +615,9 @@ void setup() {
     calibrationDefaulted = true;
   }
 
-  lcd.begin(16, 2);
-  lcd.setCursor(0, 0);
-  lcd.print("Loader Scale");
-  lcd.setCursor(0, 1);
-  lcd.print("Press Key:");
+  lcdBegin();
+  lcdLine(0, "Loader Scale");
+  lcdLine(1, "Press Key:");
 
   tallyRestore();
   captureResetCause();
@@ -763,67 +751,77 @@ static void hmiRun(const char *verb) {
 }
 
 static void hmiMessage(const char *a, const char *b, unsigned long now) {
-  lcd.setCursor(0, 0); lcd.print("                ");
-  lcd.setCursor(0, 0); lcd.print(a);
-  lcd.setCursor(0, 1); lcd.print("                ");
-  lcd.setCursor(0, 1); lcd.print(b);
+  lcdLine(0, a);
+  lcdLine(1, b);
   msgUntil = now + MSG_HOLD_MS;
 }
 
+// Row 3 is the FAULT ROW and belongs to the DISPLAY LAYER, not to any screen.
+// It is written on every render regardless of which screen is active, so a
+// screen added later CANNOT silently opt out of fault indication the way
+// SCR_CHECKCAL did. That was a Critical: a dead transmitter was invisible on
+// the calibration-check screen, and the frozen filter made the stale number
+// rock-steady rather than visibly decaying -- more convincing, not less.
+static void hmiRenderFaultRow() {
+  char l3[21];
+  if (!loopIsMeasuring(loopState))   snprintf(l3, sizeof(l3), "%-20s", sensorStateName());
+  else if (calibrationDefaulted)     snprintf(l3, sizeof(l3), "%-20s", "CAL NOT SET!");
+  else if (mcpFailCount() > 0)       snprintf(l3, sizeof(l3), "I2C ERR %-12lu", (unsigned long)mcpFailCount());
+  else                               snprintf(l3, sizeof(l3), "%-20s", "");
+  lcdLine(3, l3);
+}
+
 static void hmiDrawHome() {
-  char l0[17], l1[17];
-  // Row 0: the weight, or the fault that makes the weight meaningless.
-  //
-  // SATURATED and UNDER ZERO deliberately do NOT take this row. They are real
-  // measurements — over-range, or below the live zero, but measuring — and
-  // withholding a weight from the operator because the transmitter is pinned
-  // was the old defect, not a safeguard. They stay visible in telemetry and in
-  // the overrange/underrange counters.
-  if (!loopIsMeasuring(loopState)) snprintf(l0, sizeof(l0), "%-16s", sensorStateName());
-  else                             snprintf(l0, sizeof(l0), "%-11d n%-3d", outputValue, rTindex);
+  char l0[21], l1[21], l2[21];
+  // Row 0: the weight. SATURATED and UNDER ZERO deliberately still show it —
+  // they are real measurements, over-range or below the live zero but
+  // measuring, and withholding a weight because the transmitter is pinned was
+  // the old defect, not a safeguard. Fault indication now belongs to row 3
+  // (hmiRenderFaultRow), which every screen reaches, so this row no longer
+  // needs to carry it.
+  snprintf(l0, sizeof(l0), "W %8d lb  n%-4d", outputValue, rTindex);
 
-  // Row 1: whatever the operator needs in order to trust row 0. Worst first —
-  // an uncalibrated scale is wrong, a backlog is only late.
-  if (calibrationDefaulted)      snprintf(l1, sizeof(l1), "%-16s", "CAL NOT SET!");
-  else if (queueDropped > 0)     snprintf(l1, sizeof(l1), "DROPPED %-8lu", queueDropped);
-  else if (queueCount > 0)       snprintf(l1, sizeof(l1), "Q%-3d %-11s", queueCount,
-                                          netState == NET_ONLINE ? "sending" : "no link");
-  else if (rTindex >= rTsize)    snprintf(l1, sizeof(l1), "%-16s", "TALLY FULL");
-  else if (rTindex >= rTsize - 5)snprintf(l1, sizeof(l1), "%d left  Sel=menu", rTsize - rTindex);
-  else                           snprintf(l1, sizeof(l1), "%-16s", "Sel=menu");
+  // Row 1: psi and mA, when the loop is actually measuring.
+  if (loopIsMeasuring(loopState))
+    snprintf(l1, sizeof(l1), "psi %5d  mA %5.2f", pressureValue,
+             (double)countsToMilliamps(sensorValue));
+  else
+    snprintf(l1, sizeof(l1), "%-20s", "psi --    mA --");
 
-  lcd.setCursor(0, 0); lcd.print(l0);
-  lcd.setCursor(0, 1); lcd.print(l1);
+  // Row 2: whatever the operator needs in order to trust row 0/1. Worst first —
+  // a dropped record is worse than a backlog, which is only late.
+  if (queueDropped > 0)        snprintf(l2, sizeof(l2), "DROPPED %-12lu", queueDropped);
+  else if (queueCount > 0)     snprintf(l2, sizeof(l2), "Q%-4d %-14s", queueCount,
+                                        netState == NET_ONLINE ? "sending" : "no link");
+  else if (rTindex >= rTsize)  snprintf(l2, sizeof(l2), "%-20s", "TALLY FULL");
+  else                         snprintf(l2, sizeof(l2), "%-20s", "Sel=menu");
+
+  lcdLine(0, l0); lcdLine(1, l1); lcdLine(2, l2);
 }
 
 static void hmiDrawMenu() {
-  char l1[17];
-  lcd.setCursor(0, 0); lcd.print("Menu  Lt=back   ");
-  snprintf(l1, sizeof(l1), ">%-15s", MENU_ITEMS[menuIndex]);
-  lcd.setCursor(0, 1); lcd.print(l1);
+  char l1[21];
+  lcdLine(0, "Menu  Lt=back");
+  snprintf(l1, sizeof(l1), ">%-19s", MENU_ITEMS[menuIndex]);
+  lcdLine(1, l1);
 }
 
 static void hmiDrawCheckCal() {
-  char l0[17], l1[17];
-  // This screen has to carry its own fault. hmiPoll() returns here without ever
-  // reaching hmiDrawHome(), which is the only other place a fault takes row 0 —
-  // so before this guard a faulted loop showed `Reads 528` held indefinitely,
-  // with nothing on either row saying the transmitter was gone. The filter freeze
-  // made that worse, not better: the held number is rock-steady rather than
-  // visibly decaying, which reads as a good scale. There is no timeout on this
-  // screen; only Left or Select leaves it.
-  //
-  // sensorStateName() is deliberate — the LCD and the wire must never disagree
-  // about which state this is.
+  char l0[21], l1[21];
+  // Kept from the 4-20 mA work: when the loop is not measuring, show the state
+  // and no number. sensorStateName() is deliberate -- the LCD and the wire must
+  // never disagree about which state this is. Row 3 (hmiRenderFaultRow) also
+  // carries this fault now, so this guard is belt-and-braces, not the only
+  // place the fault shows -- but it still keeps a stale `Reads 528` off this
+  // screen specifically.
   if (!loopIsMeasuring(loopState)) {
-    snprintf(l0, sizeof(l0), "%-16s", sensorStateName());
-    snprintf(l1, sizeof(l1), "%-16s", "NO READING Lt=x");
+    snprintf(l0, sizeof(l0), "%-20s", sensorStateName());
+    snprintf(l1, sizeof(l1), "%-20s", "NO READING Lt=x");
   } else {
     snprintf(l0, sizeof(l0), "Should be %-6d", calWeight);
     snprintf(l1, sizeof(l1), "Reads %-6d Lt=x", outputValue);
   }
-  lcd.setCursor(0, 0); lcd.print(l0);
-  lcd.setCursor(0, 1); lcd.print(l1);
+  lcdLine(0, l0); lcdLine(1, l1);
 }
 
 static void hmiOnPress(int key, unsigned long now) {
@@ -891,15 +889,18 @@ static void hmiPoll(unsigned long now) {
     if (k >= 0) hmiOnPress(k, now);         // act on press only, never on release or hold
   }
 
-  if (now < msgUntil) return;               // let a message stand
+  // Row 3 is the display layer's fault row and every path below reaches it --
+  // including this one. A toast must not outrank an alarm.
+  if (now < msgUntil) { hmiRenderFaultRow(); return; }   // let a message stand
   if (screen == SCR_CONFIRM) {
-    lcd.setCursor(0, 0); lcd.print("Clear tally?    ");
-    lcd.setCursor(0, 1); lcd.print("Sel=YES  any=no ");
-    return;
+    lcdLine(0, "Clear tally?");
+    lcdLine(1, "Sel=YES  any=no");
+    lcdLine(2, "");
   }
-  if (screen == SCR_MENU)     { hmiDrawMenu();     return; }
-  if (screen == SCR_CHECKCAL) { hmiDrawCheckCal(); return; }
-  hmiDrawHome();
+  else if (screen == SCR_MENU)     hmiDrawMenu();
+  else if (screen == SCR_CHECKCAL) hmiDrawCheckCal();
+  else                             hmiDrawHome();
+  hmiRenderFaultRow();
 }
 
 void loop() {
@@ -1037,9 +1038,7 @@ void loop() {
         verbRefused = true;
         Console.print("NOT RECORDED: ");
         Console.println(sensorStateName());
-        lcd.setCursor(0, 1);
-        lcd.setCursor(0, 1);
-        lcd.print(sensorStateName());
+        lcdLine(1, sensorStateName());
       }
       else if (rTindex < rTsize) {
         rT[rTindex] = outputValue;
@@ -1062,8 +1061,7 @@ void loop() {
         verbRefused = true;
         snprintf(verbRefusedReason, sizeof(verbRefusedReason), "TALLY FULL");
         Console.println("Buffer Full");
-        lcd.setCursor(0, 1);
-        lcd.print ("Buffer Full");
+        lcdLine(1, "Buffer Full");
       }
     }
     else if (inputString == "-") {
@@ -1100,7 +1098,6 @@ void loop() {
       }
       Console.print("sum = ");
       Console.println(rTsum);
-      lcd.setCursor(0, 1);
     }
     else if (inputString == "b") {
       for (int i = 0; i < rTsize; i++) {
@@ -1110,9 +1107,7 @@ void loop() {
       rTsum = 0;
       tallySaveIndex();
       Console.println("Buffer Cleared");
-      lcd.setCursor(0, 1);
-      lcd.setCursor(0, 1);
-      lcd.print("Buffer Cleared");
+      lcdLine(1, "Buffer Cleared");
     }
     else if (inputString == "kv") {
       // Calibrate AT THE BOOM MARK, with the known load, after taring at the
@@ -1135,9 +1130,7 @@ void loop() {
         verbRefused = true;
         snprintf(verbRefusedReason, sizeof(verbRefusedReason), "at or below tare");
         Console.println("cal FAILED: at or below tare");
-        lcd.setCursor(0, 1);
-        lcd.setCursor(0, 1);
-        lcd.print("cal FAILED");
+        lcdLine(1, "cal FAILED");
       } else {
         calFactor = float(calWeight) / span;
         saveCalibration();
