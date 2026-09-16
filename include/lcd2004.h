@@ -47,5 +47,9 @@ inline void lcdLine(uint8_t row, const char *text) {
   static const uint8_t base[4] = { 0x00, 0x40, 0x14, 0x54 };
   if (row > 3) return;
   lcdCmd(0x80 | base[row]);
-  for (uint8_t i = 0; i < LCD_COLS; i++) lcdData(text[i] ? text[i] : ' ');
+  uint8_t i = 0;
+  // Stop at the null terminator — never read past it
+  for (; i < LCD_COLS && text[i]; i++) lcdData(text[i]);
+  // Then pad the remainder with spaces
+  for (; i < LCD_COLS; i++)            lcdData(' ');
 }
