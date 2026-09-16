@@ -174,6 +174,13 @@ for a live reading.
 stayed in the tally through a power cycle. That was wrong at the time and has now been
 made true: the tally is written to permanent memory as you record it.
 
+**Removed 2026-09-16.** This page used to carry a second, duplicated copy of itself, ending
+in a section headed "NOTHING YOU RECORD SURVIVES A POWER CYCLE." That section described the
+firmware as it was before the tally was made persistent, and it contradicted the table below.
+It has been deleted; it is in the repository history if anyone needs it (issue #2).
+**If you are holding a printout that tells you your tally is lost, it is out of date — throw
+it away and print this page again.**
+
 | what | survives a reset or power cycle? |
 |---|---|
 | `tare` zero | **yes** — stored |
@@ -198,98 +205,3 @@ easy to catch with a glove, and it restarts the board.
 That is now survivable — the tally is kept — but it is not free: anything still queued
 for upload is lost, and the scale takes a few seconds to come back and re-associate.
 If you keep catching it, tape over it.
-
-## Commands
-
-Sent over the Bluetooth console (HC-05, 9600 baud), or from the LCD keypad.
-
-| Command | Does |
-|---|---|
-| `tare` | Set zero from the current reading. Stored. **At the mark, empty.** |
-| `kv` | Calibrate span against `calWeight`. Stored. **At the mark, with the load.** Refuses if at or below tare. |
-| `+` | Record the current weight to the tally, and publish it |
-| `-` | Remove the last recorded entry |
-| `sum` | Total the recorded entries |
-| `b` | Clear the tally |
-| `read` | Print the current weight |
-| `net` | Print WiFi, MQTT, IP, queued and dropped counts, and sensor state |
-| `debug` | Toggle verbose output. Not stored — off at every boot. |
-| `c<value>` | Set the calibration factor directly. Stored. Rejected if out of range. |
-| `w<value>` | Set the smoothing factor, 0 to 1. Stored. |
-| `sm<value>` | Set the transducer full-scale pressure in psi. **NOT stored — reverts to 3000 on every reset.** |
-
-**Note the renames:** `cal` became `kv` and `clear` became `b` on this firmware line.
-The Bluetooth macro set in `serial_bluetooth_terminal_cfg.txt` has been reissued to
-match — reload it on the phone, or two of the buttons will do nothing.
-
-**If you ever change `sm`, you must set it again after every reset.** It is the only
-setting that looks permanent and is not. If a transducer with a range other than 3000 psi
-is fitted and `sm` silently reverts, the scale keeps working and reads wrong — with
-nothing on the display to say so.
-
-## Keypad
-
-| Key | Command |
-|---|---|
-| Right | `+` |
-| Up | `sum` |
-| Down | `b` |
-| Left | `-` |
-| Select | `tare` |
-
-## What the display tells you
-
-- A number — the current weight.
-- **`NO SENSOR`** — dead loop, below 3.5 mA: cut wire, no loop supply, or the
-  transmitter removed. **This is not a zero reading; it is a fault.** Blanks the
-  weight; the scale cannot weigh until it is fixed.
-- **`XMTR FAULT`** — loop at or above 21 mA (NAMUR NE43). The transmitter is not
-  giving a usable reading. Blanks the weight.
-- **`BAD STATE`** — should never appear. It means a corrupted record, not a live
-  fault. Report it if you see it.
-- `Buffer Full` — the 50-entry tally is full. Use `sum`, then `b`.
-
-**`SATURATED` and `UNDER ZERO` never reach the LCD.** Both are still real
-measurements — pinned at full scale, or below the 4 mA live zero — and the weight
-stays on screen through both, on purpose: blanking it because the transmitter was
-pinned was the old defect this front end exists to fix. Don't wait for a display
-that is never coming; `net` and the MQTT telemetry both carry the state if you
-need to know which of the two you're in.
-
-## Working out of radio range
-
-The scale works normally with no network. Recorded weights (`+`) are held in memory
-and published when the broker comes back into range — `net` shows how many are
-waiting. Published backlog is marked as such with its age, so it cannot be mistaken
-for a live reading.
-
-## NOTHING YOU RECORD SURVIVES A POWER CYCLE
-
-**SUPERSEDED 2026-09-16 — do not follow this section.** The tally now survives a
-power cycle: `tallySaveEntry()` and `tallySaveIndex()` write each recorded weight
-to EEPROM as `+` runs, and `tallyRestore()` reads it back in `setup()`, guarded by
-`TALLY_SIGNATURE` and a bounds check. Everything below this banner describes the
-firmware as it was before the tally was made persistent. The correct section is
-"What survives a reset, and what does not," above. Filed as issue #2.
-
-**Read this before you key off.**
-
-An earlier version of this page said the recorded weights stay in the tally through a
-power cycle and that only the upload was lost. **That was wrong.** Both the tally and
-the queued uploads live in RAM:
-
-| what | survives a reset or power cycle? |
-|---|---|
-| `tare` zero | **yes** — stored |
-| `kv` calibration | **yes** — stored |
-| the recorded tally (`+`, `sum`) | **NO — lost** |
-| weights queued for upload while out of range | **NO — lost** |
-| `sm` full-scale setting | **NO — reverts to 3000 psi** |
-
-**So: get your weights off the machine before you key off.** Either `sum` them and write
-the total down, or be in radio range long enough for the queue to publish — `net` shows
-how many are still waiting. Once it queues to zero, they are gone from the machine and
-safe on the broker.
-
-Anything that resets the board does this, not just turning the key. A power blip, a loose
-connector, or a firmware fault all clear the tally the same way and without warning.
