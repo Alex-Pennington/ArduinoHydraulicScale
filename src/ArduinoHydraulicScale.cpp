@@ -69,6 +69,10 @@ int addr = 10;
 #define rTsize 50
 int rT[rTsize];
 int rTindex = 0;
+// The 16x2 layout warned before the tally went full; the 20x4 port dropped
+// that warning. This restores it: the operator gets notice this many entries
+// before `+` silently stops recording.
+const int TALLY_WARN_REMAINING = 5;
 // SIGNED, and it matters: outputValue goes negative below tare and on an
 // uncalibrated board, and an unsigned total underflowed to 4294967281 for three
 // entries of -5. A total that is visibly absurd is better than one that is quietly
@@ -78,7 +82,7 @@ String inputString = "";         // a String to hold incoming data
 bool stringComplete = false;  // whether the string is complete
 
 // ---------------------------------------------------------------------------
-// HMI. Five buttons, a 16x2 LCD, and a gloved operator on a tractor seat.
+// HMI. Five buttons, a 20x4 LCD, and a gloved operator on a tractor seat.
 //
 // Principles, from the review of the old handler:
 //  * EDGE triggered, not level. The old code sampled every 1000 ms and re-fired
@@ -95,6 +99,12 @@ const unsigned long MSG_HOLD_MS     = 1500;
 // Five buttons to GND on pins freed by the I2C display, read with INPUT_PULLUP.
 // Order matches the old ladder exactly: Right, Up, Down, Left, Select.
 const uint8_t KEY_PINS[5] = { 4, 5, 6, 7, 8 };
+
+// Per-pin "continuously LOW since" timestamp, 0 meaning released. Nothing in
+// this HMI auto-repeats on hold, so a pin held LOW past KEY_STUCK_MS is a
+// fault (mud, water, a failed switch), never intent.
+unsigned long keyDownSince[5] = {0};
+const unsigned long KEY_STUCK_MS = 10000;
 
 enum Screen { SCR_HOME, SCR_MENU, SCR_CONFIRM, SCR_CHECKCAL };
 Screen screen = SCR_HOME;
@@ -373,6 +383,17 @@ static bool operatorMayAct()     { return loopState == LOOP_OK && readingFresh()
 // last-known one would be a stale claim of its own.
 static const char *displayStateName() {
   return readingFresh() ? sensorStateName() : "NO ADC";
+}
+
+// True once any pin has been continuously LOW for KEY_STUCK_MS or more.
+// keyIndex() already excludes that pin from the scan so the rest of the
+// keypad keeps working; this is only for telling the operator why a button
+// stopped responding.
+static bool keyStuck() {
+  unsigned long now = millis();
+  for (int i = 0; i < 5; i++)
+    if (keyDownSince[i] != 0 && now - keyDownSince[i] >= KEY_STUCK_MS) return true;
+  return false;
 }
 
 // A buffered reading MUST be distinguishable from a live one. Publishing
@@ -761,10 +782,23 @@ static void tallyRestore() {
 // buttons can be pressed together, and everything downstream assumes "one key or
 // none": two at once would present as chatter between two stable values and the
 // debounce would fire repeatedly. So scan in fixed priority and return the FIRST
-// pressed, preserving the old contract exactly.
-static int keyIndex() {
-  for (int i = 0; i < 5; i++) if (digitalRead(KEY_PINS[i]) == LOW) return i;
-  return -1;
+// pressed, preserving the old contract exactly. A pin stuck LOW past
+// KEY_STUCK_MS is excluded from the scan so it cannot mask every
+// lower-priority button forever -- see keyStuck() below.
+static int keyIndex(unsigned long now) {
+  int first = -1;
+  for (int i = 0; i < 5; i++) {
+    if (digitalRead(KEY_PINS[i]) == LOW) {
+      if (keyDownSince[i] == 0) keyDownSince[i] = now;
+      // A held button does nothing after its initial press -- there is no
+      // auto-repeat -- so ten seconds LOW is a fault, never intent. Skip it and
+      // let the other four work.
+      if (now - keyDownSince[i] < KEY_STUCK_MS && first < 0) first = i;
+    } else {
+      keyDownSince[i] = 0;          // released: it is healthy again immediately
+    }
+  }
+  return first;
 }
 
 // Queue a verb for the existing command handler. The keypad and the serial console
@@ -791,6 +825,7 @@ static void hmiRenderFaultRow() {
   if (!readingTrustworthy())         snprintf(l3, sizeof(l3), "%-20s", displayStateName());
   else if (calibrationDefaulted)     snprintf(l3, sizeof(l3), "%-20s", "CAL NOT SET!");
   else if (mcpFailCount() > 0)       snprintf(l3, sizeof(l3), "I2C ERR %-12lu", (unsigned long)mcpFailCount());
+  else if (keyStuck())               snprintf(l3, sizeof(l3), "%-20s", "KEY STUCK");
   else                               snprintf(l3, sizeof(l3), "%-20s", "");
   lcdLine(3, l3);
 }
@@ -824,6 +859,8 @@ static void hmiDrawHome() {
   else if (queueCount > 0)     snprintf(l2, sizeof(l2), "Q%-4d %-14s", queueCount,
                                         netState == NET_ONLINE ? "sending" : "no link");
   else if (rTindex >= rTsize)  snprintf(l2, sizeof(l2), "%-20s", "TALLY FULL");
+  else if (rTindex >= rTsize - TALLY_WARN_REMAINING)
+                                snprintf(l2, sizeof(l2), "TALLY %d LEFT%-7s", rTsize - rTindex, "");
   else                         snprintf(l2, sizeof(l2), "%-20s", "Sel=menu");
 
   lcdLine(0, l0); lcdLine(1, l1); lcdLine(2, l2);
@@ -912,11 +949,15 @@ static void hmiOnPress(int key, unsigned long now) {
 
 // Edge-triggered keypad + screen renderer. Non-blocking; no delay() anywhere.
 static void hmiPoll(unsigned long now) {
-  int k = keyIndex();
+  int k = keyIndex(now);
   if (k != keyPrev) { keyPrev = k; keyChangeMs = now; }
   else if (now - keyChangeMs >= KEY_DEBOUNCE_MS && k != keyStable) {
+    int prevStable = keyStable;
     keyStable = k;
-    if (k >= 0) hmiOnPress(k, now);         // act on press only, never on release or hold
+    // A press is intentional only if every button was released first. Going
+    // straight from one held button to another -- or releasing the top one and
+    // exposing a lower-priority one still held -- is rollover, not a new press.
+    if (k >= 0 && prevStable < 0) hmiOnPress(k, now);
   }
 
   // Row 3 is the display layer's fault row and every path below reaches it --
