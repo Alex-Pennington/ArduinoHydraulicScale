@@ -33,6 +33,10 @@ is a hard 150 ohm pull-down to GND -- two orders of magnitude stiffer than the 1
 at ~0 counts. 0 mA sits unambiguously below the 4 mA live zero with the entire 0-4 mA band as
 separation.
 
+**UPDATED 2026-09-16.** The mechanism is unchanged; the value is 68 ohm on the MCP3421 (still a
+hard pull-down, still two orders of magnitude stiffer than 10k-47k). See §2's superseding row and
+`include/loop_scaling.h`.
+
 Residual failure mode, recorded so it is not a surprise: if the **burden itself** opens while
 the loop is live, the loop drives a high-impedance pin and the protection diodes clamp it to
 rail -- which reads as fault-high. Caught, but by a different path than intended. A burden open
@@ -68,6 +72,7 @@ NAMUR NE43 banding separates them. See §4.
 | Loop supply | Dedicated 24 V, separate supply | Alex | 2026-09-13 |
 | Supply negative | Bonded to Arduino GND | derived | 2026-09-13 |
 | Burden resistor | **150 ohm, 0.1%, <=25 ppm/degC**, A2 to GND | Alex | 2026-09-13 |
+| Burden resistor — **SUPERSEDED 2026-09-16**, MCP3421 move | **68 ohm, 0.1%, <=25 ppm/degC**, across the MCP3421 differential input (not A2 to GND) | Alex | 2026-09-16 |
 | Circuit exceeds 3000 psi | Assumed true, over the spec-sheet figure | Alex | 2026-09-13 |
 | ADC input pin | A2, unchanged (`:62`) | already settled | 2026-09-01 |
 | Approach | mA is source of truth, counts derived (§4) | Alex | 2026-09-13 |
@@ -77,6 +82,15 @@ NAMUR NE43 banding separates them. See §4.
 | Filter on fault | Freeze it; hold last reading (§6.2) | Alex | 2026-09-13 |
 
 ### Why 150 ohm
+
+**SUPERSEDED 2026-09-16.** This whole section, including the trade table below, is the
+AVCC-referenced-ADC analysis. It was superseded by the move to the MCP3421, which carries its
+own 2.048 V reference and takes AVCC out of the measurement entirely — a different binding
+constraint, not a re-argument of this one. **150 ohm was the right answer here and this analysis
+is still correct for the ADC it was written against**; see the new "Why 68 ohm" reasoning in
+`include/loop_scaling.h`, which restates the same governing rule (`I * R <= reference voltage`,
+bound by the same PLC #3 29.7 mA hard-over) against the new 2.048 V reference instead of a 5 V
+rail.
 
 At AVCC 5.000 V, 14-bit, `counts = mA * R * 3.2766`:
 
@@ -159,6 +173,11 @@ Note: the sheet says `520M`; this workspace's notes say `M520`. Treated as the s
 Constants declared in milliamps against published standards; count thresholds derived at
 compile time from the burden and AVCC.
 
+**SUPERSEDED 2026-09-16.** This code block is the AVCC-era, 150 ohm design and is retained as
+that record; it must not be copied. The MCP3421 move takes AVCC out of the measurement and
+changes the burden to 68 ohm -- live constants are in `include/loop_scaling.h`, which carries
+the current version of this same block.
+
 ```cpp
 constexpr float BURDEN_OHMS = 150.0f;     // 0.1%, <=25 ppm/degC, A2 to GND
 constexpr float ADC_VREF_V  = 5.0f;
@@ -195,6 +214,13 @@ This closes the gap named in `Alex-Pennington/phoenix-nest-plc1#156` -- *classif
 is not the same as acting on it*. There, `LoopFault::LOW` is produced at `sensorIO.h:75` and
 consumed nowhere, so a dead loop on the saw circuit raises nothing at all. Every band below has
 a named consumer.
+
+**SUPERSEDED 2026-09-16.** This table's counts column is `counts @150 ohm` on the old
+AVCC-referenced 10-bit-resolution ADC and every count in it is now wrong for this board — the
+MCP3421 move changed both the burden (150 -> 68 ohm) and the reference (AVCC -> 2.048 V). The
+states, mA bands and consumers are unchanged; only the counts column is stale. Live counts are in
+`include/loop_scaling.h` (`COUNTS_DEAD` 952, `COUNTS_ZERO` 1088, `COUNTS_FS` 5440,
+`COUNTS_FAULT_HIGH` 5712) and in `MA-LOOP-DESIGN.md` §3.
 
 | counts @150 ohm | mA | state | LCD | `psi` | `psi_fault` | filter |
 |---|---|---|---|---|---|---|
@@ -308,6 +334,13 @@ works on a 12 V or a 24 V rail and so does not force the supply decision. When A
 0-25 mA range without clipping. Then playbook §10's **measured 29.7 mA hard-over** made the
 overvoltage argument decisive and returned it to 150 ohm. The final reason is unrelated to
 either earlier one.
+
+**Extended 2026-09-16: -> 68.** Not a fourth lap of the same trade — the ADC changed underneath
+it. Moving the loop reading to an MCP3421 with its own 2.048 V reference (instead of this
+board's 5 V AVCC) means `I * R <= 2.048 V` binds where `I * R <= 5 V` used to. The same governing
+constraint (hold under the rail through PLC #3's measured 29.7 mA hard-over) now picks 68 ohm as
+the largest E24 value, per `include/loop_scaling.h`. 150 ohm is not wrong; it answers a question
+about a rail this board no longer uses for the measurement.
 
 **The scope statement at `:70-71` is literally true and practically incomplete.** "Nothing else
 in the file hard-codes these values" is correct -- grep confirms 1638/14745/1311/15400 appear

@@ -28,6 +28,11 @@ The burden resistor closes the first by construction: 0 mA develops 0 V across 1
 at ~0 counts with the whole 0-4 mA band separating it from the live zero. NAMUR banding closes
 the second by giving "saturated but measuring" a state of its own.
 
+**UPDATED 2026-09-16.** The reasoning above still holds; only the number changed. 0 mA still
+develops 0 V, now across 68 ohm (the MCP3421 has its own reference, not this board's AVCC), and
+still lands at ~0 counts with the same separation from the live zero. See §2 below and
+`include/loop_scaling.h`.
+
 ---
 
 ## 2. Constants
@@ -36,6 +41,18 @@ mA is the source of truth; counts are derived at compile time. This file already
 documented cases of a hand-derived constant left stale when the resolution changed (`:914-919`
 names all three: the `map` in-max, the 10-bit filter seed, and the psi conversion). A count that
 silently *means* 21.0 mA would be the fourth.
+
+**SUPERSEDED 2026-09-16.** The whole constants block below is the AVCC-era, 10-bit-internal-ADC
+design. It is retained only as the historical record of that design; the live constants are
+`include/loop_scaling.h`. The block reproduces two defects this repo has since closed, and
+copying it now would reintroduce both:
+
+- `BURDEN_OHMS = 150.0f` clips at **13.65 mA (68.3% of the 20 mA span end)** against the
+  MCP3421's 2.048 V reference. The live value is **68 ohm** — see `include/loop_scaling.h` and
+  the 2026-09-16 marker in `notes/2026-09-13-4-20ma-loop-decisions.md` §2 for why 150 ohm was the
+  right answer for the AVCC-referenced ADC and was retired by the hardware change, not by error.
+- `ADC_FS = 16383` is wrong for the MCP3421: its signed 14-bit output tops out at **8191**, not
+  16383. Anyone copying this block gets a gauge that is both clipped and roughly 2x wrong.
 
 ```cpp
 // ---------------------------------------------------------------------------
@@ -63,6 +80,10 @@ silently *means* 21.0 mA would be the fourth.
 // AVCC error cancelled. A burden does not cancel -- the reading is I*R/AVCC, so
 // ADC_VREF_V below is a direct gain term. 5.0 is an assumption about a rail that
 // on USB power is typically 4.75-5.25 V. UNRESOLVED; may want measuring.
+//
+// RESOLVED 2026-09-16, and moot rather than measured: the MCP3421 carries its
+// OWN 2.048 V reference, so AVCC leaves the measurement as a gain term entirely.
+// That is a large part of why the branch moved to it. See include/loop_scaling.h.
 // ---------------------------------------------------------------------------
 constexpr float BURDEN_OHMS = 150.0f;   // 0.1%, <=25 ppm/degC, A2 to GND
 constexpr float ADC_VREF_V  = 5.0f;     // see the AVCC warning above

@@ -46,7 +46,8 @@ on both sides. **It proves arithmetic. It proves nothing about a transmitter or 
 
 Traced end to end by the final review, from `analogRead` to the wire and the LCD.
 
-**Bottom.** An open loop sources 0 mA, develops 0 V across the 150 ohm burden, and lands at ~0
+**Bottom.** An open loop sources 0 mA, develops 0 V across the burden (68 ohm; 150 ohm as
+written here, 2026-09-16 correction — see `include/loop_scaling.h`), and lands at ~0
 counts — `LOOP_DEAD`, `psi: null`, `psi_fault: "low"`, `NO SENSOR` on the display, filter frozen,
 all three operator verbs refused. The old front end floated near mid-rail at ~4401 counts and
 reported `sensor = ok` with a confident 632 psi.

@@ -137,6 +137,14 @@ The reasoning behind each of these figures — why 150 ohm, why 0.1%, why a dedi
 rather than the board's own rail — is in `MA-LOOP-DESIGN.md` and
 `notes/2026-09-13-4-20ma-loop-decisions.md`, not restated here.
 
+**Superseded again, 2026-09-16: the ADC changed, not the reasoning above.** This branch moved the
+loop reading from the board's 10-bit AVCC-referenced ADC to an MCP3421 with its own 2.048 V
+reference. 150 ohm was the right burden for the AVCC-referenced ADC and stays right in that
+context; it was retired by this hardware change, not by an error in the 2026-09-13 figure. Fit
+**68 ohm, 0.1%, <=25 ppm/degC**, and note it is now **across the MCP3421's differential input,
+not A2 to GND** — the ADC reading the loop is no longer the board's own. Live source of truth:
+`include/loop_scaling.h`.
+
 **Display — 16x2 LCD + keypad shield.** `LiquidCrystal(8,9,4,5,6,7)` (:126-133), backlight on
 pin 10 (declared, never driven), button ladder on A0 (:201). The ladder thresholds are 10-bit
 values read at 14-bit resolution, so only "Right" registers. The LCD never shows a weight.

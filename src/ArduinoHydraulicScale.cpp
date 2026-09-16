@@ -46,8 +46,8 @@ bool debug_flag = false;
 // ---------------------------------------------------------------------------
 // Transducer scaling lives in include/loop_scaling.h, in MILLIAMPS, with the
 // ADC counts derived from BURDEN_OHMS at compile time. Nothing here hard-codes
-// a count. See MA-LOOP-DESIGN.md for the design and
-// notes/2026-09-13-4-20ma-loop-decisions.md for why the burden is 150 ohm.
+// a count. See include/loop_scaling.h for why the burden is 68 ohm and
+// MA-LOOP-DESIGN.md for the design.
 // ---------------------------------------------------------------------------
 LoopState loopState = LOOP_OK;
 
