@@ -112,7 +112,7 @@ int pendingMsg = 0;   // 0 none, 1 added, 2 removed, 3 total, 4 link, 5 tare, 6 
 bool verbRefused = false;
 // Set alongside verbRefused when the reason is NOT the loop state -- kv's
 // span<=0.0f failure and a full tally are both refusals with nothing to do
-// with sensorStateName(). Empty means "use sensorStateName(), as before";
+// with displayStateName(). Empty means "use displayStateName(), as before";
 // non-empty overrides it. Reset with verbRefused so a stale reason from one
 // press can never be shown against a different one.
 char verbRefusedReason[21] = "";
@@ -127,8 +127,15 @@ const int MENU_COUNT = 6;
 const int SAMPLE_COUNT = 10;
 const unsigned long SAMPLE_SPACING_MS = 50;   // 10 x 50 ms = the old 500 ms period
 unsigned long lastSampleMs = 0;
+unsigned long lastGoodSampleMs = 0;   // millis() of the last successful mcpRead(); see READING_STALE_MS
 int  sampleN = 0;
 float sampleTotal = 0;
+
+// A healthy cycle is SAMPLE_COUNT 10 x SAMPLE_SPACING_MS 50 = 500 ms. 2000 ms
+// is four full cycles -- about forty consecutive failed reads -- which is
+// decisively a real fault, not a transient bus hiccup, and it bounds how long
+// a stale weight can sit on screen to two seconds.
+const unsigned long READING_STALE_MS = 2000;
 
 // --- LCD message hold (replaces the blocking delay(1000) after a command) ---
 // ---------------------------------------------------------------------------
@@ -349,6 +356,24 @@ static bool publishTo(const char *leaf, const char *payload) {
 }
 
 static const char *sensorStateName() { return loopStateName(loopState); }
+
+// Whether the reading is fresh enough to mean anything. Distinct from loop
+// state: the loop can be perfectly healthy while the ADC that reads it has
+// stopped answering, and a held sample is not a measurement. Unsigned
+// subtraction is deliberate and handles millis() rollover correctly -- do
+// not "fix" it by comparing absolute values.
+static bool readingFresh()       { return millis() - lastGoodSampleMs <= READING_STALE_MS; }
+static bool readingTrustworthy() { return loopIsMeasuring(loopState) && readingFresh(); }
+static bool operatorMayAct()     { return loopState == LOOP_OK && readingFresh(); }
+
+// sensorStateName() names the LOOP state and stays on the wire unchanged.
+// This is the DISPLAY-only wrapper: staleness takes precedence over loop
+// state wherever a state name is shown to the operator, because if the ADC
+// is not answering we do not know the loop state, and reporting the
+// last-known one would be a stale claim of its own.
+static const char *displayStateName() {
+  return readingFresh() ? sensorStateName() : "NO ADC";
+}
 
 // A buffered reading MUST be distinguishable from a live one. Publishing
 // backlog bare is worse than not buffering, because the consumer cannot tell
@@ -669,6 +694,10 @@ void setup() {
   }
   Console.print("heartbeat wdt = ");
   Console.println(hb ? "on" : "UNAVAILABLE - resets during network calls");
+
+  // Seeds the freshness clock so the first READING_STALE_MS after boot is not
+  // reported stale before any sample has been attempted.
+  lastGoodSampleMs = millis();
 }
 
 // ---------------------------------------------------------------------------
@@ -759,7 +788,7 @@ static void hmiMessage(const char *a, const char *b, unsigned long now) {
 // rock-steady rather than visibly decaying -- more convincing, not less.
 static void hmiRenderFaultRow() {
   char l3[21];
-  if (!loopIsMeasuring(loopState))   snprintf(l3, sizeof(l3), "%-20s", sensorStateName());
+  if (!readingTrustworthy())         snprintf(l3, sizeof(l3), "%-20s", displayStateName());
   else if (calibrationDefaulted)     snprintf(l3, sizeof(l3), "%-20s", "CAL NOT SET!");
   else if (mcpFailCount() > 0)       snprintf(l3, sizeof(l3), "I2C ERR %-12lu", (unsigned long)mcpFailCount());
   else                               snprintf(l3, sizeof(l3), "%-20s", "");
@@ -777,13 +806,13 @@ static void hmiDrawHome() {
   // are real measurements, over-range or below the live zero but measuring,
   // and withholding a weight because the transmitter is pinned was the old
   // defect, not a safeguard.
-  if (loopIsMeasuring(loopState))
+  if (readingTrustworthy())
     snprintf(l0, sizeof(l0), "W %8d lb  n%-4d", outputValue, rTindex);
   else
-    snprintf(l0, sizeof(l0), "%-20s", sensorStateName());
+    snprintf(l0, sizeof(l0), "%-20s", displayStateName());
 
   // Row 1: psi and mA, when the loop is actually measuring.
-  if (loopIsMeasuring(loopState))
+  if (readingTrustworthy())
     snprintf(l1, sizeof(l1), "psi %5d  mA %5.2f", pressureValue,
              (double)countsToMilliamps(sensorValue));
   else
@@ -809,14 +838,15 @@ static void hmiDrawMenu() {
 
 static void hmiDrawCheckCal() {
   char l0[21], l1[21];
-  // Kept from the 4-20 mA work: when the loop is not measuring, show the state
-  // and no number. sensorStateName() is deliberate -- the LCD and the wire must
-  // never disagree about which state this is. Row 3 (hmiRenderFaultRow) also
-  // carries this fault now, so this guard is belt-and-braces, not the only
-  // place the fault shows -- but it still keeps a stale `Reads 528` off this
-  // screen specifically.
-  if (!loopIsMeasuring(loopState)) {
-    snprintf(l0, sizeof(l0), "%-20s", sensorStateName());
+  // Kept from the 4-20 mA work: when the reading cannot be trusted, show the
+  // state and no number. displayStateName() is deliberate -- it names loop
+  // state exactly as the wire does, except when the ADC itself has gone
+  // stale, when it says so instead of repeating a held loop state. Row 3
+  // (hmiRenderFaultRow) also carries this fault now, so this guard is
+  // belt-and-braces, not the only place the fault shows -- but it still
+  // keeps a stale `Reads 528` off this screen specifically.
+  if (!readingTrustworthy()) {
+    snprintf(l0, sizeof(l0), "%-20s", displayStateName());
     snprintf(l1, sizeof(l1), "%-20s", "NO READING Lt=x");
   } else {
     snprintf(l0, sizeof(l0), "Should be %-6d", calWeight);
@@ -911,7 +941,7 @@ void loop() {
   if (currentMillis - lastSampleMs >= SAMPLE_SPACING_MS) {
     lastSampleMs = currentMillis;
     int c = 0;
-    if (mcpRead(c)) { sampleTotal += c; sampleN++; }
+    if (mcpRead(c)) { sampleTotal += c; sampleN++; lastGoodSampleMs = currentMillis; }
   }
 
   if (sampleN >= SAMPLE_COUNT) {
@@ -944,9 +974,9 @@ void loop() {
     // looks like a load being set down, which is this machine's characteristic
     // failure: a plausible wrong answer rather than a visible one. Holding the
     // last reading is playbook §6's rule and what PLC #3 does. hmiDrawHome()
-    // blanks row 0 whenever !loopIsMeasuring(loopState), so a held value is
-    // never shown as current -- that guard is what makes freezing safe.
-    if (loopIsMeasuring(loopState)) {
+    // blanks row 0 whenever !readingTrustworthy(), so a held value is never
+    // shown as current -- that guard is what makes freezing safe.
+    if (readingTrustworthy()) {
       smoothedValue = (smoothedValue * alpha) + (sensorValue * (1 - alpha));
     }
 
@@ -991,18 +1021,24 @@ void loop() {
     // different first checks at the machine. Both field names match PLC #3.
     // mA is the unit a person with a meter at the machine is comparing against.
     char psiField[12];
-    if (loopIsMeasuring(loopState)) snprintf(psiField, sizeof(psiField), "%d", pressureValue);
-    else                            snprintf(psiField, sizeof(psiField), "null");
+    if (readingTrustworthy()) snprintf(psiField, sizeof(psiField), "%d", pressureValue);
+    else                      snprintf(psiField, sizeof(psiField), "null");
 
     const char *psiFault = "null";
     if (loopState == LOOP_DEAD)            psiFault = "\"low\"";
     else if (loopState == LOOP_FAULT_HIGH) psiFault = "\"high\"";
 
+    // `stale` is a bare JSON boolean, not a string, and sits right after
+    // `sensor` -- the loop-state field it qualifies. `sensor` itself stays
+    // sensorStateName(): it is the LOOP state and must not be overridden by
+    // displayStateName() here, or a downstream consumer would lose the
+    // distinction between "loop faulted" and "ADC not answering".
     snprintf(payload, sizeof(payload),
              "{\"w\":%d,\"psi\":%s,\"mA\":%.2f,\"counts\":%d,\"sensor\":\"%s\","
-             "\"psi_fault\":%s,\"queued\":%d,\"id\":\"%s\"}",
+             "\"stale\":%s,\"psi_fault\":%s,\"queued\":%d,\"id\":\"%s\"}",
              outputValue, psiField, (double)countsToMilliamps(sensorValue),
-             sensorValue, sensorStateName(), psiFault, queueCount, CLIENT_ID);
+             sensorValue, sensorStateName(), readingFresh() ? "false" : "true",
+             psiFault, queueCount, CLIENT_ID);
     // A5: the periodic stream is telemetry, not debug. The deliberate record
     // goes to /weight. The old firmware had these inverted.
     publishTo("telemetry", payload);
@@ -1017,10 +1053,10 @@ void loop() {
       // Procedure: tare AT THE BOOM MARK, empty. Boom position changes the
       // unloaded pressure as well as the loaded pressure, so a tare taken
       // anywhere else puts a constant offset into every reading.
-      if (loopState != LOOP_OK) {
+      if (!operatorMayAct()) {
         verbRefused = true;
         Console.print("tare REFUSED: ");
-        Console.println(sensorStateName());
+        Console.println(displayStateName());
       } else {
         tareValue = sensorValue;
         saveCalibration();
@@ -1034,11 +1070,11 @@ void loop() {
       // T4 again: recording while the transducer reads as open or shorted would
       // put a fabricated number into the tally and publish it as a real weight.
       // A fault must refuse the operation, not quietly produce a plausible value.
-      if (loopState != LOOP_OK) {
+      if (!operatorMayAct()) {
         verbRefused = true;
         Console.print("NOT RECORDED: ");
-        Console.println(sensorStateName());
-        lcdLine(1, sensorStateName());
+        Console.println(displayStateName());
+        lcdLine(1, displayStateName());
       }
       else if (rTindex < rTsize) {
         rT[rTindex] = outputValue;
@@ -1115,12 +1151,12 @@ void loop() {
       // zero or negative; the old code produced inf or a sign flip and wrote
       // it straight to EEPROM.
       float span = (float)smoothedValue - (float)tareValue;
-      if (loopState != LOOP_OK) {
+      if (!operatorMayAct()) {
         verbRefused = true;
         // A short reads high and would yield a plausible-looking span. Both the
         // zero and the span are persisted, so a bad one survives the reboot.
         Console.print("cal REFUSED: ");
-        Console.println(sensorStateName());
+        Console.println(displayStateName());
       } else if (span <= 0.0f) {
         // Failed, not refused by a loop state -- the deferred render must not
         // paint "Calibrated / check it now" over this, and the reason it gives
@@ -1212,7 +1248,12 @@ void loop() {
     // A refused verb NEVER paints a success message. OPERATOR.md promises the
     // refusal names the state; the console kept that promise and the keypad did
     // not, and the keypad is the operator's actual interface. Row 1 is
-    // sensorStateName() so the LCD, the console and the wire all say one thing.
+    // displayStateName() so the LCD, the console and the wire all say one thing
+    // -- and a stale ADC is named as NO ADC here too, not as a held-over "ok".
+    // This is the ONLY path a keypad-triggered tare/+/kv refusal actually
+    // reaches the LCD through: hmiOnPress() sets pendingMsg, so any lcdLine()
+    // written earlier in the verb's own if-block (see "+") is overwritten by
+    // hmiMessage() below before the operator ever sees it.
     if (verbRefused) {
       const char *head = "REFUSED";
       switch (pendingMsg) {
@@ -1221,11 +1262,11 @@ void loop() {
         case 6: head = "CAL REFUSED";  break;
       }
       snprintf(a, sizeof(a), "%-16s", head);
-      // verbRefusedReason overrides sensorStateName() when the refusal was NOT
+      // verbRefusedReason overrides displayStateName() when the refusal was NOT
       // about the loop state (kv's span<=0.0f, a full tally) -- see where it is
       // set. Empty means the old behaviour: name the sensor state.
       snprintf(b, sizeof(b), "%-16s",
-               verbRefusedReason[0] ? verbRefusedReason : sensorStateName());
+               verbRefusedReason[0] ? verbRefusedReason : displayStateName());
     }
     else switch (pendingMsg) {
       case 1: snprintf(a, sizeof(a), "Added %-10d", outputValue);
