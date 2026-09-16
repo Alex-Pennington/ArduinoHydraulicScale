@@ -92,6 +92,10 @@ bool stringComplete = false;  // whether the string is complete
 const unsigned long KEY_DEBOUNCE_MS = 40;
 const unsigned long MSG_HOLD_MS     = 1500;
 
+// Five buttons to GND on pins freed by the I2C display, read with INPUT_PULLUP.
+// Order matches the old ladder exactly: Right, Up, Down, Left, Select.
+const uint8_t KEY_PINS[5] = { 4, 5, 6, 7, 8 };
+
 enum Screen { SCR_HOME, SCR_MENU, SCR_CONFIRM, SCR_CHECKCAL };
 Screen screen = SCR_HOME;
 
@@ -337,17 +341,6 @@ static bool publishTo(const char *leaf, const char *payload) {
   if (!mqttClient.beginMessage(topic)) return false;       // return IS checked — silent loss was C6
   mqttClient.print(payload);
   return mqttClient.endMessage() == 1;
-}
-
-// Ladder decode, shared by the keypad handler and the `keys` diagnostic so the two
-// can never disagree about what a reading means.
-static const char *keyName(int x) {
-  if (x < 60)  return "Right";
-  if (x < 200) return "Up";
-  if (x < 400) return "Down";
-  if (x < 600) return "Left";
-  if (x < 800) return "Select";
-  return "none";
 }
 
 static const char *sensorStateName() { return loopStateName(loopState); }
@@ -619,6 +612,8 @@ void setup() {
   lcdLine(0, "Loader Scale");
   lcdLine(1, "Press Key:");
 
+  for (int i = 0; i < 5; i++) pinMode(KEY_PINS[i], INPUT_PULLUP);
+
   tallyRestore();
   captureResetCause();
   Console.print("tally restored = ");
@@ -727,19 +722,13 @@ static void tallyRestore() {
   tallySigWritten = true;                      // already on flash; do not rewrite it
 }
 
-// Map a raw ladder reading to a key index, or -1 for "no button".
-//
-// MEASURED on the fitted shield 2026-09-01 with the `keys` verb, at 10-bit:
-//   Right 0   Up 145   Down 343   Left 516   Select 731   none 1016
-// Every reading sits well inside its band, so the thresholds inherited from the
-// uno-r3-swserial-lcd branch are correct for this hardware and need no remap.
-// They are only valid at 10 bits - see the analogReadResolution(10) in hmiPoll().
-static int keyIndex(int x) {
-  if (x < 60)  return 0;   // Right
-  if (x < 200) return 1;   // Up
-  if (x < 400) return 2;   // Down
-  if (x < 600) return 3;   // Left
-  if (x < 800) return 4;   // Select
+// A LADDER COULD ONLY EVER REPORT ONE KEY -- it is a voltage divider. Discrete
+// buttons can be pressed together, and everything downstream assumes "one key or
+// none": two at once would present as chatter between two stable values and the
+// debounce would fire repeatedly. So scan in fixed priority and return the FIRST
+// pressed, preserving the old contract exactly.
+static int keyIndex() {
+  for (int i = 0; i < 5; i++) if (digitalRead(KEY_PINS[i]) == LOW) return i;
   return -1;
 }
 
@@ -881,8 +870,7 @@ static void hmiOnPress(int key, unsigned long now) {
 
 // Edge-triggered keypad + screen renderer. Non-blocking; no delay() anywhere.
 static void hmiPoll(unsigned long now) {
-  analogReadResolution(10);                 // the ladder is a 10-bit divider
-  int k = keyIndex(analogRead(0));
+  int k = keyIndex();
   if (k != keyPrev) { keyPrev = k; keyChangeMs = now; }
   else if (now - keyChangeMs >= KEY_DEBOUNCE_MS && k != keyStable) {
     keyStable = k;
@@ -1178,30 +1166,6 @@ void loop() {
       Console.println("hang: stopping the loop. watchdog should reset in ~5 s.");
       Console.flush();
       for (;;) { }        // no heartbeat, no WDT.refresh
-    }
-    else if (inputString == "keys") {
-      // Live ladder sampler. Press each button in turn; every change in the decoded
-      // key is reported with its raw A0 value, so the thresholds can be re-derived
-      // against the shield actually fitted rather than inherited from the R3 branch.
-      Console.println("keys: press each button. 15 s.");
-      analogReadResolution(10);          // the ladder is a 10-bit divider
-      int lastKey = -999;
-      unsigned long until = millis() + 15000UL;
-      while ((long)(millis() - until) < 0) {
-        int x = analogRead(0);
-        const char *k = keyName(x);
-        if (x / 8 != lastKey / 8) {      // report on a real change, not on jitter
-          Console.print("  raw = ");
-          Console.print(x);
-          Console.print("   -> ");
-          Console.println(k);
-          lastKey = x;
-        }
-        loopHeartbeatMs = millis();      // this loop is long; keep the heartbeat alive
-        WDT.refresh();
-        delay(60);
-      }
-      Console.println("keys: done");
     }
     else if (inputString == "net") {
       Console.print("wifi = ");
