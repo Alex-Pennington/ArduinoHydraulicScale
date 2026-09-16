@@ -35,12 +35,6 @@ constexpr int mAToCounts(float mA) {
   return (int)(mA * BURDEN_OHMS / 1000.0f / MCP3421_LSB_V + 0.5f);
 }
 
-// Backwards compatibility: Arduino sketch still uses these. Both need updating
-// to account for the new ADC and reference; this shim allows compilation while
-// those updates are staged in separate tasks.
-constexpr float ADC_VREF_V = MCP3421_VREF_V;
-constexpr int   ADC_FS     = (1 << MCP3421_BITS) - 1;  // 16383
-
 // NAMUR NE43 and the estate's settled figures. Every value cites a source; none
 // is invented here.
 //
