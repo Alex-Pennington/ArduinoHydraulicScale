@@ -115,7 +115,7 @@ bool verbRefused = false;
 // with sensorStateName(). Empty means "use sensorStateName(), as before";
 // non-empty overrides it. Reset with verbRefused so a stale reason from one
 // press can never be shown against a different one.
-char verbRefusedReason[17] = "";
+char verbRefusedReason[21] = "";
 int  tarePrev = -1;            // previous zero, for Undo tare
 bool lcdDirty = true;
 
@@ -768,13 +768,19 @@ static void hmiRenderFaultRow() {
 
 static void hmiDrawHome() {
   char l0[21], l1[21], l2[21];
-  // Row 0: the weight. SATURATED and UNDER ZERO deliberately still show it —
-  // they are real measurements, over-range or below the live zero but
-  // measuring, and withholding a weight because the transmitter is pinned was
-  // the old defect, not a safeguard. Fault indication now belongs to row 3
-  // (hmiRenderFaultRow), which every screen reaches, so this row no longer
-  // needs to carry it.
-  snprintf(l0, sizeof(l0), "W %8d lb  n%-4d", outputValue, rTindex);
+  // Row 0: the weight, blanked when the loop is not measuring (DEAD,
+  // FAULT_HIGH). Row 3 (hmiRenderFaultRow) names the fault on every screen,
+  // but that does not make this guard unnecessary: without it, a frozen
+  // filter value (see the freeze block below) sits rock-steady on this row
+  // while row 3 names the fault underneath it -- a confident wrong number
+  // next to the truth. SATURATED and UNDER ZERO still show the weight: they
+  // are real measurements, over-range or below the live zero but measuring,
+  // and withholding a weight because the transmitter is pinned was the old
+  // defect, not a safeguard.
+  if (loopIsMeasuring(loopState))
+    snprintf(l0, sizeof(l0), "W %8d lb  n%-4d", outputValue, rTindex);
+  else
+    snprintf(l0, sizeof(l0), "%-20s", sensorStateName());
 
   // Row 1: psi and mA, when the loop is actually measuring.
   if (loopIsMeasuring(loopState))
@@ -937,9 +943,9 @@ void loop() {
     // loop drags the weight SMOOTHLY DOWN to a plausible-looking number -- it
     // looks like a load being set down, which is this machine's characteristic
     // failure: a plausible wrong answer rather than a visible one. Holding the
-    // last reading is playbook §6's rule and what PLC #3 does. The LCD writes
-    // the fault over the weight either way, so a held value is never shown as
-    // current.
+    // last reading is playbook §6's rule and what PLC #3 does. hmiDrawHome()
+    // blanks row 0 whenever !loopIsMeasuring(loopState), so a held value is
+    // never shown as current -- that guard is what makes freezing safe.
     if (loopIsMeasuring(loopState)) {
       smoothedValue = (smoothedValue * alpha) + (sensorValue * (1 - alpha));
     }
@@ -1202,7 +1208,7 @@ void loop() {
   // Deferred keypad feedback, rendered now that the verb has run and the counters
   // are current. Nothing else writes to the LCD: the HMI owns the display.
   if (pendingMsg) {
-    char a[17], b[17];
+    char a[21], b[21];
     // A refused verb NEVER paints a success message. OPERATOR.md promises the
     // refusal names the state; the console kept that promise and the keypad did
     // not, and the keypad is the operator's actual interface. Row 1 is
