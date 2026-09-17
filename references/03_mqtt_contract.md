@@ -16,7 +16,8 @@ chose to keep.
 |---|---|---|---|
 | `plc4/jd5055e/weight` | no | 0 | The operator records a weight, and again for each queued weight on reconnect |
 | `plc4/jd5055e/telemetry` | no | 0 | On a repeating cycle while connected |
-| `plc4/jd5055e/status` | yes | 1 | On a slower cycle, and as the last will |
+| `plc4/jd5055e/status` | yes | 1 | On a slower cycle, by the machine |
+| `plc4/jd5055e/status` | yes | 0 | Once, by the broker, if the machine drops without disconnecting |
 
 The root is one constant and every topic is built from it. A topic that would not fit its buffer is
 refused rather than published to a truncated stub.
@@ -89,7 +90,9 @@ the last one published.
 | `vbus`, `shunt_mv` | Supply volts and shunt millivolts, or null when unread |
 
 The last will is armed before the connection, so the broker publishes it if the machine drops
-without disconnecting cleanly.
+without disconnecting cleanly. It lands on the same topic and is retained like the cyclic status,
+but at the lower quality of service: a subscriber sees both arrive on `status`, and the one that
+says the machine is down was sent by the broker rather than by the machine.
 
 ```json
 {"up":false,"id":"..."}
