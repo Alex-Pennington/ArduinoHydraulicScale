@@ -1,6 +1,10 @@
 # Controller Card — PLC #4 Tractor Scale
+## Cabinet Reference Card
 
-Decision authority: Alex Pennington. Status: design of record.
+PHOENIX NEST LLC · PLC #4
+**Document:** 01 — Controller Card
+**Firmware:** EEPROM signature PL4B
+**Controller:** Arduino Uno R4 WiFi
 
 An Arduino Uno R4 WiFi carries the whole machine. Every sensor and the display reach it over one
 Qwiic bus through an eight-channel multiplexer; the operator keys are the only direct wiring.
@@ -71,4 +75,4 @@ keys keep working, and the fault row says so until it is released.
 
 ## See also
 
-`10_pressure_loop_wiring.md` for the transmitter, the burden resistor and the loop supply.
+`02_pressure_loop_wiring.md` for the transmitter, the burden resistor and the loop supply.

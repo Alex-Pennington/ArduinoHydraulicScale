@@ -1,6 +1,10 @@
 # Pressure Loop Wiring — PLC #4 Tractor Scale
+## Wiring Reference
 
-Decision authority: Alex Pennington. Status: design of record.
+PHOENIX NEST LLC · PLC #4
+**Document:** 02 — Pressure Loop Wiring
+**Firmware:** EEPROM signature PL4B
+**Controller:** Arduino Uno R4 WiFi
 
 One two-wire pressure transmitter on the loader lift circuit, powered from its own 24 V supply,
 read as the voltage across a burden resistor at the analog-to-digital converter.
@@ -79,4 +83,4 @@ Rosemount-class transmitter needs at its terminals.
 
 ## See also
 
-`04_controller_card.md` for the converter, the bus it sits on and its channel.
+`01_controller_card.md` for the converter, the bus it sits on and its channel.

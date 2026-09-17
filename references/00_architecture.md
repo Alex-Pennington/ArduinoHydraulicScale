@@ -1,6 +1,10 @@
 # Architecture — PLC #4 Tractor Scale
+## Cabinet Reference Card
 
-Decision authority: Alex Pennington. Status: design of record.
+PHOENIX NEST LLC · PLC #4
+**Document:** 00 — Architecture
+**Firmware:** EEPROM signature PL4B
+**Controller:** Arduino Uno R4 WiFi
 
 PLC #4 weighs what the loader is carrying by measuring hydraulic pressure in the lift circuit.
 It shows the weight to the operator at the machine and publishes it to the estate broker.
@@ -70,5 +74,5 @@ between them. Dated audit and commissioning records are kept outside it.
 
 ## See also
 
-`04_controller_card.md` for the controller, the bus and the operator keys.
-`10_pressure_loop_wiring.md` for the transmitter, the loop supply and the burden resistor.
+`01_controller_card.md` for the controller, the bus and the operator keys.
+`02_pressure_loop_wiring.md` for the transmitter, the loop supply and the burden resistor.
