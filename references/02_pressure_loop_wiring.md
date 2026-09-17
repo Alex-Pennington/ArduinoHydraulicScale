@@ -83,4 +83,4 @@ Rosemount-class transmitter needs at its terminals.
 
 ## See also
 
-`01_controller_card.md` for the converter, the bus it sits on and its channel.
+`01` §*Bus channels* for the converter's address and the channel it answers on.

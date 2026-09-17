@@ -48,6 +48,16 @@ them alone rather than assuming they are spare inputs.
 The console answers on both the USB port and the radio module, and takes commands from either.
 A technician with a laptop and an operator with a handset see the same output.
 
+| Device | Terminal | Direction | Rate |
+|---|---|---|---|
+| Radio module | D0 | Board receives | 9600 baud |
+| Radio module | D1 | Board transmits | 9600 baud |
+| USB | — | Both directions | 115200 baud |
+
+> **The radio pair crosses.** The module's transmit pin lands on D0 and its receive pin on D1.
+> Wired straight through, the console is silent both ways with nothing else wrong and nothing to
+> see: the board keeps weighing, so the fault looks like a dead module rather than a swapped pair.
+
 Two commands report the bus directly. `i2c` scans the trunk and then every channel, naming what
 answers. `pwr` reports the voltage and current monitor.
 
@@ -75,4 +85,4 @@ keys keep working, and the fault row says so until it is released.
 
 ## See also
 
-`02_pressure_loop_wiring.md` for the transmitter, the burden resistor and the loop supply.
+`02` §*Connections* for how the transmitter, the burden resistor and the supply join up.

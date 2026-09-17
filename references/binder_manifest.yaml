@@ -39,3 +39,43 @@ documents:
   version: '1'
   odin_id: pending
   last_updated: '2026-09-17'
+- num: '03'
+  source: 03_mqtt_contract.md
+  title: MQTT Contract — PLC #4 Tractor Scale
+  subtitle: The three published topics, their payloads, retain and quality of service
+  kind: Cabinet Reference Card
+  subject: Topic root and leaves, weight, telemetry and status payloads, the last
+    will, the six sensor values, staleness
+  version: '1'
+  odin_id: pending
+  last_updated: '2026-09-17'
+- num: '04'
+  source: 04_decisions.md
+  title: Decisions — PLC #4 Tractor Scale
+  subtitle: What has been decided about this machine, and by whom
+  kind: Decision Record
+  subject: Measurement front end, scaling, reporting contract, operating rules
+  version: '1'
+  odin_id: pending
+  last_updated: '2026-09-17'
+- num: '05'
+  source: 05_known_defects.md
+  title: Known Defects — PLC #4 Tractor Scale
+  subtitle: What is known to be wrong, what to do until it is fixed, and standing hazards
+  kind: Defect Register
+  subject: Open defects, defects closed by the current firmware, standing hazards of
+    the build
+  version: '1'
+  odin_id: pending
+  last_updated: '2026-09-17'
+- num: '06'
+  source: 06_purchase_list.md
+  title: Purchase List — PLC #4 Tractor Scale
+  subtitle: What the machine is built from, by the characteristics that matter when
+    ordering
+  kind: Purchase List
+  subject: Measurement chain, controller and bus, operator interface, devices fitted
+    and unused
+  version: '1'
+  odin_id: pending
+  last_updated: '2026-09-17'

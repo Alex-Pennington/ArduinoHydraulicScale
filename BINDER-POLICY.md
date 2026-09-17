@@ -229,14 +229,16 @@ denial of the symbol itself qualifies.
 
 **2. The accepted-residual listing.** Where a name is not a firmware symbol at all,
 `.binder-policy-accepted` carries it, one line per residual, naming what it actually is — the
-same discipline §3 applies to SHA-shaped data and §6 to panel legends. Three entries sit there
-today, all of them `13_cab1_edge_stack.md`: `MQTT_HOST`, `GF_SERVER_HTTP_ADDR` and
-`GF_SERVER_ROOT_URL` are environment variables for the cab1 Raspberry Pi, never compiled into the
-sketch. **A residual is accepted by being named, never by being hidden** — list it and say what
-it is, or fix the card.
+same discipline §3 applies to SHA-shaped data and §6 to panel legends. One entry sits there
+today, on `03_mqtt_contract.md`: the card quotes the sensor values `UNDER ZERO`, `XMTR FAULT` and
+`BAD STATE` verbatim because a consumer matches them as strings, and re-casing them to satisfy the
+caps count would make the card disagree with the wire. **A residual is accepted by being named, never by being hidden** — list
+it and say what it is, or fix the card.
 
-**Firmware roots are per-repo**, so the check travels. `BINDER_FIRMWARE_ROOTS` names them, and
-where no root is found the gate says NOT CHECKED out loud rather than passing silently.
+**Firmware roots are per-repo**, so the check travels. In this repo the firmware is `src/` and
+`include/`, and `check-binder-policy.sh` carries that as its default so a fresh clone checks the
+cards without being told. `BINDER_FIRMWARE_ROOTS` overrides it, and where no root is found the
+gate says NOT CHECKED out loud rather than passing silently.
 
 **See also** §7 for what the gate covers and what it leaves unchecked.
 

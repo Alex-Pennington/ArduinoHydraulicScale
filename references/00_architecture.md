@@ -74,5 +74,6 @@ between them. Dated audit and commissioning records are kept outside it.
 
 ## See also
 
-`01_controller_card.md` for the controller, the bus and the operator keys.
-`02_pressure_loop_wiring.md` for the transmitter, the loop supply and the burden resistor.
+`01` §*Bus channels* for the sensor bus and what sits on each channel.
+`01` §*Keys* for the operator keys and what each one does.
+`02` §*Parts* for the transmitter, the loop supply and the burden resistor.

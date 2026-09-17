@@ -57,7 +57,7 @@ words() { wc -w < "$1"; }
 # skipped; if none exist the check says NOT CHECKED out loud rather than passing
 # silently, because a gate that is silent reads as "clean" when it means "not
 # looked at".
-FWROOTS="${BINDER_FIRMWARE_ROOTS:-plc1 libraries sensor_bringup}"
+FWROOTS="${BINDER_FIRMWARE_ROOTS:-src include}"
 
 # A card may legitimately name a symbol in order to say it is NOT there --
 # 16_esr_system.md on ESR_CONTACT_FORM, 17_esr_build_spec.md on

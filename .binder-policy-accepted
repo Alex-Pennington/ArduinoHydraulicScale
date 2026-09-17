@@ -1,0 +1,29 @@
+# Accepted residuals — BINDER-POLICY.md §6 and §6a.
+#
+# A residual is accepted by being NAMED, never by being hidden. Each line below
+# records a gate hit that is data rather than the thing the rule exists to stop,
+# and says what the data is. Format: <card>|<substring of the gate's message>
+#
+# ---------------------------------------------------------------------------
+# 03_mqtt_contract.md — caps-runs 4.8/1k against a 4.0 ceiling
+#
+# Four runs. One is the binder's own header; the other three are LITERAL VALUES
+# CARRIED ON THE WIRE, quoted so a consumer can match them exactly:
+#
+#   PHOENIX NEST LLC   the front-matter line every card in the estate carries
+#   UNDER ZERO         sensor value: below the live zero, still measuring
+#   XMTR FAULT         sensor value: at or above the fault threshold
+#   BAD STATE          sensor value: a corrupted record, never a live reading
+#
+# The three sensor values are produced verbatim by loopStateName() in
+# include/loop_scaling.h and appear in the weight, telemetry and status
+# payloads. A consumer matches them as strings. Re-casing them to satisfy the
+# gate would make the card disagree with the wire, which is the same failure
+# §6 describes for panel legends: the card must read the way the thing in front
+# of the reader reads.
+#
+# "NO SENSOR" and "SATURATED" are also sensor values and also appear on this
+# card. The gate does not count them -- its pattern needs three or more capitals
+# in the first word of a run -- which is a further sign the count tracks letter
+# shapes rather than shouting.
+03_mqtt_contract.md|caps-runs
