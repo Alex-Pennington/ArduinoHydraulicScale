@@ -38,4 +38,12 @@ if [ ! -f "$SKETCH/arduino_secrets.h" ]; then
   sed -e 's/"your-[a-z-]*"/"x"/g' "$REPO/arduino_secrets.h.example" > "$SKETCH/arduino_secrets.h"
 fi
 
+# wifi_networks.h is generated from real credentials by tools/gen-wifi-networks.sh
+# and is gitignored, so a fresh checkout has only the example. Fall back to it:
+# the example declares a single network from arduino_secrets.h, which is exactly
+# the pre-multi-AP behaviour and compiles identically.
+if [ ! -f "$SKETCH/wifi_networks.h" ]; then
+  cp "$REPO/include/wifi_networks.h.example" "$SKETCH/wifi_networks.h"
+fi
+
 exec arduino-cli compile --fqbn "$FQBN" --warnings default "$SKETCH"

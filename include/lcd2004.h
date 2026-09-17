@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <Wire.h>
+#include "i2c_mux.h"
 
 // LCD2004A, 20x4, PCF8574 I2C backpack at 0x27, on Wire1 (Qwiic).
 // Direct I2C rather than LiquidCrystal_I2C, matching LogSplitter_Monitor, which
@@ -31,6 +32,9 @@ inline void lcdData(uint8_t c) { lcdSend(c, 0x01); }
 
 inline void lcdBegin() {
   Wire1.begin();
+  // The display sits behind the mux; without its channel selected this entire
+  // init sequence goes nowhere and the panel stays blank. See include/i2c_mux.h.
+  i2cMuxSelect(I2C_CH_LCD2004);
   delay(50);
   lcdPulse(0x30); delay(5);
   lcdPulse(0x30); delayMicroseconds(150);
@@ -46,6 +50,10 @@ inline void lcdBegin() {
 inline void lcdLine(uint8_t row, const char *text) {
   static const uint8_t base[4] = { 0x00, 0x40, 0x14, 0x54 };
   if (row > 3) return;
+  // Select once per LINE, not per character: a render is 80 characters and the
+  // select is skipped anyway when the channel has not changed. The sampler
+  // flips the mux to the ADC between renders, so this cannot be hoisted out.
+  i2cMuxSelect(I2C_CH_LCD2004);
   lcdCmd(0x80 | base[row]);
   uint8_t i = 0;
   // Stop at the null terminator — never read past it

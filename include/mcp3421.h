@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <Wire.h>
+#include "i2c_mux.h"
 #include "loop_scaling.h"
 
 // ---------------------------------------------------------------------------
@@ -26,6 +27,9 @@ inline uint32_t  mcpFailCount()    { return mcpFailCountRef(); }
 
 inline bool mcpBegin() {
   Wire1.begin();
+  // The ADC sits behind the mux; without its channel selected this talks to
+  // nothing and the part looks absent. See include/i2c_mux.h.
+  if (!i2cMuxSelect(I2C_CH_MCP3421)) return false;
   Wire1.beginTransmission(MCP3421_ADDR);
   Wire1.write(MCP3421_CONFIG);
   return Wire1.endTransmission() == 0;
@@ -39,6 +43,12 @@ inline bool mcpBegin() {
 // "no sensor" from a loose Qwiic connector, which is the plausible-wrong-answer
 // failure this machine's whole history is about.
 inline bool mcpRead(int &countsOut) {
+  // Select once per read, not per byte. A failed select is a bus failure and is
+  // counted as one -- if the mux will not answer, neither will the ADC.
+  if (!i2cMuxSelect(I2C_CH_MCP3421)) {
+    mcpFailCountRef()++;
+    return false;
+  }
   if (Wire1.requestFrom((uint8_t)MCP3421_ADDR, (uint8_t)3) != 3) {
     mcpFailCountRef()++;
     return false;
