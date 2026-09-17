@@ -80,6 +80,20 @@ const int TALLY_WARN_REMAINING = 5;
 // entries of -5. A total that is visibly absurd is better than one that is quietly
 // wrong, but neither belongs on the operator's display.
 long rTsum = 0;
+
+// The tally's running total, summed from the entries on demand rather than
+// carried. `-` zeroes an entry and `b` clears the lot, so a carried total
+// drifts from the tally it claims to describe the first time the operator
+// removes a weight, and a published total that disagrees with what `sum`
+// prints on the display is worse than publishing none. Returns long because
+// rTsum is one: fifty ints cannot overflow it, and the unsigned version of
+// this total underflowed on a negative weight once already.
+static long tallyTotal() {
+  long t = 0;
+  for (int i = 0; i < rTindex; i++) t += rT[i];
+  return t;
+}
+
 String inputString = "";         // a String to hold incoming data
 bool stringComplete = false;  // whether the string is complete
 
@@ -425,12 +439,22 @@ static bool keyStuck() {
 // backlog bare is worse than not buffering, because the consumer cannot tell
 // stale from fresh. age_ms is the delta at flush; live readings carry 0.
 static bool publishWeight(int32_t w, uint32_t ageMs, bool backlog) {
-  char payload[128];
+  char payload[160];
+  // `total` is the tally AFTER this weight, so a consumer gets the running
+  // total atomically with the record that moved it and never has to add the
+  // weights up itself. The status topic carries the same figure, but only once
+  // a minute; this one arrives the moment the operator records.
+  //
+  // The replayed-backlog path in queueFlush() deliberately does NOT carry it.
+  // The total there would be today's, standing beside a weight captured before
+  // the link dropped -- a true number in a position that makes it read as the
+  // total at capture.
   snprintf(payload, sizeof(payload),
            "{\"w\":%ld,\"age_ms\":%lu,\"backlog\":%s,\"sensor\":\"%s\","
-           "\"cal\":\"%s\",\"id\":\"%s\"}",
+           "\"cal\":\"%s\",\"n\":%d,\"total\":%ld,\"id\":\"%s\"}",
            (long)w, (unsigned long)ageMs, backlog ? "true" : "false",
-           sensorStateName(), calibrationDefaulted ? "DEFAULT" : "ok", CLIENT_ID);
+           sensorStateName(), calibrationDefaulted ? "DEFAULT" : "ok",
+           rTindex, tallyTotal(), CLIENT_ID);
   return publishTo("weight", payload);
 }
 
@@ -471,13 +495,13 @@ static void publishStatus(unsigned long now) {
 
   snprintf(payload, sizeof(payload),
     "{\"up\":true,\"cal\":\"%s\",\"sensor\":\"%s\",\"stale\":%s,\"tare\":%d,\"cf\":%.5f,"
-    "\"n\":%d,\"q\":%d,\"dropped\":%lu,\"uptime_s\":%lu,\"rssi\":%d,"
+    "\"n\":%d,\"total\":%ld,\"q\":%d,\"dropped\":%lu,\"uptime_s\":%lu,\"rssi\":%d,"
     "\"overrange\":%lu,\"overrange_max\":%d,\"underrange\":%lu,\"i2c_err\":%lu,"
     "\"vbus\":%s,\"shunt_mv\":%s,\"ina_err\":%lu,"
     "\"reset\":\"%s\",\"id\":\"%s\"}",
     calibrationDefaulted ? "DEFAULT" : "ok",
     sensorStateName(), readingFresh() ? "false" : "true", tareValue, calFactor,
-    rTindex, queueCount, queueDropped,
+    rTindex, tallyTotal(), queueCount, queueDropped,
     (unsigned long)(now / 1000UL), (int)WiFi.RSSI(),
     overRangeCount, overRangeMaxCounts, underRangeCount,
     (unsigned long)mcpFailCount(),
@@ -1331,13 +1355,14 @@ void loop() {
       else                      Console.println(displayStateName());
     }
     else if (inputString == "sum") {
-      rTsum = 0;
       for (int i = 0; i < rTindex; i++) {
-        rTsum += rT[i];
         Console.print(i);
         Console.print(" = ");
         Console.println(rT[i]);
       }
+      // One implementation of the total, so what the operator reads here and
+      // what the broker receives can never be different numbers.
+      rTsum = tallyTotal();
       Console.print("sum = ");
       Console.println(rTsum);
     }
@@ -1482,7 +1507,7 @@ void loop() {
               snprintf(b, sizeof(b), "%d in tally", rTindex); break;
       case 2: snprintf(a, sizeof(a), "%-16s", "Removed last");
               snprintf(b, sizeof(b), "%d in tally", rTindex); break;
-      case 3: { long t = 0; for (int i = 0; i < rTindex; i++) t += rT[i];
+      case 3: { long t = tallyTotal();
                 rTsum = t;
                 snprintf(a, sizeof(a), "Total %10ld", t);
                 snprintf(b, sizeof(b), "%d entries", rTindex); } break;

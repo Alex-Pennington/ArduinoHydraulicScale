@@ -27,7 +27,8 @@ refused rather than published to a truncated stub.
 A deliberate record. The operator pressed the key; this is what the machine kept.
 
 ```json
-{"w":1834,"age_ms":0,"backlog":false,"sensor":"ok","cal":"ok","id":"..."}
+{"w":1834,"age_ms":0,"backlog":false,"sensor":"ok","cal":"ok",
+ "n":12,"total":19408,"id":"..."}
 ```
 
 | Field | Meaning |
@@ -37,6 +38,16 @@ A deliberate record. The operator pressed the key; this is what the machine kept
 | `backlog` | True when this was held on the machine and published later |
 | `sensor` | Loop state at the moment of capture, not at the moment of publication |
 | `cal` | `ok`, or `DEFAULT` when the machine was uncalibrated at capture |
+| `n` | Entries in the tally after this one |
+| `total` | Running total of the tally after this one |
+
+> **The running total arrives with the record that moved it.** A consumer never has to add the
+> weights up itself, and never races a message it has not seen yet. The status topic carries the
+> same figure, but only once a minute.
+
+> **A replayed weight carries no total.** The figure would be today's, standing beside a weight
+> captured before the link dropped — a true number in a position that makes it read as the total
+> at the time of capture.
 
 > **Treat `backlog` and `age_ms` as part of the reading.** A buffered weight published bare is
 > worse than not buffering at all, because the consumer cannot tell it from a fresh one. A record
@@ -73,7 +84,7 @@ the last one published.
 
 ```json
 {"up":true,"cal":"ok","sensor":"ok","stale":false,"tare":412,"cf":0.51230,
- "n":12,"q":0,"dropped":0,"uptime_s":8130,"rssi":-58,"overrange":0,
+ "n":12,"total":19408,"q":0,"dropped":0,"uptime_s":8130,"rssi":-58,"overrange":0,
  "overrange_max":0,"underrange":0,"i2c_err":0,"vbus":13.120,
  "shunt_mv":-12.710,"ina_err":0,"reset":"...","id":"..."}
 ```
@@ -83,7 +94,8 @@ the last one published.
 | `up` | True while running. The will publishes false |
 | `cal` | `ok`, or `DEFAULT` when no stored calibration was accepted |
 | `tare`, `cf` | The stored zero and the calibration factor |
-| `n`, `q`, `dropped` | Recorded weights, weights waiting, weights lost |
+| `n`, `total` | Entries in the tally, and their running total |
+| `q`, `dropped` | Weights waiting to publish, weights lost |
 | `uptime_s`, `rssi`, `reset` | Seconds running, radio strength, why the board last restarted |
 | `overrange`, `overrange_max`, `underrange` | Counts of readings past each end of the band |
 | `i2c_err`, `ina_err` | Sensor-bus failures since power-on. Neither resets |
