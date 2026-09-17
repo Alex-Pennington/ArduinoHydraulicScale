@@ -25,6 +25,7 @@
 // ---------------------------------------------------------------------------
 
 constexpr uint8_t I2C_MUX_ADDR   = 0x70;
+constexpr uint8_t I2C_CH_INA219  = 2;
 constexpr uint8_t I2C_CH_MCP3421 = 3;
 constexpr uint8_t I2C_CH_LCD2004 = 7;
 
