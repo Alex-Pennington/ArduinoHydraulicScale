@@ -1,0 +1,35 @@
+// wifi_networks.h.example
+//
+// Copy to `include/wifi_networks.h`, or generate it with tools/gen-wifi-networks.sh.
+// The real file is gitignored and MUST NOT be committed — it carries WPA passphrases.
+//
+// PRIORITY ORDER. Index 0 is tried first, then 1, and so on, ONE PER netPoll PASS.
+// That pacing is not a style choice: WiFi.begin() blocks for up to 23 s and the
+// heartbeat watchdog tolerates 30 s per loop() pass, so two association attempts in
+// a single pass would total ~46 s and reset the board. See the timing note above
+// netPoll() in src/ArduinoHydraulicScale.cpp — the split between association and
+// broker-connect exists for exactly this reason. Add networks freely; each one costs
+// another NET_RETRY_MS before the list wraps, never another blocking call per pass.
+//
+// NOTE ON THE BROKER. SECRET_MQTT_BROKER is a single address and is NOT per-network.
+// The board reaches the estate broker on the farm LAN. On any other network the
+// association can succeed while the broker stays unreachable — that is `wifi = up`
+// with `mqtt = down`, and it is expected, not a fault.
+
+#pragma once
+
+#include "arduino_secrets.h"
+
+struct WifiNetwork {
+  const char *ssid;
+  const char *pass;
+};
+
+// Default: the single network from arduino_secrets.h, so a checkout with no
+// generated file still builds and behaves exactly as it did before.
+static const WifiNetwork WIFI_NETWORKS[] = {
+  { SECRET_SSID, SECRET_PASS },
+};
+
+static const int WIFI_NETWORK_COUNT =
+  (int)(sizeof(WIFI_NETWORKS) / sizeof(WIFI_NETWORKS[0]));

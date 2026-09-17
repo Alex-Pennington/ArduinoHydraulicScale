@@ -1,0 +1,81 @@
+binder:
+  title: PLC #4 Tractor Scale
+  subtitle: Hydraulic loader scale on the John Deere 5055E — pressure loop, controller
+    and wiring
+  compass_priority: pending
+  printed_date: '2026-09-17'
+  short_tag: PLC 4
+  machine: plc4
+documents:
+- num: '00'
+  source: 00_architecture.md
+  title: Architecture — PLC #4 Tractor Scale
+  subtitle: What the machine measures, and why the signal is a current loop
+  kind: Cabinet Reference Card
+  subject: The machine, the measurement chain, boom position, what reaches the broker,
+    scope of this binder
+  version: '1'
+  odin_id: pending
+  last_updated: '2026-09-17'
+- num: '01'
+  source: 01_controller_card.md
+  title: Controller Card — PLC #4 Tractor Scale
+  subtitle: The controller, the sensor bus and its channels, the display and the operator
+    keys
+  kind: Cabinet Reference Card
+  subject: Board, multiplexer channel map, console commands, display rows, key actions
+    and rollover
+  version: '1'
+  odin_id: pending
+  last_updated: '2026-09-17'
+- num: '02'
+  source: 02_pressure_loop_wiring.md
+  title: Pressure Loop Wiring — PLC #4 Tractor Scale
+  subtitle: Transmitter, loop supply, burden resistor and the connections between
+    them
+  kind: Wiring Reference
+  subject: Parts, terminal connections, burden placement, ground bond, current-to-meaning
+    table, headroom
+  version: '1'
+  odin_id: pending
+  last_updated: '2026-09-17'
+- num: '03'
+  source: 03_mqtt_contract.md
+  title: MQTT Contract — PLC #4 Tractor Scale
+  subtitle: The three published topics, their payloads, retain and quality of service
+  kind: Cabinet Reference Card
+  subject: Topic root and leaves, weight, telemetry and status payloads, the last
+    will, the six sensor values, staleness
+  version: '1'
+  odin_id: pending
+  last_updated: '2026-09-17'
+- num: '04'
+  source: 04_decisions.md
+  title: Decisions — PLC #4 Tractor Scale
+  subtitle: What has been decided about this machine, and by whom
+  kind: Decision Record
+  subject: Measurement front end, scaling, reporting contract, operating rules
+  version: '1'
+  odin_id: pending
+  last_updated: '2026-09-17'
+- num: '05'
+  source: 05_known_defects.md
+  title: Known Defects — PLC #4 Tractor Scale
+  subtitle: What is known to be wrong, what to do until it is fixed, and standing hazards
+  kind: Defect Register
+  subject: Open defects, defects closed by the current firmware, standing hazards of
+    the build
+  version: '1'
+  odin_id: pending
+  last_updated: '2026-09-17'
+- num: '06'
+  source: 06_purchase_list.md
+  title: Purchase List — PLC #4 Tractor Scale
+  subtitle: What the machine is built from, by the characteristics that matter when
+    ordering
+  kind: Purchase List
+  subject: Measurement chain, controller and bus, operator interface, devices fitted
+    and unused
+  version: '1'
+  odin_id: pending
+  last_updated: '2026-09-17'
