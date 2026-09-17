@@ -1473,6 +1473,11 @@ void loop() {
       Console.println(netAttempts);
       Console.print("mqtt_err = ");
       Console.println(lastMqttError);
+      // The boot banner carries this too, but USB re-enumerates after a reset
+      // and eats it, so a technician with a laptop could never ask the board
+      // what it was running. The status topic carries it as well, and that is
+      // no use at a machine with no broker in reach.
+      Console.print("build = "); Console.println(BUILD_PROVENANCE);
       Console.print("last_reset = ");
       Console.println(resetCause);
     }
