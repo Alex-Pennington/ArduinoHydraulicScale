@@ -14,6 +14,7 @@
 #include <WDT.h>
 #include "FspTimer.h"
 #include "arduino_secrets.h"
+#include "build_provenance.h"
 #include "wifi_networks.h"
 #include "loop_scaling.h"
 #include "mcp3421.h"
@@ -498,7 +499,7 @@ static void publishStatus(unsigned long now) {
     "\"n\":%d,\"total\":%ld,\"q\":%d,\"dropped\":%lu,\"uptime_s\":%lu,\"rssi\":%d,"
     "\"overrange\":%lu,\"overrange_max\":%d,\"underrange\":%lu,\"i2c_err\":%lu,"
     "\"vbus\":%s,\"shunt_mv\":%s,\"ina_err\":%lu,"
-    "\"reset\":\"%s\",\"id\":\"%s\"}",
+    "\"build\":\"%s\",\"reset\":\"%s\",\"id\":\"%s\"}",
     calibrationDefaulted ? "DEFAULT" : "ok",
     sensorStateName(), readingFresh() ? "false" : "true", tareValue, calFactor,
     rTindex, tallyTotal(), queueCount, queueDropped,
@@ -506,7 +507,7 @@ static void publishStatus(unsigned long now) {
     overRangeCount, overRangeMaxCounts, underRangeCount,
     (unsigned long)mcpFailCount(),
     vbusField, shuntField, (unsigned long)inaFailCount(),
-    resetCause, CLIENT_ID);
+    BUILD_PROVENANCE, resetCause, CLIENT_ID);
   char topic[64];
   if (!buildTopic("status", topic, sizeof(topic))) return;
   if (!mqttClient.beginMessage(topic, true, 1)) return;   // retained, QoS 1
@@ -750,6 +751,10 @@ void setup() {
   Serial1.begin(9600);   // HC-05 field console
   Serial.begin(115200);  // USB console for bring-up and service. No wait-for-host.
   inputString.reserve(200);
+  // Which source made this image. "UNKNOWN" means provenance was never
+  // captured; a trailing +dirty means the image contains work that is in no
+  // commit, so the SHA beside it does not fully describe it.
+  Console.print("build = "); Console.println(BUILD_PROVENANCE);
   i2cScan();             // say what is actually on the bus before blaming the ADC
   if (!mcpBegin()) Console.println("MCP3421 NOT FOUND on Wire1");
   // Diagnostics only. Its absence is reported once and never again: a missing

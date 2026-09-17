@@ -86,7 +86,7 @@ the last one published.
 {"up":true,"cal":"ok","sensor":"ok","stale":false,"tare":412,"cf":0.51230,
  "n":12,"total":19408,"q":0,"dropped":0,"uptime_s":8130,"rssi":-58,"overrange":0,
  "overrange_max":0,"underrange":0,"i2c_err":0,"vbus":13.120,
- "shunt_mv":-12.710,"ina_err":0,"reset":"...","id":"..."}
+ "shunt_mv":-12.710,"ina_err":0,"build":"d57002a1","reset":"...","id":"..."}
 ```
 
 | Field | Meaning |
@@ -97,9 +97,16 @@ the last one published.
 | `n`, `total` | Entries in the tally, and their running total |
 | `q`, `dropped` | Weights waiting to publish, weights lost |
 | `uptime_s`, `rssi`, `reset` | Seconds running, radio strength, why the board last restarted |
+| `build` | The source commit this firmware was compiled from |
 | `overrange`, `overrange_max`, `underrange` | Counts of readings past each end of the band |
 | `i2c_err`, `ina_err` | Sensor-bus failures since power-on. Neither resets |
 | `vbus`, `shunt_mv` | Supply volts and shunt millivolts, or null when unread |
+
+> **`build` identifies the source, not the deployment.** It names the commit the image was
+> compiled from, never the commit the repository stood at when the board was flashed. A trailing
+> `+dirty` means the image contains work that is in no commit, so the identifier beside it does
+> not fully describe it. `UNKNOWN` means provenance was never captured — deliberately not shaped
+> like an identifier, so it cannot be mistaken for one.
 
 The last will is armed before the connection, so the broker publishes it if the machine drops
 without disconnecting cleanly. It lands on the same topic and is retained like the cyclic status,

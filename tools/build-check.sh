@@ -46,4 +46,12 @@ if [ ! -f "$SKETCH/wifi_networks.h" ]; then
   cp "$REPO/include/wifi_networks.h.example" "$SKETCH/wifi_networks.h"
 fi
 
+# Provenance: capture the commit this image is compiled from. A repo with no git
+# (a tarball, a CI export) falls back to the committed sentinel rather than
+# failing the build -- "UNKNOWN" is honest about not knowing.
+"$REPO/tools/gen-provenance.sh" >/dev/null 2>&1 || true
+if [ ! -f "$SKETCH/build_provenance.h" ]; then
+  cp "$REPO/include/build_provenance.h.example" "$SKETCH/build_provenance.h"
+fi
+
 exec arduino-cli compile --fqbn "$FQBN" --warnings default "$SKETCH"
