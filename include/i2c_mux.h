@@ -14,14 +14,23 @@
 // Topology, read off the board by the `i2c` verb on 2026-09-17:
 //
 //   trunk  0x70  this mux
-//     ch0  0x67  (unidentified)
-//     ch1  0x2A  NAU7802 load-cell ADC      -- LogSplitter_Monitor hardware
-//     ch2  0x40  INA219/INA226 volts+amps   -- LogSplitter_Monitor hardware
-//     ch3  0x68  MCP3421, the loop ADC      <-- this firmware
+//     ch0  0x67  MCP9600 thermocouple amp   -- present, unused by this firmware
+//     ch1  0x2A  NAU7802 load-cell ADC      -- present, unused by this firmware
+//     ch2  0x40  INA219 volts+amps          <-- this firmware, diagnostics only
+//     ch3  0x68  MCP3421, the loop ADC      <-- this firmware, the measurement
 //     ch7  0x27  LCD2004 display            <-- this firmware
 //
-// PLC #4 uses ch3 and ch7. The load cell and the power monitor are present but
-// unused here; leave them alone rather than assuming they are ours.
+// Channel assignments confirmed by Alex against the harness on 2026-09-17 and
+// independently matched by the `i2c` scan, so this map is measured on both
+// sides rather than assumed from either.
+//
+// THE MUX ITSELF IS THE SINGLE POINT OF FAILURE. It sits on the trunk, ahead of
+// every channel: if 0x70 does not answer, nothing behind it can be reached and
+// a scan reports an empty bus. "NOTHING FOUND" therefore means the trunk or the
+// mux, never a device -- do not go looking at the ADC for it.
+//
+// The thermocouple and the load cell are wired but belong to no code here.
+// Leave them alone rather than assuming they are ours.
 // ---------------------------------------------------------------------------
 
 constexpr uint8_t I2C_MUX_ADDR   = 0x70;
