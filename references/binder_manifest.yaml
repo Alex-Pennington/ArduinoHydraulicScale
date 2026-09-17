@@ -6,9 +6,6 @@ binder:
   printed_date: '2026-09-17'
   short_tag: PLC 4
   machine: plc4
-  repo: greybeard-plc4-tractor-scale
-  branch: feat/plc4-mcp3421-lcd2004
-  commit: 35246bc4468551468ddeb798a9a1a7d825093bb4
 documents:
 - num: '00'
   source: 00_architecture.md
