@@ -119,16 +119,28 @@ says the machine is down was sent by the broker rather than by the machine.
 
 ## Sensor states
 
-Six values, and a consumer treating anything other than `ok` as invalid fails safe on all of them.
+Six values. Three carry a real measurement and three do not, and that split is not the same as
+the split between acting and not acting.
 
-| Value | Meaning |
-|---|---|
-| `ok` | Measuring, within the band |
-| `NO SENSOR` | Loop below the dead threshold — cut wire, no supply, transmitter removed |
-| `UNDER ZERO` | Below the live zero but still measuring |
-| `SATURATED` | At or past full scale, still measuring |
-| `XMTR FAULT` | At or above the fault threshold |
-| `BAD STATE` | A corrupted record. Never produced by a live reading |
+| Value | Real measurement | Meaning |
+|---|---|---|
+| `ok` | yes | Measuring, within the band |
+| `UNDER ZERO` | yes | Below the live zero, still measuring |
+| `SATURATED` | yes | At or past full scale, still measuring |
+| `NO SENSOR` | no | Loop below the dead threshold — cut wire, no supply, transmitter removed |
+| `XMTR FAULT` | no | At or above the fault threshold |
+| `BAD STATE` | no | A corrupted record. Never produced by a live reading |
+
+> **Do not discard the two over-range states.** Both carry a real reading, and throwing them away
+> loses the excursions this front end was fitted to capture — the circuit goes past full scale in
+> normal service. A consumer that treats everything but `ok` as invalid is not failing safe, it is
+> dropping data.
+
+The machine keeps a second and narrower rule for itself: it refuses a tare, a record or a
+calibration unless the state is exactly `ok`, because a reading at the end of its range is no
+basis for setting a zero. That rule is about permitting an action. The table above is about
+trusting a number. They are different questions and collapsing them loses data one way or refuses
+valid work the other.
 
 ## Staleness is a separate question
 
