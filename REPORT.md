@@ -78,12 +78,35 @@ Topic and payload conventions, from the code, not from habit:
 
 The CAN work follows the **PLC1/PLC3 omission** convention, deliberately, and §7 says why.
 
-## 3. Existing work — none
+## 3. Existing work
 
-`gh repo list Alex-Pennington` matches only `greybeard-plc4-tractor-scale` for
-can/tractor/j1939/deere. `gh search issues --owner Alex-Pennington "CAN bus J1939"`
-returns nothing. The six open issues on the PLC4 repo (1, 3, 5, 16, 17, 18) are all
-scale-side. Nothing to duplicate.
+**Ours: none.** `gh repo list Alex-Pennington` matches only
+`greybeard-plc4-tractor-scale` for can/tractor/j1939/deere, and
+`gh search issues --owner Alex-Pennington "CAN bus J1939"` returns nothing. The six open
+issues on the PLC4 repo (1, 3, 5, 16, 17, 18) are all scale-side.
+
+**Other people's: a great deal, and on this exact model.** Cal Poly's Tractor Hacking
+project — California Polytechnic State University's capstone class, sponsored by iFixit,
+*not* Berkeley — published `github.com/tractorhacking/CAN-data` under the **MIT licence**:
+44 captures, 330,653 frames, taken from a John Deere 5055E.
+
+Checking our decode against that corpus **found three bugs in what is written here and
+answered four of the bench questions in §8**. It is written up in full in
+`findings/2026-09-18-calpoly-can-corpus.md` and reproducible with
+`tools/j1939_corpus_check.py`. The short version:
+
+- **TP.DT is PGN 60160, not 60417** — I had it wrong from a published source. 1491 frames
+  on 60160, zero on 60417.
+- **DM1 is per source address** — four ECUs publish it and they disagree. A single global
+  fault state would have reported whichever spoke last.
+- **The not-available DTC record is not `FF` padding** — the 5055E sends `F4 FE FF 00`
+  with a lit protect lamp, which my guard would have turned into a phantom DTC 524020.
+- **Engine hours is broadcast unprompted**, so nothing needs transmitting (§6, and it
+  retires most of issue #23).
+- **Battery voltage is SPN 158, not SPN 168** — 168 was not-available in all 1206 frames.
+
+Their machine is not our machine: different year, different options, captured 2018–19.
+It reorders the bench list; it does not replace it.
 
 ## 4. The R4 WiFi as a CAN node — verified against the installed core
 
@@ -200,10 +223,10 @@ Multi-byte values are little-endian on the wire.
 | 65262 | ET1 | Engine coolant temperature | 110 | 1 | 1 °C/bit | −40 | 1 s |
 | 65262 | ET1 | Engine oil temperature | 175 | 3–4 | 0.03125 °C/bit | −273 | 1 s |
 | 65263 | EFL/P1 | Engine oil pressure | 100 | 4 | 4 kPa/bit | 0 | 500 ms |
-| 65253 | HOURS | Engine total hours of operation | 247 | 1–4 | 0.05 h/bit | 0 | **on request** |
+| 65253 | HOURS | Engine total hours of operation | 247 | 1–4 | 0.05 h/bit | 0 | **broadcast here** |
 | 65266 | LFE | Engine fuel rate | 183 | 1–2 | 0.05 L/h per bit | 0 | 100 ms |
-| 65271 | VEP1 | Battery potential / power input 1 | 168 | 5–6 | 0.05 V/bit | 0 | 1 s |
-| 65271 | VEP1 | Keyswitch battery potential | 158 | 7–8 | 0.05 V/bit | 0 | 1 s |
+| 65271 | VEP1 | Battery potential / power input 1 | 168 | 5–6 | 0.05 V/bit | 0 | *never populated* |
+| **65271** | **VEP1** | **Keyswitch battery potential — USE THIS ONE** | **158** | **7–8** | 0.05 V/bit | 0 | 1 s |
 | 65226 | DM1 | Active DTCs | — | 1–2 lamps, then 4/DTC | — | — | 1 s |
 
 **Two traps in that table.**
@@ -213,11 +236,18 @@ percent load at current speed, is in **EEC2 (61443) byte 3**, offset 0. EEC1 byt
 *actual percent torque*, SPN 513, offset **−125**. Decoding one as the other yields a
 number that looks like a percentage and is wrong by 125.
 
-*Hours is probably request-only.* J1939-71 lists PGN 65253 as on-request for most
-engines. If the sniffer never shows it, reading hours means **transmitting** a request
-(PGN 59904) onto the tractor bus. That is a genuinely different act from listening and
-should be decided on its own, not smuggled in as "one more PGN". The dashboard panel is
-built to show "No data" honestly rather than pretend.
+*Hours: no longer a worry.* J1939-71 lists PGN 65253 as on-request for most engines,
+which would have meant **transmitting** a request (PGN 59904) onto the tractor bus. The
+5055E does not need it: hours appears in **39 of 44** Cal Poly captures, unprompted, and
+advances across sessions (138.15 h → 156.35 h) — which also confirms the 0.05 h/bit
+scaling, since a wrong one would not advance plausibly. Confirm on our own machine, but
+plan for listening, not asking.
+
+*And a third trap the corpus caught: battery voltage.* SPN 168 is the standard's primary
+"battery potential" and it is **not-available in all 1206 VEP1 frames** on the 5055E —
+the payloads read `FF FF FF FF FF FF xx xx`. The real voltage is SPN 158 in bytes 7–8:
+~12.4 V key-on, 14.2 V charging, dipping to 7.75 V on crank. A dashboard built on SPN 168
+would be permanently empty and look like a wiring fault.
 
 **Provenance.** Engine speed and oil pressure I confirmed against a public J1939 DBC
 (`arthithadee/J1939-DBC-Database`): `EngineSpeed : 24|16@1+ (0.125,0) "rpm"` and
@@ -236,16 +266,26 @@ low, SPN mid, then a byte holding SPN bits 16–18 in its top three bits and FMI
 low five, then a byte holding the conversion method in bit 7 and the occurrence count in
 bits 0–6. More than one active DTC pushes DM1 past 8 bytes and it goes out over **BAM**:
 TP.CM on PGN **60416** (control byte 0x20, total size, packet count, embedded PGN), then
-TP.DT on PGN **60417**, 7 data bytes per packet, sequence numbers from 1. `can_mqtt.ino`
-implements this for a single session.
+TP.DT on PGN **60160** — *not* 60417, which is what a published source claims and what
+this report said before the corpus settled it — 7 data bytes per packet, sequence numbers
+from 1. `can_mqtt.ino` implements this for a single session.
+
+Two corpus facts change how much to trust that path. **No DM1 ever goes multipacket on
+the 5055E**: all 358 transport sessions carry PGN 65251 (Engine Configuration), so the
+BAM code is unexercised and should be treated as untested. And **DM1 arrives from four
+source addresses** (3, 6, 23, 71) which disagree with each other, so fault state is per
+ECU — hence the `plc4/jd5055e/dtc/<sa>` topic and the `sa` column in the schema.
 
 ## 7. Integration shape, and the one contract decision
 
 **Topics** — following the existing split exactly:
 
 - `plc4/jd5055e/engine` — 15 s, QoS 0, **not** retained. Numbers are events.
-- `plc4/jd5055e/dtc` — on change, QoS 1, **retained**. Fault state is state, and a
-  subscriber connecting later must see it.
+- `plc4/jd5055e/dtc/<sa>` — on change, QoS 1, **retained**, **one topic per ECU**. Fault
+  state is state, and a subscriber connecting later must see it. The `<sa>` leaf exists
+  because four ECUs publish DM1 on this tractor and they disagree; one retained topic
+  would hold whichever spoke last. It is also the one thing that needs a change in the
+  consumer's `dispatch()`, which otherwise routes on exact topic strings.
 
 **Validity: omit absent keys.** This is PLC1/PLC3's convention and *not* PLC4's, and the
 difference is principled. PLC4's existing telemetry always populates `w`/`psi`/`counts`
@@ -272,13 +312,21 @@ Ordered so that each one can kill the next cheaply. The first two need no tracto
 3. **Is the diagnostic connector's bus live, and at what rate?** `can_sniff` at 250k. No
    frames could mean wrong rate, wrong pins, or the wrong bus segment — try 500k and
    250k before concluding anything.
-4. **Which PGNs actually appear, at what rate, and from which source addresses?** The
-   census table in `can_sniff` answers this directly. Specifically: does 65253 (hours)
-   ever appear unrequested?
+4. **Which PGNs actually appear, at what rate, and from which source addresses?**
+   *Provisionally answered by the Cal Poly corpus* — every PGN we want is present, engine
+   data all from SA 0, DM1 from SA 3/6/23/71, hours broadcast unprompted. Still run
+   `can_sniff` to confirm it for our machine and year, but this is now a check rather
+   than a discovery.
 5. **What is the real frame rate?** Decides whether hardware filtering is mandatory or
    merely prudent, and whether the 32-frame ring can be drained from the scale's loop.
-6. **Do the scalings produce plausible numbers?** Battery ~13.8 V, coolant ~85 °C, oil
-   ~350 kPa, rpm matching the tachometer.
+   The corpus says 41% of the bus is proprietary traffic we can discard in silicon, which
+   makes filtering look mandatory rather than prudent — but their options list is not
+   ours.
+6. **Do the scalings produce plausible numbers?** *Provisionally answered*: run against
+   the corpus, every constant produced physically sensible values — oil 396–448 kPa
+   running and 0 stopped, coolant 30–38 °C cold, battery 12.4 V key-on / 14.2 V charging
+   / 7.75 V cranking, hours advancing across sessions. Confirm against our tachometer and
+   a meter, but no constant is now a guess.
 7. **Is `mqtt.firewood.ltd` the same broker the board reaches as `192.168.10.99`?** Three
    names appear across the estate for what is probably one broker. Cheap to confirm, and
    embarrassing to get wrong.
@@ -317,10 +365,13 @@ part.
 | `ingest/067_add_plc4_engine.sql` | Proposed migration: `plc4_engine`, `plc4_dtc_snapshot`, `plc4_dtc_code`, `v_plc4_dtc_active` | Applied clean to a throwaway PG16 cluster; the view's no-fault and two-fault behaviour tested |
 | `ingest/consumer_plc4_engine.py` | Proposed consumer handlers with plausibility bounds and lamp handling | Driven through 7 cases with a stub cursor; all behaved as documented |
 | `ingest/plc4_engine_dashboard.json` | Proposed Grafana dashboard, 8 panels | JSON parses; every panel's SQL `EXPLAIN`s against the proposed schema |
+| `findings/2026-09-18-calpoly-can-corpus.md` | What the Cal Poly 5055E corpus says, and the three bugs it caught | Every figure produced by the checker below |
+| `tools/j1939_corpus_check.py` | Reproducible check of our decode against 330,653 real 5055E frames | Runs clean against upstream `db5c894` |
 
-Neither sketch has seen a tractor, and no scaling constant in either has been confirmed
-against this machine. The throwaway Postgres cluster was created under the job temp
-directory and is not the production database.
+Neither sketch has seen a tractor. The scaling constants are no longer guesses — they
+were run against 330,653 real frames from a 5055E and produced physically sensible values
+— but that was **a** 5055E, not **ours**. The throwaway Postgres cluster was created
+under the job temp directory and is not the production database.
 
 Compile them yourself with:
 
@@ -368,5 +419,8 @@ recorded beside each; the wording below is what was filed.
 - [J1939-73 DM1 diagnostics — CSS Electronics](https://www.csselectronics.com/pages/j1939-73-dm1-diagnostic-message-dtc)
 - [J1939 DBC database (engine speed, oil pressure scaling)](https://github.com/arthithadee/J1939-DBC-Database)
 - [J1939 PGN parsing reference (byte positions)](https://gist.github.com/philbegg/462dd78a0aa78df7073dd1c0b073cf4b)
+- **[Cal Poly Tractor Hacking — CAN-data, 44 captures from a JD 5055E, MIT](https://github.com/tractorhacking/CAN-data)**
+  at commit `db5c894d8810835403a7204238fe7d0498783173`. The single most useful source
+  here, and the only one that is evidence rather than documentation.
 - Local, and the strongest evidence here: `arduino:renesas_uno` core 1.6.0 under
   `~/.arduino15/packages/arduino/hardware/renesas_uno/1.6.0/`

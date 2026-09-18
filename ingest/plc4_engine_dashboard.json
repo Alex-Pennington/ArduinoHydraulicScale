@@ -96,8 +96,8 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Battery and keyswitch potential",
-      "description": "SPN 168 (battery, PGN 65271 bytes 5-6) and SPN 158 (keyswitch, bytes 7-8). Below 12.2 V running means the alternator is not keeping up.",
+      "title": "Battery potential",
+      "description": "PLOTS SPN 158 (keyswitch, PGN 65271 bytes 7-8), which is the one the 5055E actually populates — SPN 168 was not-available in all 1206 frames of the Cal Poly corpus, so the batt_v series is expected to be empty. Reference: ~12.4 V key-on, ~14.2 V charging, dipping under crank.",
       "datasource": { "type": "postgres", "uid": "plc1-postgres" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "fieldConfig": {
@@ -113,7 +113,7 @@
           "refId": "A",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT recv_ts AS time, batt_v AS \"battery\", keysw_v AS \"keyswitch\" FROM plc4_engine WHERE $__timeFilter(recv_ts) AND (batt_v IS NOT NULL OR keysw_v IS NOT NULL) ORDER BY recv_ts"
+          "rawSql": "SELECT recv_ts AS time, keysw_v AS \"battery (SPN 158)\", batt_v AS \"SPN 168 (expected empty)\" FROM plc4_engine WHERE $__timeFilter(recv_ts) AND (batt_v IS NOT NULL OR keysw_v IS NOT NULL) ORDER BY recv_ts"
         }
       ]
     },
@@ -171,9 +171,9 @@
     },
     {
       "id": 7,
-      "type": "stat",
-      "title": "Lamps",
-      "description": "DM1 lamp states. 0 off, 1 on, 3 not available. A steady 3 means the ECU does not implement that lamp.",
+      "type": "table",
+      "title": "Lamps, per ECU",
+      "description": "DM1 lamp states per source address. 0 off, 1 on, 3 not available — a steady 3 means that ECU does not implement the lamp. Four ECUs publish DM1 on the 5055E and they disagree, so this is a table, not a single state.",
       "datasource": { "type": "postgres", "uid": "plc1-postgres" },
       "gridPos": { "h": 5, "w": 12, "x": 12, "y": 16 },
       "fieldConfig": {
@@ -194,7 +194,7 @@
           "refId": "A",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT mil AS \"MIL\", rsl AS \"Red stop\", awl AS \"Amber\", pl AS \"Protect\" FROM plc4_dtc_snapshot ORDER BY recv_ts DESC LIMIT 1"
+          "rawSql": "SELECT DISTINCT sa AS \"ECU\", mil AS \"MIL\", rsl AS \"Red stop\", awl AS \"Amber\", pl AS \"Protect\", age_s AS \"age (s)\" FROM v_plc4_dtc_active ORDER BY sa"
         }
       ]
     },
@@ -212,7 +212,7 @@
           "refId": "A",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT recv_ts AS \"reported\", age_s AS \"age (s)\", n AS \"count\", spn AS \"SPN\", fmi AS \"FMI\", oc AS \"occurrences\" FROM v_plc4_dtc_active ORDER BY spn NULLS FIRST"
+          "rawSql": "SELECT sa AS \"ECU\", recv_ts AS \"reported\", age_s AS \"age (s)\", n AS \"count\", spn AS \"SPN\", fmi AS \"FMI\", oc AS \"occurrences\" FROM v_plc4_dtc_active ORDER BY sa, spn NULLS FIRST"
         }
       ]
     }

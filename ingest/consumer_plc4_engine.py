@@ -24,7 +24,13 @@ key is off.
 # --- topic constants, alongside PLC4_TELEMETRY_TOPIC & co. -------------------
 
 PLC4_ENGINE_TOPIC = "plc4/jd5055e/engine"
-PLC4_DTC_TOPIC = "plc4/jd5055e/dtc"
+
+# DM1 is published per J1939 source address: plc4/jd5055e/dtc/<sa>. This is the one
+# place these handlers need something dispatch() does not currently do, because
+# dispatch() routes on an EXACT topic string and this leaf varies. See the
+# registration note at the bottom.
+PLC4_DTC_TOPIC_PREFIX = "plc4/jd5055e/dtc/"
+PLC4_DTC_TOPIC = PLC4_DTC_TOPIC_PREFIX.rstrip("/")   # for log messages only
 
 # Value columns of plc4_engine, in insert order. Every one is optional.
 _PLC4_ENGINE_FIELDS = (
@@ -139,15 +145,45 @@ def _plc4_lamp(payload, key, log):
     return raw
 
 
-def handle_plc4_dtc(cur, topic, payload, log):
-    """plc4/jd5055e/dtc -- on change, QoS 1, RETAINED.
+def _plc4_dtc_sa(topic, payload, log):
+    """Source address, from the topic leaf, cross-checked against the payload.
 
-    A snapshot with n == 0 is stored like any other. It is the row that clears a
-    fault display; skipping it as "empty" would leave a resolved fault on the
+    The topic is authoritative: it is what the retained message is keyed on. A
+    payload that disagrees is a firmware bug worth shouting about, not a reason to
+    guess.
+    """
+    leaf = topic[len(PLC4_DTC_TOPIC_PREFIX):] if topic.startswith(PLC4_DTC_TOPIC_PREFIX) else ""
+    try:
+        sa = int(leaf)
+    except ValueError:
+        log.warning("%s: topic leaf %r is not a source address -- dropped", topic, leaf)
+        return None
+    if not (0 <= sa <= 255):
+        log.warning("%s: source address %d out of range -- dropped", topic, sa)
+        return None
+    claimed = payload.get("sa")
+    if isinstance(claimed, int) and not isinstance(claimed, bool) and claimed != sa:
+        log.warning("%s: payload says sa=%d but the topic says %d -- trusting the topic",
+                    topic, claimed, sa)
+    return sa
+
+
+def handle_plc4_dtc(cur, topic, payload, log):
+    """plc4/jd5055e/dtc/<sa> -- on change, QoS 1, RETAINED, ONE TOPIC PER ECU.
+
+    DM1 is per source address. Four ECUs publish it on the 5055E and they disagree,
+    so each gets its own retained topic and its own snapshot rows.
+
+    A snapshot with n == 0 is stored like any other. It is the row that clears that
+    ECU's fault display; skipping it as "empty" would leave a resolved fault on the
     dashboard until the next unrelated fault arrived.
     """
     if not isinstance(payload, dict):
         log.warning("%s: payload is not an object (%r) -- dropped", topic, payload)
+        return
+
+    sa = _plc4_dtc_sa(topic, payload, log)
+    if sa is None:
         return
 
     codes = payload.get("dtc")
@@ -175,11 +211,11 @@ def handle_plc4_dtc(cur, topic, payload, log):
 
     cur.execute(
         """
-        INSERT INTO plc4_dtc_snapshot (n, mil, rsl, awl, pl, ts_kind)
-        VALUES (%s,%s,%s,%s,%s,%s)
+        INSERT INTO plc4_dtc_snapshot (sa, n, mil, rsl, awl, pl, ts_kind)
+        VALUES (%s,%s,%s,%s,%s,%s,%s)
         RETURNING id
         """,
-        (n, *lamps, "unknown"),
+        (sa, n, *lamps, "unknown"),
     )
     snapshot_id = cur.fetchone()[0]
 
@@ -207,13 +243,21 @@ def handle_plc4_dtc(cur, topic, payload, log):
 
 # --- registration ------------------------------------------------------------
 #
-# In dispatch(), alongside the existing PLC4 handlers. Order does not matter
-# here: unlike `cal`, nothing in these two topics primes state the other needs.
+# In dispatch(), alongside the existing PLC4 handlers. Order does not matter here:
+# unlike `cal`, nothing in these two topics primes state the other needs.
 #
 #     elif topic == PLC4_ENGINE_TOPIC:
 #         handle_plc4_engine(cur, topic, payload, log)
-#     elif topic == PLC4_DTC_TOPIC:
+#     elif topic.startswith(PLC4_DTC_TOPIC_PREFIX):
 #         handle_plc4_dtc(cur, topic, payload, log)
+#
+# THE SECOND LINE IS NOT THE HOUSE PATTERN AND THAT IS DELIBERATE. Every other
+# topic in this consumer dispatches on an exact string. DM1 cannot: the source
+# address is in the leaf, the set of ECUs is discovered at runtime, and on the
+# 5055E there are four of them. A prefix test is the smallest departure that
+# works. If the reviewer would rather keep dispatch() exact, the alternative is to
+# enumerate the known source addresses as constants -- which silently drops any
+# ECU nobody thought of, on a machine we have not yet captured.
 #
 # No subscription change is needed: the consumer already subscribes plc4/#.
 #

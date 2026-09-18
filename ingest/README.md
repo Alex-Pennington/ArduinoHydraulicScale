@@ -30,6 +30,19 @@ job's temp directory — not to `plc1`, and not to any container. It ran to `COM
 The handlers were **not** run against a real database, because `psycopg2` is not
 installed outside the consumer's container and installing it was out of scope.
 
+## What changed after checking against real 5055E data
+
+These files were revised once Cal Poly's MIT-licensed 5055E CAN corpus was checked
+(`findings/2026-09-18-calpoly-can-corpus.md`). Three changes matter to the reviewer:
+
+- **`plc4_dtc_snapshot` gained an `sa` column**, and the topic became
+  `plc4/jd5055e/dtc/<sa>`. DM1 is per ECU: four source addresses publish it on this model
+  and they disagree.
+- **`v_plc4_dtc_active` uses `DISTINCT ON (sa)`**, not a single global latest row. The
+  earlier version would have shown one ECU and silently dropped three.
+- **`keysw_v` (SPN 158) is the battery voltage to plot**, not `batt_v` (SPN 168), which
+  was not-available in all 1206 corpus frames. The dashboard panel leads with it.
+
 ## Three things the reviewer should push back on if they disagree
 
 1. **The validity contract is inverted relative to the other PLC4 topics.** `plc4_engine`
@@ -43,3 +56,8 @@ installed outside the consumer's container and installing it was out of scope.
 3. **A handler test must join `docs/DESIGN-STANDARD.md` §4 in the same change**, or
    `tests/run-ritual.sh` jams on the coverage gate. No test is written here, because it
    belongs in the consumer's tree with the rest of them.
+4. **The DTC handler needs a prefix match in `dispatch()`**, not the exact topic string
+   every other handler uses, because the source address is in the topic leaf and the set
+   of ECUs is discovered at runtime. The alternative — enumerating known source addresses
+   as constants — silently drops any ECU nobody anticipated, on a machine we have not
+   captured yet. Flagged because it is a real departure from the house pattern.
