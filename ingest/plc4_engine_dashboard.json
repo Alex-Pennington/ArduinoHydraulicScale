@@ -1,0 +1,220 @@
+{
+  "uid": "plc4-tractor-engine",
+  "title": "PLC #4 — Tractor Engine (J1939)",
+  "description": "Engine telemetry decoded from the JD 5055E CAN bus. PROPOSED, not deployed. Every panel reads plc4_engine / plc4_dtc_* from migration 067. A gap in a series means the engine did not broadcast that PGN — not that the value was zero.",
+  "tags": ["plc4", "tractor", "j1939", "proposed"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Engine speed",
+      "description": "SPN 190, PGN 61444. Resolution 0.125 rpm. Absent while the key is off.",
+      "datasource": { "type": "postgres", "uid": "plc1-postgres" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "rotrpm",
+          "custom": { "drawStyle": "line", "lineWidth": 1, "spanNulls": false, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recv_ts AS time, rpm FROM plc4_engine WHERE $__timeFilter(recv_ts) AND rpm IS NOT NULL ORDER BY recv_ts"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Coolant and oil temperature",
+      "description": "SPN 110 (coolant, PGN 65262 byte 1) and SPN 175 (oil, bytes 3-4).",
+      "datasource": { "type": "postgres", "uid": "plc1-postgres" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "custom": { "drawStyle": "line", "lineWidth": 1, "spanNulls": false, "showPoints": "never" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 100 },
+              { "color": "red", "value": 110 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recv_ts AS time, coolant_c AS \"coolant\", oil_temp_c AS \"oil\" FROM plc4_engine WHERE $__timeFilter(recv_ts) AND (coolant_c IS NOT NULL OR oil_temp_c IS NOT NULL) ORDER BY recv_ts"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Oil pressure",
+      "description": "SPN 100, PGN 65263 byte 4. Wire resolution is 4 kPa (0.58 psi) — the trace is genuinely stepped, and that is the sensor, not the plot.",
+      "datasource": { "type": "postgres", "uid": "plc1-postgres" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "kpascal",
+          "custom": { "drawStyle": "line", "lineWidth": 1, "spanNulls": false, "showPoints": "never" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 100 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recv_ts AS time, oil_kpa FROM plc4_engine WHERE $__timeFilter(recv_ts) AND oil_kpa IS NOT NULL ORDER BY recv_ts"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Battery and keyswitch potential",
+      "description": "SPN 168 (battery, PGN 65271 bytes 5-6) and SPN 158 (keyswitch, bytes 7-8). Below 12.2 V running means the alternator is not keeping up.",
+      "datasource": { "type": "postgres", "uid": "plc1-postgres" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "volt",
+          "min": 0,
+          "custom": { "drawStyle": "line", "lineWidth": 1, "spanNulls": false, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recv_ts AS time, batt_v AS \"battery\", keysw_v AS \"keyswitch\" FROM plc4_engine WHERE $__timeFilter(recv_ts) AND (batt_v IS NOT NULL OR keysw_v IS NOT NULL) ORDER BY recv_ts"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Engine hours",
+      "description": "SPN 247, PGN 65253. MAY READ 'No data' FOREVER: this PGN is on-request for many engines and the board does not transmit requests. An empty panel here is an open question, not a fault.",
+      "datasource": { "type": "postgres", "uid": "plc1-postgres" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 16 },
+      "fieldConfig": {
+        "defaults": { "unit": "h", "decimals": 1 },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recv_ts AS time, hours FROM plc4_engine WHERE hours IS NOT NULL ORDER BY recv_ts DESC LIMIT 1"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "CAN liveness (frames/min)",
+      "description": "Rate of change of the board's lifetime frame counter. Zero with the key on means the transceiver, the wiring or the bus has dropped — the engine panels would simply go blank and tell you nothing.",
+      "datasource": { "type": "postgres", "uid": "plc1-postgres" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 16 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recv_ts AS time, (frames - LAG(frames) OVER (ORDER BY recv_ts))::double precision / NULLIF(EXTRACT(EPOCH FROM (recv_ts - LAG(recv_ts) OVER (ORDER BY recv_ts))) / 60.0, 0) AS \"frames/min\" FROM plc4_engine WHERE $__timeFilter(recv_ts) ORDER BY recv_ts"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Lamps",
+      "description": "DM1 lamp states. 0 off, 1 on, 3 not available. A steady 3 means the ECU does not implement that lamp.",
+      "datasource": { "type": "postgres", "uid": "plc1-postgres" },
+      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "off", "color": "green", "index": 0 } } },
+            { "type": "value", "options": { "1": { "text": "ON", "color": "red", "index": 1 } } },
+            { "type": "value", "options": { "2": { "text": "reserved", "color": "text", "index": 2 } } },
+            { "type": "value", "options": { "3": { "text": "n/a", "color": "text", "index": 3 } } }
+          ]
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT mil AS \"MIL\", rsl AS \"Red stop\", awl AS \"Amber\", pl AS \"Protect\" FROM plc4_dtc_snapshot ORDER BY recv_ts DESC LIMIT 1"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Active DTCs",
+      "description": "The most recent DM1 snapshot. An empty table with a recent timestamp means the ECU reported no active faults; an empty table with no timestamp means no DM1 has ever arrived. The age column is how you tell.",
+      "datasource": { "type": "postgres", "uid": "plc1-postgres" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 21 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "showHeader": true },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT recv_ts AS \"reported\", age_s AS \"age (s)\", n AS \"count\", spn AS \"SPN\", fmi AS \"FMI\", oc AS \"occurrences\" FROM v_plc4_dtc_active ORDER BY spn NULLS FIRST"
+        }
+      ]
+    }
+  ]
+}
