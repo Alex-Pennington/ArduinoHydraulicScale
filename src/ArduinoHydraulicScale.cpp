@@ -396,7 +396,13 @@ static bool publishTo(const char *leaf, const char *payload) {
   if (netState != NET_ONLINE) return false;
   char topic[64];
   if (!buildTopic(leaf, topic, sizeof(topic))) return false;
-  if (!mqttClient.beginMessage(topic)) return false;       // return IS checked — silent loss was C6
+  // SIZED beginMessage, not the bare form. Without a size the library buffers
+  // the whole message into a 256-byte _txBuffer and SILENTLY TRUNCATES past
+  // it; with one it writes the header and streams, so the only limit is the
+  // caller's own buffer. Measured on the wire: the status payload was being
+  // cut at 200 bytes, mid-token, so the JSON never closed and every consumer
+  // discarded the whole message.
+  if (!mqttClient.beginMessage(topic, (unsigned long)strlen(payload))) return false;   // return IS checked — silent loss was C6
   mqttClient.print(payload);
   return mqttClient.endMessage() == 1;
 }
@@ -510,7 +516,7 @@ static void publishStatus(unsigned long now) {
     BUILD_PROVENANCE, resetCause, CLIENT_ID);
   char topic[64];
   if (!buildTopic("status", topic, sizeof(topic))) return;
-  if (!mqttClient.beginMessage(topic, true, 1)) return;   // retained, QoS 1
+  if (!mqttClient.beginMessage(topic, (unsigned long)strlen(payload), true, 1)) return;   // retained, QoS 1, STREAMED not buffered
   mqttClient.print(payload);
   mqttClient.endMessage();
 }
