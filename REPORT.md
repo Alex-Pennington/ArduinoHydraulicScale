@@ -5,12 +5,13 @@ Research and planning only. Nothing here was flashed, deployed or applied. Branc
 
 **Verdict: GO on the UNO R4 WiFi, with two conditions.** The board already on the
 tractor has the CAN peripheral free, the pins free, and 74% of its flash unused. The
-conditions are a 5 V transceiver on D10/D13 and a decision about ACK on a live
-agricultural bus. A dedicated ESP32 is not needed and would add a second thing to
-power, mount and keep on the WiFi.
+conditions are a 5 V transceiver on D10/D13, and the ACK question on a live agricultural
+bus — **settled 2026-09-18: the first live capture runs in true listen-only**, which
+needs a small vendored library patch (§4.5, §5). A dedicated ESP32 is not needed and
+would add a second thing to power, mount and keep on the WiFi.
 
-The two conditions are the real work. Everything below the fold is either verified on
-this machine or flagged as a bench unknown.
+Everything below the fold is either verified on this machine or flagged as a bench
+unknown. The single most important unknown is cheap and needs no tractor: §8 item 1.
 
 ## 1. What is already on the tractor
 
@@ -127,7 +128,8 @@ Core `arduino:renesas_uno 1.6.0`, `arduino-cli 1.5.0`, both already installed. T
    `CAN_TEST_MODE_LISTEN = 3` in `r_can_api.h:102` — but `Arduino_CAN` exposes only the
    two loopback modes. Getting true silence means vendoring a patched copy of the
    library into `lib/` with a six-line `enableListenOnly()` mirroring
-   `enableInternalLoopback()`. Cheap, and see §5 for why it might be worth it.
+   `enableInternalLoopback()`. **Decided: this is being done** — the first live capture
+   runs listen-only. See §5. Tracked as issue #20.
 
 **Transceiver.** Use a **5 V** transceiver: TJA1050 or MCP2551 breakout. The R4 runs 5 V
 logic, and a 3.3 V part like the SN65HVD230 drives RXD to 3.3 V, which is marginal
@@ -169,15 +171,21 @@ What the sources do **not** support, and which I am not going to assert:
   would be a "no data" result on a correctly built node, not a fault to debug.
 - The typical bus load on this machine.
 
-**On ACK, which is the second condition.** A normal CAN node acknowledges every frame it
-receives — one dominant bit. That is participation, not writing, and on a bus with
-several ECUs it is unremarkable. The failure mode worth naming: if our node is the only
-listener for a talker, a non-ACKing configuration makes that ECU retransmit and go error
-passive. So the choice is between *normal ACKing* (safe on a populated bus, the usual
-answer for sniffing) and *true listen-only* (needs the vendored library patch from §4.5).
-My recommendation is to fit the listen-only patch and use it for the first capture, then
-decide. It costs an hour and it removes the whole question from the first time anyone
-plugs into a running tractor.
+**On ACK, which is the second condition — DECIDED 2026-09-18 by Alex.** A normal CAN node
+acknowledges every frame it receives — one dominant bit. That is participation, not
+writing, and on a bus with several ECUs it is unremarkable. The failure mode worth
+naming: if our node is the only listener for a talker, a non-ACKing configuration makes
+that ECU retransmit and go error passive.
+
+**The first live capture uses true listen-only, not normal ACKing.** That means the
+vendored library patch from §4.5 — exposing `CAN_TEST_MODE_LISTEN` — is fitted and
+proven *before* anything is connected to the running tractor, not after. It is about six
+lines and an hour, and it removes the question entirely from the first time anyone plugs
+into the machine. Tracked as issue #2 below; that issue is approved work, not a proposal.
+
+This does not settle what the *deployed* firmware does. A permanently installed node that
+never acks is a node whose presence the bus cannot detect, which has its own trade-offs.
+Revisit once the capture exists.
 
 ## 6. J1939 decode table
 
@@ -322,33 +330,33 @@ cp arduino_secrets.h.example sketches/can_mqtt/arduino_secrets.h   # gitignored
 arduino-cli compile --fqbn arduino:renesas_uno:unor4wifi sketches/can_mqtt
 ```
 
-## 11. Proposed GitHub issues — not filed
+## 11. Follow-up issues — filed 2026-09-18 on Alex's word
 
-Per the standing rule, dev follow-ups are GitHub issues and I do not open them without
-your word. These are the ones I would file on `Alex-Pennington/greybeard-plc4-tractor-scale`:
+All ten were opened on `Alex-Pennington/greybeard-plc4-tractor-scale`. Issue numbers are
+recorded beside each; the wording below is what was filed.
 
-1. **Prove `Arduino_CAN` receives on core 1.6.0 before anything else is built** — internal
+1. **[#19] Prove `Arduino_CAN` receives on core 1.6.0 before anything else is built** — internal
    loopback test; the RX-complete handler carries an "unreachable code" comment. Blocks
    every other CAN issue.
-2. **Vendor a patched `Arduino_CAN` exposing `CAN_TEST_MODE_LISTEN`** — six lines; makes
+2. **[#20] Vendor a patched `Arduino_CAN` exposing `CAN_TEST_MODE_LISTEN`** — six lines; makes
    the first live capture provably silent on the tractor bus.
-3. **Fit and bench-test a 5 V CAN transceiver on D10/D13** — including removing the
+3. **[#21] Fit and bench-test a 5 V CAN transceiver on D10/D13** — including removing the
    breakout's termination resistor.
-4. **Capture a PGN census from the 5055E diagnostic connector** — `can_sniff` at 250k and
+4. **[#22] Capture a PGN census from the 5055E diagnostic connector** — `can_sniff` at 250k and
    500k; record which PGNs appear, their rates, source addresses, and whether 65253
    appears unrequested.
-5. **Decide whether to transmit PGN requests for engine hours** — a decision about writing
+5. **[#23] Decide whether to transmit PGN requests for engine hours** — a decision about writing
    to the tractor bus, not a coding task.
-6. **Fold the CAN reader into the scale firmware** — shared `netPoll()`, hardware filters,
+6. **[#24] Fold the CAN reader into the scale firmware** — shared `netPoll()`, hardware filters,
    drain cadence faster than the 500 ms loop.
-7. **Hand migration 067 and the two consumer handlers to the consumer coordinator** —
+7. **[#25] Hand migration 067 and the two consumer handlers to the consumer coordinator** —
    including a handler test registered in `docs/DESIGN-STANDARD.md` §4 so the ritual does
    not jam.
-8. **Alert on DM1 red-stop lamp and on CAN liveness going to zero with the key on.**
-9. **Correct `BRIEF.md`: the "no watchdog" characterisation is out of date** — the firmware
+8. **[#26] Alert on DM1 red-stop lamp and on CAN liveness going to zero with the key on.**
+9. **[#27] Correct `BRIEF.md`: the "no watchdog" characterisation is out of date** — the firmware
    now runs a 5 s WDT refreshed from an FspTimer ISR. Found while surveying; unrelated to
    CAN, not fixed here.
-10. **Confirm `mqtt.firewood.ltd`, `192.168.10.99` and `farm1.internal` are one broker** —
+10. **[#28] Confirm `mqtt.firewood.ltd`, `192.168.10.99` and `farm1.internal` are one broker** —
     and record the answer where both the board and the consumer can be read against it.
 
 ## Sources
