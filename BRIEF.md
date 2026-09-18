@@ -5,9 +5,11 @@ FOXTROTBRAVO, publishing to farm1 with a fitted transducer and a real calibratio
 below describes the baseline it started from; the port, the HMI and the field results are in
 `PORT-PLAN.md` and `findings/`.
 
-**Two fixes are committed and await a flash** — `f7af2fc` (a calibration-validity bug that makes
-the LCD wrongly report `CAL NOT SET!` after every reboot) and `b10ec94` (over-range counters).
-Until the board next comes in, **check `cf` before acting on that warning**.
+**Superseded, 2026-09-18.** The two fixes named here — `f7af2fc` (calibration validity) and
+`b10ec94` (over-range counters) — were flashed long ago and are ancestors of what is running.
+The `cf` caveat no longer applies. **The board on the tractor is running `c601d792`**, which it
+publishes as `build` in every status frame, so the running version is a thing to read rather
+than a thing to remember.
 
 **The transducer spec is confirmed against hardware** — see
 `findings/2026-09-02-field-commissioning.md`. The scaling constants are no longer provisional.
@@ -18,7 +20,9 @@ Until the board next comes in, **check `cf` before acting on that warning**.
 no networking at all. Read **open question 12 before any fix-gate planning** — the likely work
 is a forward-port of the MQTT layer onto `main`, not a fix list against this baseline.
 **Audit:** `findings/2026-09-01-plc4-baseline-audit.md`
-**Port scope:** `PORT-PLAN.md` — approved base is `origin/main`; scope only, nothing written.
+**Port scope:** `PORT-PLAN.md` — approved base was `origin/main`. **Superseded, 2026-09-18: the
+port is implemented and on `main`.** `PORT-PLAN.md` is kept as the record of what was decided
+and why, not as outstanding work.
 
 ## Scope
 
@@ -27,13 +31,27 @@ it to MQTT over WiFi. It is the fourth machine in the Phoenix Nest estate; PLC #
 coordinator), #2 (log splitter) and #3 (saw feed actuator) live in their own trees and are
 coordinated from `~/greybeard-plc-coordination`.
 
-What distinguishes PLC #4 from the other three, and drives most of what follows: **it is
+What distinguishes PLC #4 from the other three, and drove most of what follows: **it is
 mobile, it is unattended, and it has no watchdog.** The other three are fixed installations
 on an Opta whose IWDG provides a recovery floor. This one drives out of radio range with
 nobody watching a console, and a hang is permanent and silent.
 
-This gate covered orientation and a baseline audit only. No firmware was changed, nothing was
-compiled, and no board was tethered.
+**Superseded, 2026-09-18: it has a watchdog, and that sentence is the reason it got one.** The
+risk framing above still describes the machine correctly — mobile, unattended, out of range —
+but the recovery floor it says is missing has been built. `WDT.h` is armed at
+`WDT_TIMEOUT_MS = 5000` (the part's ceiling is 5592), refreshed at eight sites, and crucially
+**refreshed from a timer ISR only while `loop()` is still ticking** — a heartbeat watchdog
+rather than the classic anti-pattern of an ISR that refreshes unconditionally and defeats the
+whole mechanism. Reset cause is decoded from RSTSR0/RSTSR1 and published as `reset`, so a
+watchdog bite is distinguishable from a brownout after the fact. See
+`src/ArduinoHydraulicScale.cpp:146-232` and `:329-348`.
+
+**Also superseded, 2026-09-18:** this gate covered orientation and a baseline audit only, and
+at the time no firmware had been changed, nothing compiled and no board tethered. All three
+are now false. The firmware has been through a forward-port, an ADC change and an HMI change;
+it is built with `arduino-cli` and flashed via `farm1`; and the board is in service on the
+tractor. **Claims about runtime behaviour can now be measured, and should be** — say which of
+yours are read from source and which are read from the machine.
 
 ## Decisions (settled — not open parameters)
 
@@ -65,7 +83,11 @@ geometry half of open question 5.
 created 2026-09-01 — matching the five sibling PLC repos. `origin` now points there;
 `upstream` is Alex's public `ArduinoHydraulicScale`. **Never push to `upstream`.** Branches
 `plc4/baseline` and `plc4/mqtt-port` are pushed. `main` on the new repo is **not yet seeded** —
-see open question 11.
+see open question 11. **Superseded, 2026-09-18: `main` is seeded and is the real mainline.**
+Note also that the "never push to `upstream`" rule above is still correct, but the rule about
+`origin` that once sat beside it was withdrawn — pushing to `origin` is fine. See `CLAUDE.md`,
+which names what each remote points at, precisely because a repository does not version its
+own remote names and a stale rule about one reads exactly like a live rule.
 
 **Base: forward-port the MQTT layer onto `origin/main`.** Decided by Alex, 2026-09-01. Not 26
 fixes to `r4_wifi_mqtt`. See `PORT-PLAN.md` and open question 12.
@@ -94,10 +116,24 @@ but the loader model was written down nowhere until now.
 connected.** Every reading taken so far is bench work on a floating analog input and none of it
 is a hydraulic measurement.
 
+**Superseded, 2026-09-18: it is on the tractor and the readings are real.** A Rosemount 4-20 mA
+transmitter is fitted to the hydraulic circuit, the loop is live, and the calibration is stored
+and reported as `cal:"ok"`. The pressure reading was checked against an independent gauge at
+roughly 500 psi and agreed to about 0.13% of span. Every sentence in this section that begins
+"on the bench" now describes history, not the machine.
+
 **The previous transducer failed by leaking at the electrical connection** — oil worked through
 the body and out of the cable entry, which is an internal element/seal failure rather than a
 thread or installation fault. See `notes/2026-09-01-transducer-failure-and-selection.md`; oil
 travels up a cable, so the harness and whatever it terminates in want checking before reuse.
+
+**Superseded, 2026-09-18 — closed by the front end changing, not by fitting the resistor.**
+The defect below is real for a *voltage* transducer on a high-impedance analog input, which is
+what this machine had when it was written. It no longer has one. A 4-20 mA loop cannot float:
+a broken loop carries no current, so the burden resistor reads 0 mA, which lands below
+`LOOP_DEAD_MA` (3.5 mA) and is reported as a dead loop rather than as a valid pressure. That is
+NAMUR NE43 live-zero banding and it is what a pull-down was trying to approximate. Do not fit
+the resistor; do not read the paragraph below as outstanding work.
 
 **Open defect, hardware: the transducer input needs a pull-down resistor or the NO SENSOR
 detection does not work.** Demonstrated on the bench — with nothing connected, the input reads
@@ -187,7 +223,16 @@ when deciding whether a constant is a deliberate choice or a leftover.
 
 ## What is still open, 2026-09-02
 
-Most of the list below is answered. What actually remains, all physical:
+**Superseded, 2026-09-18.** Items 1, 2 and 5 below are closed, and not by anyone doing the work
+they ask for — they were closed by the front end changing. The transmitter is now a known part
+with a known span (Rosemount, 4-20 mA, 0-3000 psi), so item 1's hunt for a part marking is
+moot; a current loop cannot float, so item 2's pull-down is moot (see the superseded note under
+*The machine*); and the units are settled — **`w` is pounds** once `cal` reads `ok`. Item 3, the
+snubber, is a physical fitting and this file cannot tell you whether it was fitted. Item 4's
+3.6% gap belonged to the old voltage front end; the current one was checked against an
+independent gauge at ~500 psi and agreed to about 0.13% of span.
+
+The original list, kept because the reasoning in it is still worth reading:
 
 1. **The part marking** off the failed transducer — the only route to a datasheet, and the only
    way to confirm the *span*. The zero is confirmed; single-point calibration hides a span error
@@ -221,7 +266,16 @@ optional to the weighing path. What remains open under that ruling — queue loc
 overflow policy, and whether a buffered reading carries a timestamp — is scoped in
 `PORT-PLAN.md` §1 and is for Alex, not for us.
 
-### 2. Does `FOXTROTBRAVO` actually route to `192.168.10.0/24`?
+### 2. Does `FOXTROTBRAVO` actually route to `192.168.10.0/24`? — **ANSWERED by deployment**
+
+**The board associates and publishes, so the routing question is settled in the only way that
+matters.** What has changed since this was written is which vantage point can see it: the board
+reaches the broker as `farm1`, and **Saga can no longer reach the board's network directly** —
+the VPN sees to that, deliberately. Saga reaches the same broker as `farm1.internal`. Whether
+`mqtt.firewood.ltd`, `192.168.10.99` and `farm1.internal` are all one host is genuinely not
+settled here and is tracked as issue #28; do not assume it from this file.
+
+The original reasoning follows.
 
 A commissioning check, and it gates everything else on the network side. The board must reach
 the broker's subnet from that SSID. Nothing in this tree can establish it — we have no path to
@@ -334,14 +388,27 @@ Nearest 10 lb? Nearest pound? This sizes the filtering and conversion work, and 
 whether the 14-bit change that caused three defect clusters was buying anything in the first
 place. 0.229 psi/count is far finer than the hydraulics can plausibly resolve.
 
-### 10. Which findings are approved for a firmware change, and who flashes it?
+### 10. Which findings are approved for a firmware change, and who flashes it? — **ANSWERED**
+
+**Alex approves each change specifically, and the gate still stands** — auditing, documenting
+and proposing are open; editing the firmware is not. **Flashing goes through `farm1`:** build on
+Saga with `arduino-cli`, copy the image across, upload there. Saga has no path to the board.
+The original framing follows, and its "nothing has been fixed" is no longer true.
 
 Nothing has been fixed. The audit lists 26 confirmed items and flags three couplings where
 fixing one defect alone makes things worse. A sensible first slice would be the items that
 prevent the machine from booting or reading correctly at all — F1, C4, C5, T1/T2/T3, T5 — but
 that is a proposal, not a decision. No board is tethered and no build has been attempted.
 
-### 11. Someone needs to seed `main` on the new repo — this session did not
+**Superseded, 2026-09-18:** a board is tethered, in service, and running `c601d792`. The slice
+named above was done and went well past it — see the row-by-row table at the end of this file
+for what actually remains, which is A9 alone.
+
+### 11. Someone needs to seed `main` on the new repo — this session did not — **DONE**
+
+**Superseded, 2026-09-18: `main` exists and is the repository's real mainline.** It carries the
+merged MQTT port and everything since. The constraint described below was real and is still in
+force for sessions here — it simply no longer blocks anything, because the seeding happened.
 
 **Answered:** PLC #4 has its own repo (see Decisions). But the repo is still empty of a
 default branch, and **this session did not seed it.**
@@ -384,6 +451,9 @@ So `r4_wifi_mqtt` is the only branch that can publish, and it predates every one
 fixes. The likely fix gate is a **forward-port of the MQTT layer onto `main`**, not 26 fixes to
 `r4_wifi_mqtt`. That is Alex's call and no port has been started.
 
+**Superseded, 2026-09-18: the forward-port onto `main` was Alex's call, it was taken, and it is
+done.** Everything below this line describes the decision as it stood while it was still open.
+
 #### Already fixed on `main` — these come free with a forward-port
 
 | Audit item | How `main` fixes it |
@@ -411,6 +481,29 @@ fixes. The likely fix gate is a **forward-port of the MQTT layer onto `main`**, 
 | A3 out-of-bounds `-` write | Survives verbatim (`main` :158, :172-178 — same `+` guard, same `rT[rTindex] = 0`) |
 | A6 serial command framing | Survives verbatim (`main` :284-294, moved into `serialEvent()`, which *is* explicitly called at :145) |
 | A7 `cal` divide-by-zero | Survives (`main` :222, verb renamed `kv`) — and `main` adds an unvalidated direct-set `c<value>` at :226 |
+
+**Superseded, 2026-09-18 — the table above was checked row by row against the current source,
+and eight of its nine rows are done.** It is the most misleading thing in this file, because it
+is headed "the real remaining work" and a reader has no way to tell it predates the port. Line
+numbers below are `src/ArduinoHydraulicScale.cpp` unless stated.
+
+| Row | Now | Evidence |
+|---|---|---|
+| F1 no watchdog | **Fixed** | `WDT.h`, `WDT_TIMEOUT_MS = 5000` (:197), eight refresh sites, heartbeat ISR (:229) |
+| T4 no-sensor / dead-loop floor | **Fixed** | NAMUR NE43 banding in `include/loop_scaling.h:51-66`; `LoopState` has five states, not a bool |
+| C2, X1 topic truncation | **Fixed** | `snprintf(out, len, ...)` (:371) — bounded by the buffer, not a literal |
+| C7, A5 topic root, client ID | **Fixed** | `TOPIC_ROOT = "plc4/jd5055e"` (:265); `mqttClient.setId(CLIENT_ID)` (:1178) |
+| C5 blocking connect / `while (1)` | **Fixed** | `:1217` returns on failure; the only `while (1)` left in the file is inside a comment saying so |
+| C6 missing reconnect | **Fixed** | `NetState` machine (:271-272) with generation counter and backlog flush (:513) |
+| A3 out-of-bounds `-` write | **Fixed** | `:1758` decrements first, bounding by construction |
+| A6 serial command framing | **Fixed** | `serialEvent()` stops at a complete line and bounds `inputString` at 64 chars |
+| A7 `cal` divide-by-zero | **Fixed** | `span <= 0.0f` refusal (:1847); the direct setter validates at `:1869` |
+| **A9 plaintext credentials** | **SURVIVES** | `port = 1883` (:257), plain `WiFiClient`, `setUsernamePassword` (:1179) over the clear |
+
+**A9 is the one still open**, and it is unchanged: username and password cross the farm LAN in
+plaintext on every connect. It is not a defect introduced by the port — it is the item the port
+carried forward. Whether it is worth fixing is an estate-level question about the broker, not a
+PLC #4 question, since the broker reportedly has no ACL either.
 
 #### Three things the port will have to deal with that neither of us had flagged
 
