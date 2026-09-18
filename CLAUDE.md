@@ -7,8 +7,8 @@ local LCD, published to MQTT over WiFi. Arduino UNO R4 WiFi. It is the newest ma
 an estate that already runs PLC #1, #2 and #3.
 
 Read `BRIEF.md` first. It carries the verified hardware picture, the settled decisions and
-the open questions. `PORT-PLAN.md` scopes the approved forward-port of the MQTT layer onto
-`origin/main` — scope only, no code written.
+the open questions. `PORT-PLAN.md` scoped the forward-port of the MQTT layer; that work is
+implemented and on `main`.
 
 ## Boundaries
 
@@ -37,8 +37,16 @@ Firmware changes are gated. The baseline has defects — they are written up in
 `findings/`, not fixed. Nothing in the `.ino` changes without Alex approving that
 specific change. Auditing, documenting and proposing are open; editing is not.
 
-No board is tethered. Nothing here has been compiled or flashed, so every claim about
-runtime behaviour is read from source and should say so.
+**A board is tethered and it is in service.** PLC #4 is on the tractor with its loop live
+and its calibration stored, and its USB console is on `farm1`. Flashing is done from here:
+build on Saga, copy the image to `farm1`, upload with `arduino-cli` there. The firmware
+publishes the commit it was built from as `build` on the status topic, so what is running
+can be asked rather than assumed.
+
+That changes what a wrong claim costs. It is no longer a sentence in a file — it is a
+machine in a field producing a weight somebody acts on. Say which claims are read from
+source and which are measured, and measure where you can: the broker is reachable from
+Saga and the board answers.
 
 ## When you do not know
 
@@ -49,13 +57,21 @@ coordinator; do not reason from a part number you have not seen.
 
 ## Reporting
 
-Questions, blockers and completion go to `plc4-tractor-hydraulic-mqtt` by SendMessage.
-That session relays to Alex. Do not contact Alex directly and do not fire the
-house-lights signal.
+**Talk to Alex directly.** He drives this work himself and answers in the session. An
+earlier version of this file routed everything through a relay session called
+`plc4-tractor-hydraulic-mqtt`; that is not how this repo is worked and the relay is not
+running.
+
+Put anything he must answer or acknowledge in a question dialog rather than in prose. He
+has asked for that twice: the scrollback is too long to re-read every time, and a question
+at the foot of a long message is a question he never sees.
+
+Still true and not a convenience: **never fire the house-lights signal.** Only the estate
+coordinator may, and only when Alex has asked to be signalled.
 
 ## Layout
 
 - `findings/` — dated audit write-ups. One file per pass, evidence with line numbers.
 - `notes/` — working context worth keeping between sessions.
-- `PORT-PLAN.md` — the scoped forward-port. Not started; the open decisions in its §1 are
-  Alex's, not ours.
+- `PORT-PLAN.md` — the forward-port it scoped is implemented and on `main`. Kept as the
+  record of what was decided and why.
