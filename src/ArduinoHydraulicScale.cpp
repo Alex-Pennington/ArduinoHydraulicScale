@@ -539,8 +539,12 @@ static void queueFlush() {
 //
 // Contract: commands arrive on plc4/jd5055e/cmd at QoS 1, never retained, as
 //   {"id":"7f3a9c21","verb":"+"}      {"id":"7f3a9c22","verb":"sm","arg":"3000"}
-// and every one of them is answered on plc4/jd5055e/ack at QoS 1, never
-// retained. `verb` is the same string the console accepts and runs through the
+// and every one of them is answered on plc4/jd5055e/ack at QoS 0, never
+// retained. QoS 0 on the ack is deliberate: a QoS 1 ack spins in endMessage()
+// waiting for a PUBACK, which ages the reading past READING_STALE_MS and makes
+// the board refuse the operator's NEXT command. A lost ack costs nothing
+// because the dedup ring below makes a retry idempotent; a stalled weighing
+// loop is not recoverable that cheaply. `verb` is the same string the console accepts and runs through the
 // SAME handler, so the two paths cannot diverge -- a property this firmware
 // already leans on.
 //
