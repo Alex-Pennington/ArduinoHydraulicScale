@@ -99,56 +99,30 @@ String inputString = "";         // a String to hold incoming data
 bool stringComplete = false;  // whether the string is complete
 
 // ---------------------------------------------------------------------------
-// HMI. Five buttons, a 20x4 LCD, and a gloved operator on a tractor seat.
+// HMI. A 20x4 LCD behind a clear coverplate, and nothing else.
 //
-// Principles, from the review of the old handler:
-//  * EDGE triggered, not level. The old code sampled every 1000 ms and re-fired
-//    while held, so holding Right recorded duplicate weights and holding Select
-//    hammered EEPROM with re-tares.
-//  * Everyday actions are one press from home. Rare or destructive ones live in
-//    the menu, and the destructive one confirms.
-//  * Status the operator needs to trust the reading is ON THE HOME SCREEN, not
-//    behind a button and not only on the serial console.
+// The five discrete buttons are GONE -- the outdoor enclosure needs no extra
+// holes for them. Every operator action now arrives over MQTT from the phone
+// app and is executed through the console's own command handler. The LCD costs
+// no hole, so it stays: one always-on readout, with no screens, no menu and no
+// deferred feedback. The operator's answer to an action comes back as an ack on
+// plc4/jd5055e/ack, not as a toast on a display they may not be standing at.
+//
+// The serial and Bluetooth console keeps every verb it had. It is the service
+// and recovery path, and it is the only one that works with no broker in reach.
 // ---------------------------------------------------------------------------
-const unsigned long KEY_DEBOUNCE_MS = 40;
-const unsigned long MSG_HOLD_MS     = 1500;
-
-// Five buttons to GND on pins freed by the I2C display, read with INPUT_PULLUP.
-// Order matches the old ladder exactly: Right, Up, Down, Left, Select.
-const uint8_t KEY_PINS[5] = { 4, 5, 6, 7, 8 };
-
-// Per-pin "continuously LOW since" timestamp, 0 meaning released. Nothing in
-// this HMI auto-repeats on hold, so a pin held LOW past KEY_STUCK_MS is a
-// fault (mud, water, a failed switch), never intent.
-unsigned long keyDownSince[5] = {0};
-const unsigned long KEY_STUCK_MS = 10000;
-
-enum Screen { SCR_HOME, SCR_MENU, SCR_CONFIRM, SCR_CHECKCAL };
-Screen screen = SCR_HOME;
-
-int  keyPrev = -1, keyStable = -1;
-unsigned long keyChangeMs = 0;
-int  menuIndex = 0;
-unsigned long msgUntil = 0;
-int pendingMsg = 0;   // 0 none, 1 added, 2 removed, 3 total, 4 link, 5 tare, 6 cal
-// Set by a verb that REFUSED, cleared by the keypress that queues the next one.
-// The keypad cannot read the outcome at press time -- the verb runs later in the
-// same loop pass -- so without this the deferred message painted "Added 4200"
-// over a refusal. Over-range is routine on this machine and `+` refuses on
-// LOOP_SATURATED, so that false success was an everyday event, not an exotic one.
+// Set by a verb that REFUSED, cleared immediately before each command runs.
+// The MQTT ack cannot read the outcome at the point the verb is queued -- the
+// handler runs later in the same loop pass -- so this is how the verdict gets
+// back to the phone. Without it an ack would report success for a refusal,
+// which is worse than no ack at all.
 bool verbRefused = false;
 // Set alongside verbRefused when the reason is NOT the loop state -- kv's
-// span<=0.0f failure and a full tally are both refusals with nothing to do
-// with displayStateName(). Empty means "use displayStateName(), as before";
-// non-empty overrides it. Reset with verbRefused so a stale reason from one
-// press can never be shown against a different one.
+// span<=0.0f failure, a full tally, an empty tally, a rejected argument. Empty
+// means "use displayStateName(), as before"; non-empty overrides it. Reset with
+// verbRefused so a stale reason from one command can never be reported against
+// a different one.
 char verbRefusedReason[21] = "";
-int  tarePrev = -1;            // previous zero, for Undo tare
-bool lcdDirty = true;
-
-const char *MENU_ITEMS[] = { "Tare at mark", "Calibrate", "Check cal",
-                             "Undo tare", "Clear tally", "Exit" };
-const int MENU_COUNT = 6;
 
 // --- non-blocking sample accumulation (replaces the 10x delay(10) burst) ----
 const int SAMPLE_COUNT = 10;
@@ -168,7 +142,6 @@ float sampleTotal = 0;
 // .superpowers/sdd/2026-09-16-mcp3421-lcd2004/review-9-10.md.
 const unsigned long READING_STALE_MS = 2000;
 
-// --- LCD message hold (replaces the blocking delay(1000) after a command) ---
 // ---------------------------------------------------------------------------
 // F1 watchdog period, and the WiFi timeout that MUST sit under it.
 //
@@ -299,6 +272,13 @@ enum NetState { NET_OFFLINE, NET_WIFI_UP, NET_ONLINE };
 NetState netState = NET_OFFLINE;
 unsigned long lastNetAttemptMs = 0;
 int  lastMqttError = 0;          // MqttClient::connectError() from the last attempt
+// Bumped on every successful (re)connect. A captured command carries the value
+// that was current when it arrived, and is discarded if it no longer matches --
+// see cmdRunCapture(). This is what makes "captured on the connection that is
+// still up" checkable; netState cannot answer it, because an MQTT-only drop can
+// be detected and repaired inside a single loop pass and netState would read
+// NET_ONLINE at both ends of the outage.
+unsigned long netGeneration = 0;
 unsigned long netAttempts = 0;   // how many times netPoll has tried to connect
 const unsigned long NET_RETRY_MS = 30000;   // bounded attempt rate, never a loop
 const unsigned long STAGE_GAP_MS = 500;     // gap between association and broker stages
@@ -431,17 +411,6 @@ static const char *displayStateName() {
   return readingFresh() ? sensorStateName() : "NO ADC";
 }
 
-// True once any pin has been continuously LOW for KEY_STUCK_MS or more.
-// keyIndex() already excludes that pin from the scan so the rest of the
-// keypad keeps working; this is only for telling the operator why a button
-// stopped responding.
-static bool keyStuck() {
-  unsigned long now = millis();
-  for (int i = 0; i < 5; i++)
-    if (keyDownSince[i] != 0 && now - keyDownSince[i] >= KEY_STUCK_MS) return true;
-  return false;
-}
-
 // A buffered reading MUST be distinguishable from a live one. Publishing
 // backlog bare is worse than not buffering, because the consumer cannot tell
 // stale from fresh. age_ms is the delta at flush; live readings carry 0.
@@ -562,6 +531,565 @@ static void queueFlush() {
 }
 
 // ---------------------------------------------------------------------------
+// The MQTT command path.
+//
+// The five buttons are gone, so this is the operator's interface. It has to be
+// at least as trustworthy as they were, and the failure it must never produce
+// is an ack that reports success for something the board refused, or never did.
+//
+// Contract: commands arrive on plc4/jd5055e/cmd at QoS 1, never retained, as
+//   {"id":"7f3a9c21","verb":"+"}      {"id":"7f3a9c22","verb":"sm","arg":"3000"}
+// and every one of them is answered on plc4/jd5055e/ack at QoS 1, never
+// retained. `verb` is the same string the console accepts and runs through the
+// SAME handler, so the two paths cannot diverge -- a property this firmware
+// already leans on.
+//
+// FOUR LIBRARY BEHAVIOURS SHAPE THIS CODE, all read out of ArduinoMqttClient's
+// source. Do not simplify around them.
+//
+//  1. A command must be read in the SAME poll() that opened it. poll() is
+//     `while (clientAvailable())`, and entered with _rxState already
+//     READ_PUBLISH_PAYLOAD it falls into the READ_PUBLISH_PAYLOAD/DISCARD case
+//     (MqttClient.cpp:616-626) and eats the bytes. That is why the payload is
+//     taken in the onMessage callback rather than left for the application to
+//     collect afterwards.
+//  2. THE CALLBACK IS THE ONLY DOOR THAT IS ALWAYS OPEN. parseMessage() cannot
+//     run inside the library's own endMessage() PUBACK spin, so a command
+//     arriving while a QoS 1 publish waits would be destroyed by behaviour 1
+//     before the application ever saw it. onMessage fires from inside poll()
+//     itself (MqttClient.cpp:568, :595), ahead of the discard case, so it
+//     catches those too. That is what makes delivery meet the contract, and it
+//     is why parseMessage() appears nowhere in this file.
+//  3. cmdPoll() still sits immediately after netPoll(), so a command captured
+//     during netPoll()'s own poll() executes in the SAME pass. Ones captured
+//     later -- inside publishStatus()'s 2 s spin, say -- queue in the capture
+//     ring and run one per pass after it.
+//  4. A zero-length PUBLISH used to wedge the receiver: _rxState stuck at
+//     READ_PUBLISH_PAYLOAD with nothing readable and only parseMessage() to
+//     escape it. WITH A CALLBACK REGISTERED the library resets _rxState itself
+//     (MqttClient.cpp:603-610), so the wedge is closed outright rather than
+//     worked around.
+//
+// WHAT THIS COSTS, stated rather than papered over: reading the payload inside
+// the callback makes the library PUBACK a QoS 1 command TWICE -- see the note on
+// cmdOnMessage(). And the capture ring is four deep, not unbounded: a fifth
+// command arriving before cmdPoll() has drained any of the four is dropped and
+// counted, never queued and never overwriting an older one.
+// ---------------------------------------------------------------------------
+const char CMD_LEAF[] = "cmd";
+const char ACK_LEAF[] = "ack";
+
+bool cmdSubscribed = false;
+unsigned long cmdReceived  = 0;   // PUBLISHes taken off the command topic
+unsigned long cmdExecuted  = 0;   // passed the allowlist and were run
+unsigned long cmdDuplicate = 0;   // acked from the ring, deliberately NOT re-run
+unsigned long cmdRetained  = 0;   // arrived retained: dropped, counted, never acked
+unsigned long cmdRefusedN  = 0;   // a verb this path will not run
+unsigned long cmdBad       = 0;   // unparseable, oversized, or zero length
+unsigned long ackFailed    = 0;   // the ack publish itself did not complete
+unsigned long subFailed    = 0;   // SUBSCRIBE did not come back with a usable SUBACK
+
+// --- the dedup ring --------------------------------------------------------
+// It stores the VERDICT, not just the id. A repeat replays what actually
+// happened. Storing only the id would let a repeat of a REFUSED command come
+// back ok:true -- a success that never happened, on the one interface the
+// operator has left, for an action they are about to trust.
+struct CmdVerdict {
+  char id[41];       // wide enough for a UUID with dashes; longer is REFUSED, never truncated
+  char verb[12];
+  char detail[21];
+  bool ok;
+};
+const int CMD_RING = 8;
+CmdVerdict cmdRing[CMD_RING];
+int cmdRingCount = 0;
+int cmdRingNext  = 0;
+
+// The command in flight: queued into inputString by cmdPoll(), its verdict read
+// and published after the shared handler has run, later in the same loop pass.
+bool ackPending  = false;
+char ackId[41]   = "";
+char ackVerb[12] = "";
+// A technician at the enclosure may be halfway through typing when a command
+// arrives. inputString is the console's own buffer and the handler clears it,
+// so the half-typed line is parked here and put back once the verb has run.
+char consoleSaved[65] = "";
+
+// Exact match, never a prefix: `cat` must not become the `c` setter.
+//
+// `hang` is refused because it deliberately stops the board to prove the
+// watchdog, and over the network that is a denial of service against a machine
+// holding a load. `read`, `net` and `sum` are refused as redundant -- the phone
+// already subscribes to telemetry and status for that data.
+static bool cmdAllowed(const char *v) {
+  return !strcmp(v, "tare") || !strcmp(v, "+")  || !strcmp(v, "-") ||
+         !strcmp(v, "b")    || !strcmp(v, "kv") || !strcmp(v, "c") ||
+         !strcmp(v, "w")    || !strcmp(v, "sm");
+}
+
+// The three verbs whose argument is concatenated onto the verb in the console
+// form the shared handler parses: c1.234, w0.1, sm3000.
+static bool cmdTakesArg(const char *v) {
+  return !strcmp(v, "c") || !strcmp(v, "w") || !strcmp(v, "sm");
+}
+
+// SUCCESS details are this path's own vocabulary and are safe to choose here.
+// REFUSAL details are NOT -- see where the ack is built.
+static const char *cmdSuccessDetail(const char *v) {
+  if (!strcmp(v, "+"))    return "recorded";
+  if (!strcmp(v, "-"))    return "removed";
+  if (!strcmp(v, "tare")) return "tared";
+  if (!strcmp(v, "b"))    return "cleared";
+  if (!strcmp(v, "kv"))   return "calibrated";
+  return "set";                                  // c, w, sm
+}
+
+// EVERY caller-supplied token that gets echoed into an ack must pass this --
+// the id AND the verb. They are written into the JSON payload literally rather
+// than escaped on the way out, so a quote or a backslash would produce an ack
+// that is not valid JSON, unparseable by the consumer waiting to hear whether
+// the weight was recorded. Worse for the verb: the refusal verdict is kept in
+// the dedup ring, so one malformed verb would have poisoned every replay for
+// that id thereafter.
+//
+// A whitelist, not a blacklist, so a character nobody thought of is refused
+// rather than admitted. '+' is in it because '+' is a verb; none of the set
+// needs escaping in JSON.
+static bool cmdTokenSafe(const char *s) {
+  if (!*s) return false;
+  for (const char *p = s; *p; p++) {
+    if (*p >= 'a' && *p <= 'z') continue;
+    if (*p >= 'A' && *p <= 'Z') continue;
+    if (*p >= '0' && *p <= '9') continue;
+    if (*p == '-' || *p == '_' || *p == '.' || *p == ':' || *p == '+') continue;
+    return false;
+  }
+  return true;
+}
+
+// String::toFloat() and toInt() return 0 for an EMPTY or non-numeric string,
+// which is indistinguishable from a real zero. That is only survivable while a
+// verb's accepted range excludes zero -- and `w`'s does not. `w` with no
+// argument at all parsed to 0.0, passed its 0 <= v < 1 test, wrote alpha = 0 to
+// EEPROM and acked ok:true "set": a persisted success for a value nobody sent,
+// on the filter that sits in the weighing path. `c` and `sm` escaped only
+// because their ranges happen to exclude zero, which is luck, not a check.
+//
+// So the argument is checked for being a number BEFORE its value is judged, for
+// all three, and no future range change can reintroduce the hole.
+static bool numericArg(const char *s) {
+  if (!s || !*s) return false;
+  bool digit = false, dot = false;
+  for (const char *p = s; *p; p++) {
+    if ((*p == '-' || *p == '+') && p == s) continue;   // sign, leading only
+    if (*p == '.') { if (dot) return false; dot = true; continue; }
+    if (*p < '0' || *p > '9') return false;
+    digit = true;
+  }
+  return digit;                                          // ".", "-" and "+" alone are not numbers
+}
+
+// Minimal extractor for a quoted string field in a flat JSON object. NOT a JSON
+// parser: escape sequences are not interpreted. That is safe here only because
+// the id is character-checked by cmdIdValid() and the verb is matched against a
+// fixed allowlist, so a value carrying a backslash fails to match rather than
+// being mis-read. It REFUSES rather than truncates on an oversized value: a
+// truncated id would collide in the dedup ring and let one command be acked
+// with another command's verdict.
+static bool jsonField(const char *src, const char *key, char *out, size_t outLen) {
+  char needle[10];
+  if (snprintf(needle, sizeof(needle), "\"%s\"", key) >= (int)sizeof(needle)) return false;
+  const char *p = strstr(src, needle);
+  if (!p) return false;
+  p += strlen(needle);
+  while (*p == ' ' || *p == '\t') p++;
+  if (*p != ':') return false;
+  p++;
+  while (*p == ' ' || *p == '\t') p++;
+  if (*p != '"') return false;
+  p++;
+  size_t i = 0;
+  while (*p && *p != '"') {
+    if (i + 1 >= outLen) return false;
+    out[i++] = *p++;
+  }
+  if (*p != '"') return false;          // unterminated
+  out[i] = '\0';
+  return true;
+}
+
+// Returns the ring INDEX, or -1. Deliberately not a CmdVerdict* :
+// tools/build-check.sh compiles this file as an .ino, and arduino-cli hoists a
+// prototype for every free function above the whole sketch -- including above
+// `struct CmdVerdict`. A signature naming a type declared in this file does not
+// survive that. Do not "tidy" this back into a pointer.
+static int cmdFind(const char *id) {
+  for (int i = 0; i < cmdRingCount; i++)
+    if (!strcmp(cmdRing[i].id, id)) return i;
+  return -1;
+}
+
+static void cmdRemember(const char *id, const char *verb, bool ok, const char *detail) {
+  CmdVerdict &e = cmdRing[cmdRingNext];
+  snprintf(e.id,     sizeof(e.id),     "%s", id);
+  snprintf(e.verb,   sizeof(e.verb),   "%s", verb);
+  snprintf(e.detail, sizeof(e.detail), "%s", detail);
+  e.ok = ok;
+  cmdRingNext = (cmdRingNext + 1) % CMD_RING;
+  if (cmdRingCount < CMD_RING) cmdRingCount++;
+}
+
+// SIZED beginMessage -- the bare form buffers the whole message into a 256-byte
+// _txBuffer and truncates in SILENCE, the defect that cost the entire status
+// topic. Kept whatever the QoS. The (unsigned long) cast is required: size_t is
+// ambiguous between the unsigned-long and the bool overload.
+//
+// QoS 0, NEVER RETAINED. Changed from QoS 1 by Alex, and the reason is the
+// weighing loop: endMessage() at QoS 1 spins on poll() for up to
+// setConnectionTimeout() (2 s), and a 2 s pass ages the displayed reading past
+// READING_STALE_MS -- so the board shows NO ADC and refuses the operator's NEXT
+// command. Tap record, next tap bounces, entirely self-inflicted. A lost ack is
+// cheap beside that: the dedup ring makes a retry safe, so the operator taps
+// again and the board replays the stored verdict rather than re-executing.
+// publishStatus() stays at QoS 1 -- it is retained, late subscribers need it,
+// and once a minute is tolerable.
+//
+// CONSEQUENCE: endMessage() returns 1 unconditionally at QoS 0, and
+// WiFiClient::write() reports success as soon as bytes reach the coprocessor. So
+// ack_fail counts a bad topic or an offline board, NOT wire-level loss. Do not
+// read ack_fail as "acks delivered".
+static bool cmdPublishAck(const char *id, const char *verb, bool ok,
+                          const char *detail, bool dup, bool withTally) {
+  if (netState != NET_ONLINE) return false;
+  char topic[64];
+  if (!buildTopic(ACK_LEAF, topic, sizeof(topic))) return false;
+
+  char payload[192];
+  int n = snprintf(payload, sizeof(payload),
+                   "{\"id\":\"%s\",\"verb\":\"%s\",\"ok\":%s,\"detail\":\"%s\"%s",
+                   id, verb, ok ? "true" : "false", detail,
+                   dup ? ",\"dup\":true" : "");
+  if (n < 0 || n >= (int)sizeof(payload)) return false;
+  // `n` and `total` ride along on a successful `+`, so the phone gets the
+  // running total atomically with the record that moved it.
+  if (withTally) {
+    int m = snprintf(payload + n, sizeof(payload) - (size_t)n,
+                     ",\"n\":%d,\"total\":%ld", rTindex, tallyTotal());
+    if (m < 0 || m >= (int)(sizeof(payload) - (size_t)n)) return false;
+    n += m;
+  }
+  if ((size_t)n + 2 > sizeof(payload)) return false;
+  payload[n++] = '}';
+  payload[n]   = '\0';
+
+  if (!mqttClient.beginMessage(topic, (unsigned long)strlen(payload), false, 0)) return false;
+  mqttClient.print(payload);
+  return mqttClient.endMessage() == 1;
+}
+
+static void cmdAck(const char *id, const char *verb, bool ok,
+                   const char *detail, bool dup, bool withTally) {
+  if (!cmdPublishAck(id, verb, ok, detail, dup, withTally)) ackFailed++;
+}
+
+// --- the capture ring ------------------------------------------------------
+// FOUR deep, and the depth is the whole point. One slot was not enough: the gap
+// between two cmdPoll() runs is normally a few milliseconds, but publishStatus()
+// spins at QoS 1 for up to 2 s once a minute and poll() runs repeatedly inside
+// that spin, so two commands 200 ms apart in that window land in different
+// poll() calls and the second had nowhere to go. That is 2 s in every 60 -- and
+// each loss is a bucket of material the operator has to notice and re-tap.
+//
+// Written ONLY by cmdOnMessage(), read ONLY by cmdRunCapture(). Deliberately NOT
+// volatile: the callback is invoked synchronously from MqttClient::poll() on the
+// main thread, not from an interrupt. Marking it volatile would claim a
+// concurrency that does not exist and cost code size for nothing.
+struct CmdCapture {
+  char     body[192];
+  size_t   len;
+  uint32_t gen;        // netGeneration when it arrived; see cmdRunCapture()
+  bool     retained;
+  bool     oversize;
+};
+const int CMD_CAP_DEPTH = 4;
+CmdCapture cmdCapRing[CMD_CAP_DEPTH];
+int cmdCapHead  = 0;             // the oldest captured command, the next to run
+int cmdCapCount = 0;
+unsigned long cmdCapFull  = 0;   // arrived with all four slots taken: dropped
+unsigned long cmdCapStale = 0;   // captured on a connection that has since gone
+unsigned long cmdPartial  = 0;   // payload not fully buffered: dropped, never waited for
+
+// Discard whatever of the open message is ALREADY BUFFERED, and no more. It
+// NEVER WAITS: each read is bounded by what WiFiClient reports as already at the
+// board, so MqttClient's clientTimedRead() always finds its byte and its 1000 ms
+// per-byte timeout is never reached. Any tail that has not arrived is discarded
+// by the library's own poll(), whose loop is `while (clientAvailable())` and
+// cannot block either.
+static void cmdDrainBuffered() {
+  uint8_t scratch[32];
+  for (;;) {
+    const int ready = wifiClient.available();   // bytes in the local rx ring
+    const int want  = mqttClient.available();   // bytes this message still owes
+    if (ready <= 0 || want <= 0) return;
+    size_t n = (size_t)((ready < want) ? ready : want);
+    if (n > sizeof(scratch)) n = sizeof(scratch);
+    if (mqttClient.read(scratch, n) <= 0) return;
+  }
+}
+
+// CAPTURE ONLY. This is the whole of the callback's job: take the payload,
+// record its length, retain flag and connection generation, advance the ring,
+// return.
+//
+// It parses nothing, allowlists nothing, dedups nothing, executes nothing,
+// publishes nothing and WAITS ON NOTHING. It cannot: it runs inside
+// MqttClient::poll(), which is itself called from endMessage()'s PUBACK spin,
+// so anything reentrant here would be publishing from inside a publish. All of
+// that work stays in cmdRunCapture(), on the main line of loop().
+//
+// IT MUST NOT BLOCK, AND THAT IS THE HARD CONSTRAINT, NOT A PREFERENCE. This
+// function runs on the weighing path, and the design spine at the top of this
+// file is that the weighing path may never wait on the network. An earlier
+// revision read the payload with a bare MqttClient::read(), which goes through
+// clientTimedRead() and waits up to 1000 ms FOR EACH BYTE that has not arrived
+// -- so a slow trickle was bounded not by one second but by 1000 ms times the
+// payload length. That put a network stall in front of the scale through a
+// mechanism that did not exist before the command path was added.
+//
+// The fix is the gate below: read ONLY what has ALREADY ARRIVED AT THE BOARD,
+// and if the whole command is not there yet, do not wait for the rest.
+//
+// Precisely what the gate buys, because the weaker claim is the true one:
+// WiFiClient::available() returns its local rx ring count, or -- when that ring
+// is empty -- asks the modem how many bytes it is holding (WiFiClient.cpp,
+// available/read_if_needed). So once it reports >= size, every byte is either in
+// the local ring or sitting at the coprocessor with the modem saying so. A read
+// therefore costs at most ONE local bus fetch plus ring copies, which is exactly
+// what poll() already does on every pass. It is NOT free -- but no read can
+// reach clientTimedRead()'s 1000 ms wait, because that wait only happens when
+// clientAvailable() is zero, and it cannot be. The unbounded 1000 ms x payload
+// stall is structurally gone rather than merely made unlikely.
+//
+// WHY IT MUST STILL READ THE PAYLOAD HERE rather than leave it for cmdPoll():
+// the only alternative is to return with _rxState still at READ_PUBLISH_PAYLOAD,
+// and the very next poll() -- in this same spin -- falls into the
+// READ_PUBLISH_PAYLOAD/DISCARD case (MqttClient.cpp:616-626) and eats it.
+// Reading it here is the entire reason the callback exists. It is also the
+// library's own documented pattern: examples/WiFiAdvancedCallback subscribes at
+// QoS 1 and reads inside the callback.
+//
+// WHAT THAT COSTS, and it is visible on the wire: reading a payload to
+// completion makes MqttClient::read() call ackRxMessage() (MqttClient.cpp:735-739),
+// and poll() then sees _rxLength == 0 on return and calls ackRxMessage() AGAIN
+// (MqttClient.cpp:603-606). Every QoS 1 command therefore produces TWO PUBACKs
+// carrying the same packet id. It is inherent to the library's callback pattern
+// and cannot be avoided from this file. The connection is MQTT 3.1.1 (protocol
+// level 0x04, MqttClient.cpp:906), which does not make an unexpected PUBACK a
+// protocol error the way 5.0 does. NOT VERIFIED AGAINST A BROKER from here.
+static void cmdOnMessage(int size) {
+  // The retain flag must be read BEFORE the payload: consuming the last byte
+  // returns _rxState to READ_TYPE and messageRetain() then answers -1.
+  const bool retained = mqttClient.messageRetain() > 0;
+
+  cmdReceived++;
+
+  const size_t need  = (size > 0) ? (size_t)size : 0;
+  const int    avail = wifiClient.available();
+  const size_t have  = (avail > 0) ? (size_t)avail : 0;
+
+  if (need > have) {
+    // The whole command is not here yet and this function will not stand still
+    // for the rest of it. DROPPING IS SAFE: the sender retries and the dedup
+    // ring makes the retry idempotent. A stalled weighing loop is not safe.
+    //
+    // Take what did arrive so the receiver is not left owing a large _rxLength;
+    // poll() discards the tail as it lands, without blocking.
+    cmdPartial++;
+    cmdDrainBuffered();
+    return;
+  }
+
+  // All four slots are taken. Drop the NEWCOMER, never an older command: an
+  // operator who taps four times deserves the first four, not the last four,
+  // and a dropped command they can retry beats a queue that silently reorders
+  // what they asked for.
+  if (cmdCapCount >= CMD_CAP_DEPTH) {
+    cmdCapFull++;
+    cmdDrainBuffered();
+    return;
+  }
+
+  CmdCapture &c = cmdCapRing[(cmdCapHead + cmdCapCount) % CMD_CAP_DEPTH];
+
+  size_t want = need;
+  c.oversize = false;
+  if (want > sizeof(c.body) - 1) {
+    want = sizeof(c.body) - 1;
+    c.oversize = true;
+  }
+
+  int got = 0;
+  if (want > 0) {
+    got = mqttClient.read((uint8_t *)c.body, want);   // cannot wait: see the gate above
+    if (got < 0) got = 0;
+  }
+  c.body[got] = '\0';
+  c.len       = (size_t)got;
+  c.retained  = retained;
+  // Which connection this arrived on. A command captured before an outage and
+  // run after the reconnect would act on a machine state the operator never saw
+  // -- see cmdRunCapture(). netState alone cannot catch it: an MQTT-only drop
+  // can be detected and repaired inside a single loop pass.
+  c.gen       = netGeneration;
+
+  // Drain the oversized remainder, if any. Bounded to what is buffered, which
+  // the gate above has already established is the whole payload.
+  cmdDrainBuffered();
+
+  // Published LAST. Until this line the slot is not part of the ring, so a
+  // half-written capture can never be seen as a command.
+  cmdCapCount++;
+}
+
+// Run one captured command. Takes the ring INDEX, not a CmdCapture& --
+// tools/build-check.sh compiles this file as an .ino and arduino-cli hoists a
+// prototype for every free function above `struct CmdCapture`, so a signature
+// naming the type does not survive. Same reason as cmdFind(); do not "tidy" it.
+//
+// The caller releases the slot AFTER this returns, on every path. That ordering
+// is load-bearing: while the entry is in hand cmdCapCount still counts it, so
+// the callback's write slot -- (cmdCapHead + cmdCapCount) % CMD_CAP_DEPTH --
+// can never be this one, and a command cannot be overwritten mid-parse.
+static void cmdRunCapture(int slot) {
+  const CmdCapture &cap = cmdCapRing[slot];
+
+  // A command captured before an outage and executed after the reconnect would
+  // act on a machine state the operator never saw -- a plausible wrong answer,
+  // which is this machine's characteristic failure. netState alone CANNOT catch
+  // that: an MQTT-only drop is detected and repaired inside a single loop pass,
+  // so netState reads NET_ONLINE at both ends of it and the capture sails
+  // straight through. The generation stamp is what makes this gate mean what it
+  // says -- "captured on the connection that is still up". Discard and count;
+  // the phone gets no ack, and a retry with the same id is safe.
+  if (netState != NET_ONLINE || !cmdSubscribed || cap.gen != netGeneration) {
+    cmdCapStale++;
+    return;
+  }
+
+  const char *body = cap.body;
+
+  // A retained command would re-execute on every reconnect -- re-taring, or
+  // clearing the day's tally, each time the board reassociated. It is dropped
+  // and COUNTED, never acked: an ack would publish a response to something
+  // nobody just sent. `net` reports the count so it is diagnosable.
+  if (cap.retained) { cmdRetained++; return; }
+
+  // Nothing to parse. A zero-length PUBLISH lands here; with the callback
+  // registered it no longer wedges the receiver (MqttClient.cpp:603-610), it is
+  // simply an empty command.
+  if (cap.len == 0) { cmdBad++; return; }
+
+  // No id we can trust, so there is nothing to ack against. Counted, silent.
+  if (cap.oversize) { cmdBad++; return; }
+
+  char id[41];
+  if (!jsonField(body, "id", id, sizeof(id)) || !cmdTokenSafe(id)) { cmdBad++; return; }
+
+  // Dedup BEFORE the verb is even looked at, and replay the STORED verb as well
+  // as the stored verdict: if an id is ever reused for a different command, the
+  // ack describes what actually ran under that id rather than what the repeat
+  // claimed to be. A repeat is acked and deliberately NOT executed.
+  const int seen = cmdFind(id);
+  if (seen >= 0) {
+    cmdDuplicate++;
+    cmdAck(cmdRing[seen].id, cmdRing[seen].verb, cmdRing[seen].ok,
+           cmdRing[seen].detail, true, false);
+    return;
+  }
+
+  char verb[12];
+  verb[0] = '\0';
+  const char *why = nullptr;
+  if (!jsonField(body, "verb", verb, sizeof(verb))) {
+    why = "BAD COMMAND";
+  } else if (!cmdTokenSafe(verb)) {
+    // NEVER echo caller-controlled bytes into the ack. A verb carrying a quote
+    // or a backslash would break the JSON, and the dedup ring would then replay
+    // that broken ack for this id for as long as it is remembered. Blank it and
+    // refuse: an empty verb cannot be mistaken for a real one, and there is
+    // nothing safe to quote back.
+    verb[0] = '\0';
+    why = "BAD COMMAND";
+  } else if (!cmdAllowed(verb)) {
+    why = "NOT ALLOWED";
+  }
+  if (why) {
+    // These two strings are INVENTED, and they are ACK-ONLY: neither ever
+    // reaches the LCD or the console, so they cannot make the phone and the
+    // display disagree about why something was refused. There is no firmware
+    // string to reuse here, because until now nothing could ask the board to
+    // run a verb it declines to run.
+    cmdRefusedN++;
+    cmdRemember(id, verb, false, why);
+    cmdAck(id, verb, false, why, false, false);
+    return;
+  }
+
+  char line[80];
+  if (cmdTakesArg(verb)) {
+    char arg[24];
+    if (!jsonField(body, "arg", arg, sizeof(arg))) arg[0] = '\0';
+    // A missing or unusable argument is NOT judged here. It goes to the handler,
+    // which already validates it and now records its own refusal -- so the phone
+    // is told "sm REJECTED" in the firmware's own words rather than in this
+    // path's guess at them.
+    snprintf(line, sizeof(line), "%s%s", verb, arg);
+  } else {
+    snprintf(line, sizeof(line), "%s", verb);
+  }
+
+  // Queue it for the CONSOLE'S OWN handler, which runs later in this same loop
+  // pass. One execution path for the console and the phone is what stops the
+  // two diverging, and it is already load-bearing in this firmware.
+  //
+  // stringComplete is false here by construction: serialEvent() is the only
+  // other thing that sets it and it runs AFTER this function, and the handler
+  // that consumes it clears it unconditionally at the end of every pass.
+  snprintf(consoleSaved, sizeof(consoleSaved), "%s", inputString.c_str());
+  inputString = line;
+  stringComplete = true;
+
+  // This command owns the next verdict, not the last one.
+  verbRefused = false;
+  verbRefusedReason[0] = '\0';
+
+  snprintf(ackId,   sizeof(ackId),   "%s", id);
+  snprintf(ackVerb, sizeof(ackVerb), "%s", verb);
+  ackPending = true;
+  cmdExecuted++;
+}
+
+// Run at most ONE captured command per pass, oldest first. One per pass, not the
+// whole ring, because a command's verdict is published by the ack block at the
+// end of loop() and there is exactly one ackPending slot -- draining four in a
+// pass would need four pending acks. At a few milliseconds a pass a full ring
+// clears in well under a tenth of a second, so the queue is not a delay the
+// operator can see.
+//
+// Called immediately after netPoll(), so a command captured during netPoll()'s
+// own poll() runs in the SAME pass.
+//
+// The slot is released HERE, after cmdRunCapture() has returned on whatever path
+// it took. Releasing it earlier would hand the callback the very slot being
+// parsed -- see the note on cmdRunCapture().
+static void cmdPoll() {
+  if (cmdCapCount == 0) return;
+  cmdRunCapture(cmdCapHead);
+  cmdCapHead = (cmdCapHead + 1) % CMD_CAP_DEPTH;
+  cmdCapCount--;
+}
+
+// ---------------------------------------------------------------------------
 // Network state machine — called from loop(), never loops internally.
 //
 // HONEST LIMITATION: WiFi.begin() and MqttClient::connect() are blocking calls
@@ -589,11 +1117,13 @@ static void netPoll() {
     // no queue entry, no dropped count, nothing on the LCD, and `net` still saying up.
     if (WiFi.status() != WL_CONNECTED) {
       netState = NET_OFFLINE;
+      cmdSubscribed = false;      // the session went with the link
       return;
     }
     mqttClient.poll();
     if (!mqttClient.connected()) {
       netState = NET_WIFI_UP;
+      cmdSubscribed = false;
     }
     return;
   }
@@ -688,6 +1218,33 @@ static void netPoll() {
   lastMqttError = 0;
   WDT.refresh();
   netState = NET_ONLINE;
+  // Before the subscribe below, because the callback can fire inside its SUBACK
+  // spin and anything captured there belongs to THIS connection.
+  netGeneration++;
+
+  // Subscribe to the command topic. The library's session is CLEAN by default,
+  // so the subscription does not survive a disconnect and must be re-made on
+  // every connect -- not once at boot.
+  //
+  // subscribe() blocks waiting for a SUBACK, bounded by setConnectionTimeout()
+  // (MQTT_CONNECT_TIMEOUT_MS, 2 s), and calls stop() if it never arrives. It
+  // returns 0 WITHOUT stopping when the broker answers with a failure code,
+  // which is what an ACL refusal looks like.
+  //
+  // DELIBERATELY NOT FATAL. A broker that refuses the subscription must not take
+  // this machine off the air: telemetry, status and the backlog flush are the
+  // field-proven path and none of them depend on the command topic. cmdPoll()
+  // gates on cmdSubscribed instead, and `net` reports cmd_sub so a board that
+  // cannot be commanded says so rather than going quietly deaf.
+  cmdSubscribed = false;
+  {
+    char cmdTopic[64];
+    if (buildTopic(CMD_LEAF, cmdTopic, sizeof(cmdTopic)))
+      cmdSubscribed = (mqttClient.subscribe(cmdTopic, 1) != 0);
+  }
+  if (!cmdSubscribed) subFailed++;
+  WDT.refresh();
+
   publishStatus(now);      // say we are here, and on what terms, before any data
   queueFlush();                                          // was C6: no reconnect path at all
 }
@@ -817,9 +1374,7 @@ void setup() {
 
   lcdBegin();
   lcdLine(0, "Loader Scale");
-  lcdLine(1, "Press Key:");
-
-  for (int i = 0; i < 5; i++) pinMode(KEY_PINS[i], INPUT_PULLUP);
+  lcdLine(1, "starting");
 
   tallyRestore();
   captureResetCause();
@@ -850,6 +1405,11 @@ void setup() {
   // covers blocking network calls. That is the whole reason it exists.
   mqttClient.setConnectionTimeout(MQTT_CONNECT_TIMEOUT_MS);
 
+  // Registered ONCE, here, and it survives every reconnect -- the library only
+  // holds a function pointer. It is what makes a command arriving inside a QoS 1
+  // publish's PUBACK spin survive instead of being eaten; see cmdOnMessage().
+  mqttClient.onMessage(cmdOnMessage);
+
   // F1: the watchdog is armed BEFORE any networking exists, so that a hang in
   // the reconnect path has a floor under it. This is the whole reason the
   // watchdog was sequenced first in the work order.
@@ -879,10 +1439,11 @@ void setup() {
 // ---------------------------------------------------------------------------
 // Tally persistence.
 //
-// Added because the LCD shield's RESET button sits in the same row as the five
+// Added because the LCD shield's RESET button sat in the same row as the five
 // operator keys — confirmed 2026-09-01 when pressing along the row reset the board
 // and wiped the tally (reset cause reported "none-flagged", i.e. the RES# pin, which
-// is what an external button does). A gloved thumb will find it in the field.
+// is what an external button does). The keys have since gone; the RESET button, the
+// watchdog and a power cycle have not, and any of them still empties RAM.
 //
 // EEPROM.put() on this core is a virtual EEPROM over data flash: it skips unchanged
 // BYTES but still erases and rewrites the whole block per CALL. So the cost is
@@ -933,42 +1494,6 @@ static void tallyRestore() {
   tallySigWritten = true;                      // already on flash; do not rewrite it
 }
 
-// A LADDER COULD ONLY EVER REPORT ONE KEY -- it is a voltage divider. Discrete
-// buttons can be pressed together, and everything downstream assumes "one key or
-// none": two at once would present as chatter between two stable values and the
-// debounce would fire repeatedly. So scan in fixed priority and return the FIRST
-// pressed, preserving the old contract exactly. A pin stuck LOW past
-// KEY_STUCK_MS is excluded from the scan so it cannot mask every
-// lower-priority button forever -- see keyStuck() below.
-static int keyIndex(unsigned long now) {
-  int first = -1;
-  for (int i = 0; i < 5; i++) {
-    if (digitalRead(KEY_PINS[i]) == LOW) {
-      if (keyDownSince[i] == 0) keyDownSince[i] = now;
-      // A held button does nothing after its initial press -- there is no
-      // auto-repeat -- so ten seconds LOW is a fault, never intent. Skip it and
-      // let the other four work.
-      if (now - keyDownSince[i] < KEY_STUCK_MS && first < 0) first = i;
-    } else {
-      keyDownSince[i] = 0;          // released: it is healthy again immediately
-    }
-  }
-  return first;
-}
-
-// Queue a verb for the existing command handler. The keypad and the serial console
-// share one execution path so a button and a typed command can never diverge.
-static void hmiRun(const char *verb) {
-  inputString = verb;
-  stringComplete = true;
-}
-
-static void hmiMessage(const char *a, const char *b, unsigned long now) {
-  lcdLine(0, a);
-  lcdLine(1, b);
-  msgUntil = now + MSG_HOLD_MS;
-}
-
 // Row 3 is the FAULT ROW and belongs to the DISPLAY LAYER, not to any screen.
 // It is written on every render regardless of which screen is active, so a
 // screen added later CANNOT silently opt out of fault indication the way
@@ -977,15 +1502,13 @@ static void hmiMessage(const char *a, const char *b, unsigned long now) {
 // rock-steady rather than visibly decaying -- more convincing, not less.
 static void hmiRenderFaultRow() {
   char l3[21];
-  // keyStuck() outranks mcpFailCount(): a stuck button is an actionable fault
-  // the operator can clear on the spot (mud, water, a failed switch), while
   // mcpFailCount() is a LIFETIME counter (include/mcp3421.h:24) that never
-  // resets -- so a single transient I2C error, at any point since boot,
-  // would otherwise latch "I2C ERR" over row 3 for the rest of the power
-  // cycle and KEY STUCK could never render again (F3).
+  // resets, so it sits LAST: a single transient I2C error at any point since
+  // boot would otherwise latch "I2C ERR" over row 3 for the rest of the power
+  // cycle and hide everything above it. The KEY STUCK branch that used to rank
+  // above it left with the buttons.
   if (!readingTrustworthy())         snprintf(l3, sizeof(l3), "%-20s", displayStateName());
   else if (calibrationDefaulted)     snprintf(l3, sizeof(l3), "%-20s", "CAL NOT SET!");
-  else if (keyStuck())               snprintf(l3, sizeof(l3), "%-20s", "KEY STUCK");
   else if (mcpFailCount() > 0)       snprintf(l3, sizeof(l3), "I2C ERR %-12lu", (unsigned long)mcpFailCount());
   else                               snprintf(l3, sizeof(l3), "%-20s", "");
   lcdLine(3, l3);
@@ -1022,116 +1545,23 @@ static void hmiDrawHome() {
   else if (rTindex >= rTsize)  snprintf(l2, sizeof(l2), "%-20s", "TALLY FULL");
   else if (rTindex >= rTsize - TALLY_WARN_REMAINING)
                                 snprintf(l2, sizeof(l2), "TALLY %d LEFT%-7s", rTsize - rTindex, "");
-  else                         snprintf(l2, sizeof(l2), "%-20s", "Sel=menu");
+  // netState, NOT WiFi.status(): the latter is a modem round trip on every
+  // render, and netPoll() already derives netState from it once per pass. It
+  // also says more -- "wifi only" is a broker problem, "no link" is a radio one.
+  else if (netState == NET_ONLINE)
+                               snprintf(l2, sizeof(l2), "%-20s", "link mqtt up");
+  else if (netState == NET_WIFI_UP)
+                               snprintf(l2, sizeof(l2), "%-20s", "link wifi only");
+  else                         snprintf(l2, sizeof(l2), "%-20s", "link none");
 
   lcdLine(0, l0); lcdLine(1, l1); lcdLine(2, l2);
 }
 
-static void hmiDrawMenu() {
-  char l1[21];
-  lcdLine(0, "Menu  Lt=back");
-  snprintf(l1, sizeof(l1), ">%-19s", MENU_ITEMS[menuIndex]);
-  lcdLine(1, l1);
-}
-
-static void hmiDrawCheckCal() {
-  char l0[21], l1[21];
-  // Kept from the 4-20 mA work: when the reading cannot be trusted, show the
-  // state and no number. displayStateName() is deliberate -- it names loop
-  // state exactly as the wire does, except when the ADC itself has gone
-  // stale, when it says so instead of repeating a held loop state. Row 3
-  // (hmiRenderFaultRow) also carries this fault now, so this guard is
-  // belt-and-braces, not the only place the fault shows -- but it still
-  // keeps a stale `Reads 528` off this screen specifically.
-  if (!readingTrustworthy()) {
-    snprintf(l0, sizeof(l0), "%-20s", displayStateName());
-    snprintf(l1, sizeof(l1), "%-20s", "NO READING Lt=x");
-  } else {
-    snprintf(l0, sizeof(l0), "Should be %-6d", calWeight);
-    snprintf(l1, sizeof(l1), "Reads %-6d Lt=x", outputValue);
-  }
-  lcdLine(0, l0); lcdLine(1, l1);
-}
-
-static void hmiOnPress(int key, unsigned long now) {
-  lcdDirty = true;
-  verbRefused = false;      // this press owns the next verdict, not the last one
-  verbRefusedReason[0] = '\0';
-  if (screen == SCR_HOME) {
-    switch (key) {
-      // Feedback is deferred to pendingMsg because the verb runs LATER in this same
-      // loop pass - reading rTindex here would show the value BEFORE the action.
-      case 0: hmiRun("+");   pendingMsg = 1; break;       // Right  - add to tally
-      case 3: hmiRun("-");   pendingMsg = 2; break;       // Left   - delete last
-      case 1: pendingMsg = 3; break;                      // Up     - total, on the LCD
-      case 2: pendingMsg = 4; break;                      // Down   - link and queue, on the LCD
-      case 4: screen = SCR_MENU; menuIndex = 0; break;    // Select - menu
-    }
-    return;
-  }
-  if (screen == SCR_MENU) {
-    switch (key) {
-      case 1: menuIndex = (menuIndex + MENU_COUNT - 1) % MENU_COUNT; break;
-      case 2: menuIndex = (menuIndex + 1) % MENU_COUNT; break;
-      case 3: screen = SCR_HOME; break;                   // Left = back, always
-      case 4:
-        switch (menuIndex) {
-          // Deferred like `+` and `-` above, and for the same reason: these two
-          // verbs can REFUSE, and a message written here is written before the
-          // verb has run. "Tare taken" over a refused tare reached the operator
-          // while only the console saw the refusal.
-          case 0: tarePrev = tareValue; hmiRun("tare");
-                  pendingMsg = 5; screen = SCR_HOME; break;
-          case 1: hmiRun("kv");
-                  pendingMsg = 6; screen = SCR_HOME; break;
-          case 2: screen = SCR_CHECKCAL; break;
-          case 3: if (tarePrev >= 0) { int t = tareValue; tareValue = tarePrev; tarePrev = t;
-                    saveCalibration();
-                    hmiMessage("Zero restored", "", now); }
-                  else hmiMessage("No previous", "zero to undo", now);
-                  screen = SCR_HOME; break;
-          case 4: screen = SCR_CONFIRM; break;            // clear tally - confirms
-          case 5: screen = SCR_HOME; break;
-        }
-        break;
-    }
-    return;
-  }
-  if (screen == SCR_CONFIRM) {
-    if (key == 4) { hmiRun("b"); hmiMessage("Tally cleared", "", now); }
-    screen = SCR_HOME;                                    // any other key cancels
-    return;
-  }
-  if (screen == SCR_CHECKCAL) {
-    if (key == 3 || key == 4) screen = SCR_HOME;
-    return;
-  }
-}
-
-// Edge-triggered keypad + screen renderer. Non-blocking; no delay() anywhere.
-static void hmiPoll(unsigned long now) {
-  int k = keyIndex(now);
-  if (k != keyPrev) { keyPrev = k; keyChangeMs = now; }
-  else if (now - keyChangeMs >= KEY_DEBOUNCE_MS && k != keyStable) {
-    int prevStable = keyStable;
-    keyStable = k;
-    // A press is intentional only if every button was released first. Going
-    // straight from one held button to another -- or releasing the top one and
-    // exposing a lower-priority one still held -- is rollover, not a new press.
-    if (k >= 0 && prevStable < 0) hmiOnPress(k, now);
-  }
-
-  // Row 3 is the display layer's fault row and every path below reaches it --
-  // including this one. A toast must not outrank an alarm.
-  if (now < msgUntil) { hmiRenderFaultRow(); return; }   // let a message stand
-  if (screen == SCR_CONFIRM) {
-    lcdLine(0, "Clear tally?");
-    lcdLine(1, "Sel=YES  any=no");
-    lcdLine(2, "");
-  }
-  else if (screen == SCR_MENU)     hmiDrawMenu();
-  else if (screen == SCR_CHECKCAL) hmiDrawCheckCal();
-  else                             hmiDrawHome();
+// One screen, rendered every pass. hmiRenderFaultRow() is called
+// UNCONDITIONALLY and last: the fault row belongs to the display layer, not to
+// any screen, and nothing may opt out of it.
+static void hmiPoll() {
+  hmiDrawHome();
   hmiRenderFaultRow();
 }
 
@@ -1220,6 +1650,13 @@ void loop() {
 
   netPoll();
 
+  // Sits HERE so a command captured during netPoll()'s own poll() is executed in
+  // the SAME pass rather than waiting for the next one. It no longer has to sit
+  // here to avoid losing commands -- cmdOnMessage() captures them wherever poll()
+  // is called from, including inside publishStatus()'s PUBACK spin below -- but
+  // ahead of the publishes is still the lowest-latency place for it.
+  cmdPoll();
+
   if (netState == NET_ONLINE && currentMillis - lastStatusMs >= STATUS_MS) {
     publishStatus(currentMillis);
   }
@@ -1260,7 +1697,7 @@ void loop() {
     publishTo("telemetry", payload);
   }
 
-  hmiPoll(currentMillis);
+  hmiPoll();
 
   serialEvent(); // check if data has been sent
 
@@ -1290,7 +1727,6 @@ void loop() {
         verbRefused = true;
         Console.print("NOT RECORDED: ");
         Console.println(displayStateName());
-        lcdLine(1, displayStateName());
       }
       else if (rTindex < rTsize) {
         rT[rTindex] = outputValue;
@@ -1308,12 +1744,11 @@ void loop() {
         }
       } else {
         // Full is a refusal too, from a different cause than a bad loop -- the
-        // deferred render must not paint "Added <n>" over it, and the reason it
-        // gives must say the tally is full, not name a sensor state.
+        // ack must not report "recorded" over it, and the reason it gives must
+        // say the tally is full, not name a sensor state.
         verbRefused = true;
         snprintf(verbRefusedReason, sizeof(verbRefusedReason), "TALLY FULL");
         Console.println("Buffer Full");
-        lcdLine(1, "Buffer Full");
       }
     }
     else if (inputString == "-") {
@@ -1330,6 +1765,13 @@ void loop() {
         rTindex--;
         rT[rTindex] = 0;
         tallySaveIndex();     // the entry above is stale but never read: sum loops i < rTindex
+      } else {
+        // This branch was a silent no-op with no string of its own, so this one
+        // string is INVENTED. It is printed to the Console as well as carried in
+        // the ack, so the console and the phone cannot drift apart about it.
+        verbRefused = true;
+        snprintf(verbRefusedReason, sizeof(verbRefusedReason), "TALLY EMPTY");
+        Console.println("TALLY EMPTY");
       }
     }
     else if (inputString == "i2c") {
@@ -1385,7 +1827,6 @@ void loop() {
       rTsum = 0;
       tallySaveIndex();
       Console.println("Buffer Cleared");
-      lcdLine(1, "Buffer Cleared");
     }
     else if (inputString == "kv") {
       // Calibrate AT THE BOOM MARK, with the known load, after taring at the
@@ -1400,15 +1841,14 @@ void loop() {
         Console.print("cal REFUSED: ");
         Console.println(displayStateName());
       } else if (span <= 0.0f) {
-        // Failed, not refused by a loop state -- the deferred render must not
-        // paint "Calibrated / check it now" over this, and the reason it gives
-        // must say WHY the arithmetic was rejected, not name a sensor state.
+        // Failed, not refused by a loop state -- the ack must not report
+        // "calibrated" over this, and the reason it gives must say WHY the
+        // arithmetic was rejected, not name a sensor state.
         // calFactor is untouched here: the old factor stands, so the lie this
         // guards against is purely in the report, not in what gets used.
         verbRefused = true;
         snprintf(verbRefusedReason, sizeof(verbRefusedReason), "at or below tare");
         Console.println("cal FAILED: at or below tare");
-        lcdLine(1, "cal FAILED");
       } else {
         calFactor = float(calWeight) / span;
         saveCalibration();
@@ -1420,9 +1860,15 @@ void loop() {
     else if (inputString.charAt(0) == 'c') {
       // A7: main added this direct setter with no validation at all.
       inputString.remove(0, 1);
+      inputString.trim();               // `c 1.5` and `c1.5` are the same command
       float v = inputString.toFloat();
-      if (isnan(v) || v <= 0.0f || v > 1000.0f) {
+      if (!numericArg(inputString.c_str()) || isnan(v) || v <= 0.0f || v > 1000.0f) {
+        // The refusal is RECORDED, not just printed. Without this the console
+        // says "c REJECTED" while the ack says ok:true -- a success that never
+        // happened, reported to the only interface the operator has left.
         Console.println("c REJECTED");
+        verbRefused = true;
+        snprintf(verbRefusedReason, sizeof(verbRefusedReason), "c REJECTED");
       } else {
         calFactor = v;
         saveCalibration();
@@ -1430,9 +1876,15 @@ void loop() {
     }
     else if (inputString.charAt(0) == 'w') {
       inputString.remove(0, 1);
+      inputString.trim();
       float v = inputString.toFloat();
-      if (isnan(v) || v < 0.0f || v >= 1.0f) {
+      // numericArg() FIRST, and it is not belt-and-braces here: this range
+      // admits zero, so without it `w` with no argument at all set alpha = 0 and
+      // persisted it while reporting success.
+      if (!numericArg(inputString.c_str()) || isnan(v) || v < 0.0f || v >= 1.0f) {
         Console.println("w REJECTED");
+        verbRefused = true;
+        snprintf(verbRefusedReason, sizeof(verbRefusedReason), "w REJECTED");
       } else {
         alpha = v;
         saveCalibration();
@@ -1440,9 +1892,12 @@ void loop() {
     }
     else if (inputString.startsWith("sm")) {
       inputString.remove(0, 2);
+      inputString.trim();
       int v = inputString.toInt();
-      if (v <= 0 || v > 20000) {
+      if (!numericArg(inputString.c_str()) || v <= 0 || v > 20000) {
         Console.println("sm REJECTED");
+        verbRefused = true;
+        snprintf(verbRefusedReason, sizeof(verbRefusedReason), "sm REJECTED");
       } else {
         sensorMaxPSI = v;
       }
@@ -1450,9 +1905,11 @@ void loop() {
     else if (inputString == "hang") {
       // Deliberate watchdog test. The ONLY way to establish whether WDTRF is
       // observable at boot — which matters because `reset` is published in status
-      // and consumed downstream as a liveness signal. Console-only, never on the
-      // keypad, and the worst case IS the recovery: the watchdog reboots the board
-      // in a few seconds, which is precisely what is being tested.
+      // and consumed downstream as a liveness signal. CONSOLE ONLY: it is not on
+      // the MQTT allowlist, because stopping a machine that is holding a load,
+      // from a phone, is a denial of service rather than a diagnostic. At the
+      // console the worst case IS the recovery: the watchdog reboots the board in
+      // a few seconds, which is precisely what is being tested.
       Console.println("hang: stopping the loop. watchdog should reset in ~5 s.");
       Console.flush();
       for (;;) { }        // no heartbeat, no WDT.refresh
@@ -1486,58 +1943,76 @@ void loop() {
       Console.print("build = "); Console.println(BUILD_PROVENANCE);
       Console.print("last_reset = ");
       Console.println(resetCause);
+      // The command path, on the interface that can be asked about it with no
+      // broker in reach. cmd_retained is here because a retained command is
+      // dropped and never acked -- without a count it would be invisible.
+      Console.print("cmd_sub = ");
+      Console.println(cmdSubscribed ? "yes" : "no");
+      Console.print("sub_fail = ");
+      Console.println(subFailed);
+      Console.print("cmd_rx = ");
+      Console.println(cmdReceived);
+      Console.print("cmd_run = ");
+      Console.println(cmdExecuted);
+      Console.print("cmd_dup = ");
+      Console.println(cmdDuplicate);
+      Console.print("cmd_retained = ");
+      Console.println(cmdRetained);
+      Console.print("cmd_refused = ");
+      Console.println(cmdRefusedN);
+      Console.print("cmd_bad = ");
+      Console.println(cmdBad);
+      Console.print("cmd_partial = ");
+      Console.println(cmdPartial);
+      // cmd_q is "waiting / ring depth", so the number has a scale attached and
+      // cmd_full is readable as "arrived with all of them taken".
+      Console.print("cmd_q = ");
+      Console.print(cmdCapCount);
+      Console.print("/");
+      Console.println(CMD_CAP_DEPTH);
+      Console.print("cmd_full = ");
+      Console.println(cmdCapFull);
+      Console.print("cmd_stale = ");
+      Console.println(cmdCapStale);
+      Console.print("ack_fail = ");
+      Console.println(ackFailed);
     }
     inputString = "";
     stringComplete = false;
   }
 
-  // Deferred keypad feedback, rendered now that the verb has run and the counters
-  // are current. Nothing else writes to the LCD: the HMI owns the display.
-  if (pendingMsg) {
-    char a[21], b[21];
-    // A refused verb NEVER paints a success message. OPERATOR.md promises the
-    // refusal names the state; the console kept that promise and the keypad did
-    // not, and the keypad is the operator's actual interface. Row 1 is
-    // displayStateName() so the LCD, the console and the wire all say one thing
-    // -- and a stale ADC is named as NO ADC here too, not as a held-over "ok".
-    // This is the ONLY path a keypad-triggered tare/+/kv refusal actually
-    // reaches the LCD through: hmiOnPress() sets pendingMsg, so any lcdLine()
-    // written earlier in the verb's own if-block (see "+") is overwritten by
-    // hmiMessage() below before the operator ever sees it.
-    if (verbRefused) {
-      const char *head = "REFUSED";
-      switch (pendingMsg) {
-        case 1: head = "NOT RECORDED"; break;
-        case 5: head = "TARE REFUSED"; break;
-        case 6: head = "CAL REFUSED";  break;
-      }
-      snprintf(a, sizeof(a), "%-16s", head);
-      // verbRefusedReason overrides displayStateName() when the refusal was NOT
-      // about the loop state (kv's span<=0.0f, a full tally) -- see where it is
-      // set. Empty means the old behaviour: name the sensor state.
-      snprintf(b, sizeof(b), "%-16s",
+  // The remote command's verdict, published now that the shared handler has run
+  // and the counters are current. This is the ONLY place an ack is written for a
+  // command that was actually executed: the verb's own if-block cannot know the
+  // outcome any earlier, and an ack sent before the verb ran would report a
+  // success that had not happened yet.
+  if (ackPending) {
+    ackPending = false;
+
+    // Give the technician back whatever they were halfway through typing at the
+    // enclosure. The handler above cleared inputString; consoleSaved holds what
+    // was in it when the remote command arrived.
+    inputString = consoleSaved;
+    consoleSaved[0] = '\0';
+
+    bool ok = !verbRefused;
+    char detail[21];
+    if (ok) {
+      snprintf(detail, sizeof(detail), "%s", cmdSuccessDetail(ackVerb));
+    } else {
+      // A refusal detail is the FIRMWARE'S OWN string -- verbRefusedReason where
+      // the verb set one, displayStateName() otherwise. Never a string invented
+      // at this layer: the phone and the LCD must never disagree about why
+      // something was refused.
+      snprintf(detail, sizeof(detail), "%s",
                verbRefusedReason[0] ? verbRefusedReason : displayStateName());
     }
-    else switch (pendingMsg) {
-      case 1: snprintf(a, sizeof(a), "Added %-10d", outputValue);
-              snprintf(b, sizeof(b), "%d in tally", rTindex); break;
-      case 2: snprintf(a, sizeof(a), "%-16s", "Removed last");
-              snprintf(b, sizeof(b), "%d in tally", rTindex); break;
-      case 3: { long t = tallyTotal();
-                rTsum = t;
-                snprintf(a, sizeof(a), "Total %10ld", t);
-                snprintf(b, sizeof(b), "%d entries", rTindex); } break;
-      case 4: snprintf(a, sizeof(a), "WiFi %-3s MQTT %-3s",
-                       WiFi.status() == WL_CONNECTED ? "up" : "no",
-                       netState == NET_ONLINE ? "up" : "no");
-              snprintf(b, sizeof(b), "Q%-3d dropped %lu", queueCount, queueDropped); break;
-      case 5: snprintf(a, sizeof(a), "%-16s", "Tare taken");
-              snprintf(b, sizeof(b), "%-16s", "at the mark?"); break;
-      case 6: snprintf(a, sizeof(a), "%-16s", "Calibrated");
-              snprintf(b, sizeof(b), "%-16s", "check it now"); break;
-    }
-    hmiMessage(a, b, currentMillis);
-    pendingMsg = 0;
+
+    // Remembered BEFORE the publish, and remembered whether or not the publish
+    // succeeds. A repeat of this id must replay this verdict even if the ack
+    // never reached the phone -- that is the case the repeat exists for.
+    cmdRemember(ackId, ackVerb, ok, detail);
+    cmdAck(ackId, ackVerb, ok, detail, false, ok && strcmp(ackVerb, "+") == 0);
   }
 }
 
@@ -1559,6 +2034,12 @@ void printDebug()
     Console.println(calFactor, 5);   // 2dp printed both garbage values as "0.00"
     Console.print("sm = ");
     Console.println(sensorMaxPSI);
+    // The known load the `kv` calibration is taken against. It used to be on the
+    // check-cal screen ("Should be 530") beside the live reading; that screen
+    // left with the buttons, so the value lives here rather than being lost.
+    // Compare it against `weight` from `read`, or against `w` on telemetry.
+    Console.print("calwt = ");
+    Console.println(calWeight);
     Console.print("w = ");
     Console.println(alpha, 4);
     Console.print("i = ");

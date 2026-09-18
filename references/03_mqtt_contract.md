@@ -6,25 +6,28 @@ PHOENIX NEST LLC · PLC #4
 **Firmware:** EEPROM signature PL4B
 **Controller:** Arduino Uno R4 WiFi
 
-Three topics under one root. A consumer that reads only the weight topic gets every deliberate
+Five topics under one root. A consumer that reads only the weight topic gets every deliberate
 record; a consumer that reads only telemetry gets a live stream and no record of what the operator
 chose to keep.
 
 ## Topics
 
-| Topic | Retain | Quality | Published when |
-|---|---|---|---|
-| `plc4/jd5055e/weight` | no | 0 | The operator records a weight, and again for each queued weight on reconnect |
-| `plc4/jd5055e/telemetry` | no | 0 | On a repeating cycle while connected |
-| `plc4/jd5055e/status` | yes | 1 | On a slower cycle, by the machine |
-| `plc4/jd5055e/status` | yes | 0 | Once, by the broker, if the machine drops without disconnecting |
+| Topic | Direction | Retain | Quality | Published when |
+|---|---|---|---|---|
+| `plc4/jd5055e/weight` | Outbound | no | 0 | The operator records a weight, and again for each queued weight on reconnect |
+| `plc4/jd5055e/telemetry` | Outbound | no | 0 | On a repeating cycle while connected |
+| `plc4/jd5055e/status` | Outbound | yes | 1 | On a slower cycle, by the machine |
+| `plc4/jd5055e/status` | Outbound | yes | 0 | Once, by the broker, if the machine drops without disconnecting |
+| `plc4/jd5055e/cmd` | Inbound | no | 1 | Whenever the app or the console sends a command |
+| `plc4/jd5055e/ack` | Outbound | no | 0 | Once per received command, including a repeat |
 
 The root is one constant and every topic is built from it. A topic that would not fit its buffer is
 refused rather than published to a truncated stub.
 
 ## Weight
 
-A deliberate record. The operator pressed the key; this is what the machine kept.
+A deliberate record. The operator chose to keep it, by a command from the app or the console; this
+is what the machine kept.
 
 ```json
 {"w":1834,"age_ms":0,"backlog":false,"sensor":"ok","cal":"ok",
@@ -116,6 +119,63 @@ says the machine is down was sent by the broker rather than by the machine.
 ```json
 {"up":false,"id":"..."}
 ```
+
+## Command
+
+The board's remote write path. A command runs the same action the console runs, reaches the board
+over MQTT instead of a wire, and is answered on `ack`.
+
+```json
+{"id":"7f3a9c21","verb":"+"}
+{"id":"7f3a9c22","verb":"c","arg":"3000"}
+```
+
+| Field | Meaning |
+|---|---|
+| `id` | Opaque token the sender generates. Echoed on `ack`, and the key the dedup ring matches a repeat against |
+| `verb` | The action to run, the same string the console accepts, run through the same handler |
+| `arg` | Optional. Carries the argument `c`, `w` and `sm` take |
+
+| | |
+|---|---|
+| Allowed | `tare` `+` `-` `b` `kv` `c` `w` `sm` |
+| Refused, as a safety measure | `hang`. It deliberately stops the board to prove the watchdog; over the network that is a denial of service against a machine holding a load |
+| Refused, as redundant | `read`, `net`, `sum`. The app already has that data from `telemetry` and `status` |
+
+> **Never retained.** A retained command would re-run on every reconnect, re-taring or clearing the
+> tally each time the board reassociated. A retained command is dropped, counted, and never
+> executed or acknowledged.
+
+> **A repeat `id` is acked but not re-executed.** The board keeps a ring of recent command ids and
+> matches a repeat against it.
+
+## Acknowledgement
+
+Every command received gets exactly one reply, published on `ack`.
+
+```json
+{"id":"7f3a9c21","verb":"+","ok":true,"detail":"recorded","n":12,"total":19408}
+{"id":"7f3a9c22","verb":"tare","ok":false,"detail":"UNDER ZERO"}
+{"id":"7f3a9c21","verb":"+","ok":true,"detail":"recorded","dup":true}
+```
+
+| Field | Meaning |
+|---|---|
+| `id` | Echoes the command's `id` |
+| `verb` | Echoes the command's `verb` |
+| `ok` | True when the action ran |
+| `detail` | The firmware's own state string naming the result or the refusal, never an invented one |
+| `n`, `total` | Present on a successful `+`: the tally entry count and running total, matching `weight` |
+| `dup` | True when this ack replays a stored verdict rather than re-executing |
+
+> **A refusal detail is the firmware's own state string, never an invented one**, so the app and
+> the LCD can never disagree about why something was refused.
+
+> **A duplicate replays the stored verdict.** A repeat of a refused command reports `ok:false`
+> again; it can never claim a success that never happened.
+
+> **QoS 0 is deliberate.** A QoS 1 ack spins waiting for a PUBACK, which would stall the weighing
+> loop and age the reading to stale. A lost ack is cheap: the dedup ring makes retrying safe.
 
 ## Sensor states
 

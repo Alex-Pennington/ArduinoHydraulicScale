@@ -149,16 +149,29 @@ not A2 to GND** — the ADC reading the loop is no longer the board's own. Live 
 pin 10 (declared, never driven), button ladder on A0 (:201). The ladder thresholds are 10-bit
 values read at 14-bit resolution, so only "Right" registers. The LCD never shows a weight.
 
+**Superseded, 2026-09-18: the LCD and the operator interface both changed.** The 16x2
+LCD-plus-keypad shield is gone. The current source carries a 20x4 LCD on the Qwiic bus,
+always showing the weight, behind a clear coverplate as a read-only readout — see
+`references/01_controller_card.md`. The board's discrete buttons are removed as well: the
+outdoor enclosure needs no holes for a keypad, five holes being five places for water to get
+in. Every operator action now arrives over MQTT from a phone app, on `plc4/jd5055e/cmd`,
+through the same handler the console uses so the two paths cannot diverge. The serial and
+Bluetooth console keeps every verb it had, as the service and recovery path with no broker
+in reach. See `OPERATOR.md` for the full command table and the MQTT command contract.
+
 **Network — MQTT over WiFi** to `192.168.10.99:1883` on SSID `FOXTROTBRAVO` (see Decisions),
 `ArduinoMqttClient`, port 1883 plaintext (:74), credentials from
 `arduino_secrets.h` (`SECRET_SSID`, `SECRET_PASS`, `SECRET_MQTT_BROKER`, `SECRET_MQTT_USER`,
 `SECRET_MQTT_PASS`). That header is gitignored and absent from the tree, which is correct.
 Topic root is the literal `"arduino"` (:75); the client ID is unset (:167 commented out).
 
-**Operator interface — ambiguous.** The repo commits an Android Bluetooth terminal profile
-targeting an **HC-05** adapter with macros for all seven serial verbs. An HC-05 is a UART
-device, which on the R4 is `Serial1`; the firmware reads only `Serial`, the USB CDC port.
-Whether an HC-05 is actually fitted is unknown — see the open questions.
+**Operator interface — ANSWERED, see open question 4.** The repo commits an Android Bluetooth
+terminal profile targeting an **HC-05** adapter with macros for all seven serial verbs. An
+HC-05 is a UART device, which on the R4 is `Serial1`; at baseline the firmware read only
+`Serial`, the USB CDC port, so whether an HC-05 was actually fitted was unknown. It is: the
+board announces itself as `JD5055e OK` on the Bluetooth console at every power-up
+(`OPERATOR.md`), and the console is now the service and recovery path beside the MQTT phone
+app — see the superseded note above.
 
 **Serial verbs:** `tare`, `cal`, `+`, `-`, `read`, `sum`, `clear`, `debug`. Calibration is a
 single-point ratio against `#define calWeight 530` (:3), written to EEPROM at `addr = 10`
@@ -249,19 +262,18 @@ The real exposures, stated precisely so they survive being checked:
   publisher.** This is an estate-level gap that predates PLC #4, and a fourth publisher does
   not change the mechanism. Ours to note, not ours to fix.
 
-### 4. Is an HC-05 physically fitted to this build, and what is the intended field interface?
+### 4. Is an HC-05 physically fitted to this build, and what is the intended field interface? — **ANSWERED**
 
-The repo commits a complete Bluetooth terminal configuration for one, and the firmware cannot
-read it (audit A1). Either:
+At baseline the repo committed a complete Bluetooth terminal configuration for an HC-05, and
+the firmware could not read it (audit A1) — so whether one was fitted, and what "fix the
+operator interface" even meant, was open.
 
-- an HC-05 is fitted, and the firmware needs to read `Serial1` — in which case the operator
-  path is a phone, and that is a coherent design worth completing; or
-- it is not, and the committed config is a leftover from the R3 build — in which case PLC #4
-  currently has **no** working operator input in the field, since the keypad is broken and the
-  USB port is not present on a tractor.
-
-Which it is changes what "fix the operator interface" means. A photo of the enclosure settles
-it faster than any amount of source reading.
+**It is fitted, and it is the console's radio path.** The board announces itself as
+`JD5055e OK` on the Bluetooth console at every power-up (`OPERATOR.md`). The field interface
+is now settled on two paths rather than one: the console (USB and Bluetooth together) as the
+service and recovery path with every verb, and a phone app over MQTT as the normal operator
+path, now that the five physical buttons are gone. See the superseded note under *Hardware —
+verified* and `OPERATOR.md`.
 
 ### 5. What does "weight" mean on this hydraulic circuit? — **geometry half CLOSED, see Decisions**
 
