@@ -139,3 +139,23 @@ sigma of the record — and leaves two nights standing where there are twelve. U
 This was not hypothetical: the first version of this analysis used `stale = false`,
 found two nights, and concluded the overnight fall did not repeat. That conclusion was
 wrong and was produced entirely by the filter.
+
+## Where the record stops, and why it is not the board
+
+**The telemetry record for this analysis ends at `2026-09-20 08:37:13-04`.** Not
+because the board stopped, and not because the drift resolved — the broker on
+farm1 became unreachable at about 08:36 that morning and PLC #4's telemetry
+stopped reaching any consumer.
+
+The analysis above draws on data up to **07:47:32**, so nothing in it is affected.
+What is affected is the *tail*: the drift event was still descending when the
+last usable reading was taken, at `w` -332 and falling roughly 15 counts per half
+hour. **Whether it continued, levelled off, or reversed is unobserved, and no
+record of it exists anywhere.**
+
+Recorded so a later reader querying `plc4_telemetry` finds the gap already
+explained. A machine that stops publishing looks identical to a machine that has
+failed, and this one had neither — it was the path to the broker that went away.
+The firmware queues recorded weights (`+`) through a broker outage and publishes
+them as backlog on reconnect; the periodic telemetry stream is not queued and
+those samples are simply gone.
