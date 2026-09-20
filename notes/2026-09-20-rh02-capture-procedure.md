@@ -1,0 +1,222 @@
+# Taking a PGN census off the tractor with the RH-02
+
+**What this is:** the sequence someone follows, in order, to get a candump log
+worth decoding off the JD 5055E's CAN bus. Written from behaviour measured on
+saga on 2026-09-20, not from the man page — the two traps in §4 and §6 are not
+discoverable from documentation and both will silently ruin a capture.
+
+**What this is not:** anything about the Arduino path, the transceiver bench test,
+or the permanent on-tractor node. This is the instrument procedure only.
+
+**You need root.** Every `ip link` command needs `sudo`. Find that out here rather
+than standing at the tractor.
+
+---
+
+## 1. The instrument
+
+Waveshare/Jhoinrch **RH-02**, a USB-to-CAN converter. It is a CANable clone
+shipping candleLight firmware, so on Linux it is a *native SocketCAN interface* —
+no serial protocol, no vendor tool. Verified on saga:
+
+```
+$ lsusb
+Bus 001 Device 013: ID 1d50:606f OpenMoko, Inc. Geschwister Schneider CAN adapter
+
+$ ip -details link show can0
+can0: <NOARP,ECHO> mtu 16 ... state DOWN
+    can state STOPPED restart-ms 0
+      gs_usb: tseg1 1..16 tseg2 1..8 sjw 1..4 brp 1..1024 brp_inc 1
+      clock 48000000
+```
+
+If `can0` does not appear, the `gs_usb` driver has not bound. It is in-tree —
+`modinfo gs_usb` confirms it on kernel 6.8.0-139 — so suspect the cable or the
+port before suspecting the adapter.
+
+`can-utils` provides `candump`, `cansniffer`, `cangen`, `cansend`.
+
+## 2. The termination switch — OFF at the tractor
+
+The RH-02 has an **R120** slide switch that fits a 120 Ω terminator across the bus.
+
+- **Tapping the tractor: OFF.** The vehicle bus is already terminated at both
+  ends. A third terminator drops the bus impedance and degrades signalling for
+  every ECU on it, not just for us.
+- **Two-node bench bus: ON.** An isolated pair needs termination at each end.
+
+This is the opposite setting in the two situations, which is exactly why it gets
+left wrong.
+
+## 3. Wiring
+
+Three connections at the diagnostic connector: **CAN_H**, **CAN_L**, **GND**.
+The RH-02's terminal block is labelled. Ground is not optional — a floating
+adapter reads noise.
+
+On the 5055E the connector is round, low and to the right of the driver's seat.
+Meter it before trusting any published pinout; Cal Poly names pins C and D as
+CAN high and low on a 5055E, and that is a starting point, not an authority.
+
+## 4. Bring the interface up — and the trap that makes a capture worthless
+
+```
+sudo ip link set can0 down
+sudo ip link set can0 up type can bitrate 250000 loopback off listen-only on
+```
+
+**Write every flag explicitly, including the ones you want OFF.**
+
+SocketCAN **retains ctrlmode flags across bring-ups**. If the adapter was used in
+loopback earlier — which it will have been, if anyone bench-tested it — then
+bringing it up with only `listen-only on` leaves loopback set:
+
+```
+# after an earlier loopback session, this is what you get:
+$ sudo ip link set can0 up type can bitrate 250000 listen-only on
+$ ip -details link show can0
+    can <LOOPBACK,LISTEN-ONLY> state ERROR-ACTIVE      # <-- loopback survived
+```
+
+versus, with the flag cleared explicitly:
+
+```
+$ sudo ip link set can0 up type can bitrate 250000 loopback off listen-only on
+$ ip -details link show can0
+    can <LISTEN-ONLY> state ERROR-ACTIVE               # <-- correct
+```
+
+A loopback interface at the tractor captures its own echo and may capture nothing
+from the bus at all. The log will look plausible and be worthless.
+
+**So the verification step is not optional. Every time, before trusting a capture:**
+
+```
+ip -details link show can0
+```
+
+Read the flag list. It must say `<LISTEN-ONLY>` and nothing else.
+
+**Why listen-only.** The adapter receives and never transmits, including never
+sending an acknowledge bit, so it is electrically silent. Connecting a diagnostic
+node cannot perturb a working machine. Note the trade-off for completeness: a
+listen-only node does not ACK, which is harmless on a bus with several healthy
+ECUs because the others acknowledge, but would matter if ours were the only
+listener for a given talker.
+
+## 5. Capture, at both bit rates
+
+```
+candump -l can0                 # writes candump-<timestamp>.log in the cwd
+candump -td can0                # live, with deltas, for watching
+cansniffer can0                 # live, grouped by id, for seeing what repeats
+```
+
+Take **at least a minute** at each rate with the engine running, and a second
+capture with the key on and the engine off — the difference tells you which PGNs
+are engine-sourced.
+
+Capture at **250k first, then 500k**:
+
+```
+sudo ip link set can0 down
+sudo ip link set can0 up type can bitrate 500000 loopback off listen-only on
+ip -details link show can0      # verify again; flags persist
+candump -l can0
+```
+
+## 6. Telling a wrong bit rate from a dead bus
+
+This is the distinction that wastes an afternoon in a field, because both look
+like "no data" in `candump`.
+
+Check the interface statistics rather than the empty screen:
+
+```
+ip -details -statistics link show can0
+```
+
+The counters to read are on the line beginning `re-started`:
+
+```
+	  re-started bus-errors arbit-lost error-warn error-pass bus-off
+	  0          0          0          0          0          0
+```
+
+- **Dead bus, or not connected — MEASURED on saga, disconnected, 250k,
+  listen-only:** all six counters stay at zero and the state stays
+  `ERROR-ACTIVE`. The controller is sitting in idle seeing nothing happen. The
+  output above is that case, taken from a real run. Suspect wiring, ground, or
+  the wrong connector.
+
+- **Wrong bit rate on a live bus — NOT MEASURED HERE, reasoned:** the error
+  counters should *climb*, particularly `bus-errors`, because the controller is
+  sampling real bus transitions at the wrong points and reading them as form and
+  stuff errors. The state may walk to `ERROR-WARNING` or `ERROR-PASSIVE`. This
+  follows from how CAN error counting works rather than from a measurement — I
+  had no second node to generate a live bus at a mismatched rate. **Confirm it
+  the first time you are at the tractor**, because it is the discriminator this
+  whole section rests on.
+
+**Rising error counters mean the bus is alive and you are listening wrongly.**
+Zero counters and zero frames mean you are not electrically on a bus at all.
+
+Take the counters BEFORE and AFTER a minute of listening and compare, rather
+than glancing once — "zero" is only meaningful against a previous zero.
+
+If 250k gives errors and 500k gives clean frames, the bus is 500k — J1939 is
+normally 250k but that is a convention, not a guarantee, which is why the census
+is taken at both.
+
+## 7. Afterwards
+
+```
+sudo ip link set can0 down
+```
+
+Leave the interface down. It was down before you started, and an interface left
+up is a state change on somebody's machine.
+
+Keep the `.log` files. `candump -l` format is canonical and replayable with
+`canplayer`, and it is what any decode tooling should read.
+
+## 8. A bench self-test, and the second trap
+
+To prove the adapter and the tooling before going near a tractor, use controller
+loopback — no bus, no second node:
+
+```
+sudo ip link set can0 down
+sudo ip link set can0 up type can bitrate 250000 loopback on listen-only off
+cansend can0 18FEE000#DEADBEEF01234567
+candump -td can0
+```
+
+Measured result on saga, and the trap:
+
+```
+ (000.000000)  can0  18FEE000   [8]  DE AD BE EF 01 23 45 67
+ (000.000578)  can0  18FEE000   [8]  DE AD BE EF 01 23 45 67
+```
+
+**Every transmitted frame appears TWICE** — once as SocketCAN's local echo to
+other sockets, once as the hardware loopback return. That is correct behaviour
+and it is not duplication on the wire.
+
+It does not affect a real listen-only capture, where nothing is transmitted and
+each line is one real frame. But anyone who bench-tests first and then reads a
+tractor capture expecting the doubling — or, worse, sees doubling in a tractor
+capture and assumes it is normal — will misread it. Doubling in a listen-only
+capture means the interface is not actually in listen-only. See §4.
+
+Remember to clear `loopback` before the real capture.
+
+## 9. What to do with the log
+
+`tools/j1939_corpus_check.py` currently reads the Cal Poly corpus's PolyCAN CSV
+format, not candump. It does not read these logs yet. The decode table it
+validates — PGN, source address, and the scaling constants — is in
+`REPORT.md` §6 and `findings/2026-09-18-calpoly-can-corpus.md`.
+
+Expect roughly 40% of frames to be proprietary Deere PGNs that nothing public
+decodes. That is normal and was true of the Cal Poly captures too.
