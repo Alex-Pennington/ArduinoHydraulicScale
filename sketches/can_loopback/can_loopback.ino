@@ -116,13 +116,18 @@ static bool jumperPresent(char *detail, size_t cap) {
   pinMode(PIN_CANTX, INPUT);
   pinMode(PIN_CANRX, INPUT);
 
+  // Both strings name the pins from the variant. Earlier versions hardcoded
+  // "D10 -> D13" here, which printed the WiFi pins during a Minima run directly
+  // under a header that had correctly said D4-D5. Harmless to the result and
+  // actively misleading to the person holding the wire.
   if (readLow == LOW && readHigh == HIGH) {
-    snprintf(detail, cap, "D10 -> D13 follows (low reads %d, high reads %d)", readLow, readHigh);
+    snprintf(detail, cap, "D%u -> D%u follows (low reads %d, high reads %d)",
+             (unsigned)PIN_CANTX, (unsigned)PIN_CANRX, readLow, readHigh);
     return true;
   }
   snprintf(detail, cap,
-           "D13 did not follow D10 (low reads %d, high reads %d) -- NO JUMPER FITTED",
-           readLow, readHigh);
+           "D%u did not follow D%u (low reads %d, high reads %d) -- NO JUMPER FITTED",
+           (unsigned)PIN_CANRX, (unsigned)PIN_CANTX, readLow, readHigh);
   return false;
 }
 
@@ -199,14 +204,26 @@ void setup() {
   Serial.println();
 
   // --- 0. the jumper, so that a later FAIL means something ---
+  // The label is built from the variant pins, not written out. A literal "D10-D13"
+  // here was the first version of this line, and on a Minima it printed the WiFi
+  // pin numbers directly underneath a header that had correctly said D4-D5 -- the
+  // exact confusion this sketch is meant to make impossible, surviving in the one
+  // place a number was typed by hand. Never hardcode these two values anywhere.
+  char jumperLabel[32];
+  snprintf(jumperLabel, sizeof(jumperLabel), "D%u-D%u jumper",
+           (unsigned)PIN_CANTX, (unsigned)PIN_CANRX);
+
   const bool jumper = jumperPresent(detail, sizeof(detail));
-  verdictLine("D10-D13 jumper", jumper, detail);
+  verdictLine(jumperLabel, jumper, detail);
   if (!jumper) {
     Serial.println();
     Serial.println(F("  STOPPING. Without the jumper this test cannot distinguish"));
     Serial.println(F("  \"the driver never receives\" from \"the signal had nowhere to go\","));
     Serial.println(F("  and a FAIL here would wrongly condemn the whole R4 CAN path."));
-    Serial.println(F("  Fit a plain wire between D10 and D13 and re-run. Issue #19."));
+    snprintf(detail, sizeof(detail),
+             "  Fit a plain wire between D%u and D%u on this board and re-run. Issue #19.",
+             (unsigned)PIN_CANTX, (unsigned)PIN_CANRX);
+    Serial.println(detail);
     return;
   }
 
