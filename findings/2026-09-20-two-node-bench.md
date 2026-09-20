@@ -103,7 +103,7 @@ datasheets rather than from recollection** — they were checked after Alex righ
 pushed back on them being asserted:
 
 **Direction 1 — the Arduino overdrives the transceiver's input.**
-TI SN65HVD230 datasheet (SLLS555), §8.1 *Absolute Maximum Ratings*:
+TI SN65HVD230 datasheet (**SLOS346O**, March 2001 rev. April 2018), §8.1 *Absolute Maximum Ratings*:
 
 > Digital Input and Output voltage, VI (D or R): **–0.5 to VCC + 0.5 V**
 
@@ -134,12 +134,75 @@ part. That is precisely the outcome warned about: *it can pass on a bench and
 fail hot.* Short leads, room temperature, a quiet two-node bus and a part being
 driven outside its ratings is the easiest possible case.
 
-**Do not read this as clearance to put an SN65HVD230 on the tractor.** For the
-permanent node use a 5 V transceiver — TJA1050 or MCP2551 — which is in spec
-against a 5 V R4 and needs no argument. What this bench proves is the *CAN stack
-and the firmware*, not the transceiver choice.
+**Do not read this as clearance to put an SN65HVD230 on the tractor.** What this
+bench proves is the *CAN stack and the firmware*, not the transceiver choice.
 
-VCC was on **3V3**, not 5V. On 5V the part would likely have been destroyed.
+**CORRECTION, 2026-09-20 — the replacement parts first named here were wrong.**
+This section originally said "use a 5 V transceiver — TJA1050 or MCP2551 — which
+is in spec against a 5 V R4 and needs no argument." That is wrong on the receive
+direction and the confidence was misplaced. Both publish their high-level output
+only at **0.7 × VCC = 3.5 V**, which is *under* the RA4M1's 4.0 V threshold —
+MCP2551 gives VOH min `0.7 VDD` at IOH = 8 mA, and TJA1050 publishes **no VOH
+minimum at all**, only IOH −2 mA at `VRXD = 0.7 VCC`. They fix the overdrive and
+leave the underdrive exactly where it was. Additionally **MCP2551 is marked "Not
+Recommended for New Designs"** on page 1 of its own datasheet.
+
+The part that closes **both** directions on guaranteed numbers is a plain
+**`TJA1051T`**: TXD VIH min 0.7·VIO = 3.5 V with an absolute maximum of
+VIO + 0.3 = 5.3 V, so it accepts a 5 V drive; and RXD guaranteed to
+VIO − 0.4 = **4.6 V**, clearing the 4.0 V threshold. Its ±58 V bus rating also
+suits a 12 V automotive harness. Specify the plain `T`, **not** the `T/3` — with
+a 5 V MCU the VIO pin buys nothing, costs specified loop delay, and creates a
+path to wire VIO to 3.3 V that would silently restore this very defect while
+still passing a bench test. Lifecycle and stock were not confirmable from this
+host and must be checked at a distributor before ordering. Full analysis in
+`notes/2026-09-20-can-level-interface-plan.md`.
+
+**CORRECTION — "5 V would have destroyed it" overstated the datasheet.** VCC was
+on **3V3**, not 5V, which is correct and is what it should stay on. But SLOS346O
+§8.1 gives `Supply voltage, VCC` an absolute maximum of **−0.3 to 6 V**, so 5 V
+is *below* the damage limit. The real objection is that the part is simply
+**unspecified** outside the §8.3 recommended range of 3.0–3.6 V: behaviour there
+is not characterised, not that destruction is assured. Keep it on 3V3 — but for
+the documented reason, not an invented one.
+
+## The bench rig runs unprotected, deliberately
+
+**Decided by Alex, 2026-09-20: leave it, run it, replace it if it degrades.** No
+divider is fitted and `D4` stays wired directly to the transceiver's `D` input.
+That is a considered choice for a desk rig, not an oversight, and it is recorded
+here so nobody "fixes" it without knowing.
+
+The reasoning that informed it, and one correction to a tempting assumption:
+
+**Not transmitting does NOT avoid the overdrive.** CAN's idle state is recessive
+= logic high, so once `CAN.begin()` hands the pin to the peripheral, `CANTX` sits
+at **5 V continuously**, whether or not a frame is ever sent. The stress on the
+transceiver's input is a **DC condition**, not a per-frame one. A listener node
+is overdriven just as hard as a talker.
+
+**What failure will look like.** An overdriven CMOS input rarely fails cleanly.
+Expect gradual degradation presenting as intermittent frame loss weeks later,
+rather than a part that stops working today. On a bench that is fine — it gets
+noticed and swapped. On a tractor it would present as an intermittent CAN fault,
+which is among the worst things to diagnose in a field.
+
+**For the tractor there is a free fix that is better than a divider.** If the
+node never transmits — which is the design, and which Alex ruled on 2026-09-18
+for the first live capture — then do not connect the MCU's CANTX to the
+transceiver at all. **Tie the transceiver's `D` pin to its own 3.3 V rail.**
+`D` high is recessive, so the transceiver physically cannot drive the bus:
+
+- no overdrive, because the 5 V pin connects to nothing
+- no parts, no resistors
+- a **hardware** guarantee of silence, which is a stronger form of the
+  listen-only property that issue #20 proposed to obtain by vendoring a patched
+  `Arduino_CAN` — a ~400 line fork, since closed
+
+The node cannot ACK in that configuration, which is harmless on a bus with
+several healthy ECUs and is the same trade-off listen-only always carried. Keep
+`D` wired on the bench so two-node transmit tests still work; unwire it for the
+machine.
 
 ## What is now established
 
