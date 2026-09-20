@@ -116,6 +116,45 @@ Take **at least a minute** at each rate with the engine running, and a second
 capture with the key on and the engine off — the difference tells you which PGNs
 are engine-sourced.
 
+### RECORD THE FRAME RATE AS A RESULT, not just the PGN list
+
+This is easy to skip because the log contains the data, so it feels captured. It
+is not captured until it is written down, and **it cannot be recovered later
+without going back to the tractor.**
+
+The firmware's loop budget is driven by *rate*, not by which PGNs exist:
+
+> maximum tolerable loop period = ring depth ÷ frame rate = **32 ÷ fps**
+
+A census listing the PGNs without the rate answers half the question and leaves
+issue #24 unable to choose between its options. See
+`findings/2026-09-20-soak-and-drain-cadence.md`.
+
+Write down **both sustained and peak**. Peak matters more: a burst that overruns
+the ring loses frames even if the average is comfortable.
+
+From a `candump -l` log:
+
+```
+# sustained frames/s over the whole capture
+awk -F'[()]' '{print $2}' candump-*.log | sort -n | \
+  awk 'NR==1{a=$1} {n++; b=$1} END{printf "sustained %.1f fps over %.1f s (%d frames)\n", n/(b-a), b-a, n}'
+
+# peak frames/s, measured in 100 ms bins
+awk -F'[()]' '{print int($2*10)}' candump-*.log | uniq -c | \
+  awk '{if($1>m) m=$1} END{printf "peak %d fps (busiest 100 ms bin x10)\n", m*10}'
+```
+
+Record them beside the PGN census. Two numbers, and they decide the firmware
+design.
+
+**Both commands are tested, not merely plausible.** Run against a synthetic log
+of 2,300 frames — 200 fps sustained for 10 s with a 300-frame burst packed into
+500 ms — they returned `sustained 230.1 fps` and `peak 800 fps`, which are the
+constructed values exactly (2,300 ÷ 10 s, and 200 + 600 during the burst). Shell
+one-liners in a procedure are worth no more than any other untested claim, and
+this file has already carried two that were wrong.
+
 Capture at **250k first, then 500k**:
 
 ```
