@@ -71,14 +71,52 @@ to be right and nobody had stated why until it was generalised here.
 correct** — it repairs gaps that have closed, and a gap with no far side is not
 something that can be backfilled.
 
-## NOT DETERMINED
+## Determined, after the fact
 
-**Whether any Grafana panel presents an interruption statistic as a health
-signal.** Seven dashboards use `lag()` in panel SQL — `plc1`,
-`plc1_diagnostics`, `plc3_saw`, `plc3_retract_jam`, `plc3_actuator_drift`,
-`plc4_tractor_scale`, `nas_health`. Most `lag()` in a panel is a rate or a
-delta, and a delta is not exposed to this. They have **not** been examined panel
-by panel.
+The first version of this note left one thing open: **whether any Grafana panel
+presents an interruption statistic as a health signal.** Seven dashboards use
+`lag()` in panel SQL. It was recorded as a candidate check rather than a
+finding, because claiming it would have been the error the note is about.
 
-This is recorded as an open candidate check, not as a finding. Stating it as one
-would be the very error this note is about.
+**The consumer coordinator then ran the check.** Reported by them and recorded
+here on their measurement, not on one taken from this side — the dashboards are
+in `/opt/plc1-monitoring`, which this repo does not own.
+
+**No dashboard presents an interruption statistic as a health signal.** Every
+`lag()` in the provisioned panels falls into one of four groups:
+
+| Use | Panels | Why it is immune |
+|---|---|---|
+| Rate deltas | `host_health` 13, `nas_health` 22 | lag over value *and* timestamp to make a per-second rate |
+| Reboot-transition detectors | `plc1` 13, `plc1_diagnostics` 13, `plc3_actuator_drift` 3–6 | they find a *fall* in an uptime counter; during an outage they count no reboots, which is correct — no reboot happened |
+| Episode and cut boundaries | `plc2_splitter` 14, `plc3_saw` 14/16/111/115–117, `plc4_tractor_scale` 12 | transitions *within* data, not gaps *in* it |
+| The one real instance | `plc3_retract_jam` 2–5 | requires 2-second row adjacency, so it needs a neighbouring row to see anything — already filed as issue #27 on that repo, about a prune rather than an outage, identical mechanism |
+
+### The worked example worth copying
+
+`plc3_saw` panel 36 — *"Limit arrivals in this window — movement, or its
+absence"* — sums increments of boot counters inside a window. It could trivially
+render `0 arrivals` during an outage and read as a machine that simply did not
+move. It does not:
+
+```sql
+SELECT CASE WHEN t.n = 0 THEN -1 ELSE t.h END AS "HOME arrivals in window"
+  -- n = count of rows with home_rises NOT NULL in the window
+```
+
+**If the window contains no rows at all it renders `-1`, a sentinel, rather than
+zero.** So *"nothing moved"* and *"nothing was recorded"* are different values on
+the face of the panel — the distinction the blindness destroys, made explicit by
+someone who saw it coming.
+
+### A fifth instance of the pattern, found in the act of closing the fourth
+
+The coordinator's stated reason for running the check now is worth keeping:
+
+> That candidate check was a check on **my** repo recorded only in **your**
+> `notes/`. Durable, but in a place no session of mine will ever look.
+
+**Recording something durably in the wrong place is its own failure**, and it is
+this same shape one indirection over: the fact was written down, and the
+inference that writing it down made it findable did not hold. Doing the check
+was cheaper than arranging for someone to find the note asking for it.
