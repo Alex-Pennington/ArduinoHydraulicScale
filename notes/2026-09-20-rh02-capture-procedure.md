@@ -166,18 +166,49 @@ The counters to read are on the line beginning `re-started`:
   never provokes it, which is another reason to bench-test in normal mode before
   going to the tractor. See `findings/2026-09-20-two-node-bench.md`.
 
-- **Wrong bit rate on a live bus — STILL NOT MEASURED, reasoned:** here
-  `bus-errors` itself should climb, because the controller is sampling real bus
-  transitions at the wrong points and reading them as form and stuff errors. That
-  is the counter that distinguishes it from the case above. This follows from how
-  CAN error counting works rather than from a measurement — generating it needs a
-  second node transmitting at a mismatched rate, which the bench has not done.
-  **Confirm it the first time you are at the tractor.**
+- **Wrong bit rate on a live bus — NOW MEASURED, and the earlier text here was
+  WRONG.** This note previously said `bus-errors` would climb and that this was
+  the distinguishing counter. It does not, and it cannot:
+
+  ```
+  $ sudo ip link set can0 up type can bitrate 500000 ... berr-reporting on
+  RTNETLINK answers: Operation not supported
+  ```
+
+  **The gs_usb driver does not implement bus-error reporting, so `bus-errors` is
+  structurally always zero on the RH-02.** Do not wait for it to move.
+
+  What actually happens, measured with a node transmitting at 250k while the
+  RH-02 listened at 500k:
+
+  ```
+        re-started bus-errors arbit-lost error-warn error-pass bus-off
+  start 0          0          0          43         10174      0
+  +25s  0          0          0          43         86732      0
+  ```
+
+  `candump` shows **nothing** — identical on screen to a dead bus — while
+  `error-pass` climbs by about **3,000 per second** and the state sits at
+  `ERROR-PASSIVE`.
+
+**THE DISCRIMINATOR IS WHETHER THE COUNTERS MOVE, NOT WHICH COUNTER.**
+
+| Situation | Frames | State | Counters over a minute |
+|---|---|---|---|
+| Wrong bit rate, live bus | none | `ERROR-PASSIVE` | `error-pass` climbing fast (~3,000/s) |
+| Dead bus / not connected | none | `ERROR-ACTIVE` | all six static |
+| Correct bit rate | flowing | settles | `error-pass` ~+2 in 8 s |
+
+Dropping back to the correct rate produced frames immediately and `error-pass`
+rose by **2 in 8 seconds**, against ~3,000/s at the wrong rate — three orders of
+magnitude apart, so this is not a subtle judgement call.
+
+See `findings/2026-09-20-soak-and-drain-cadence.md`.
 
 **Rising error counters mean the bus is alive and you are listening wrongly.**
 Zero counters and zero frames mean you are not electrically on a bus at all.
 
-Take the counters BEFORE and AFTER a minute of listening and compare, rather
+**Take the counters BEFORE and AFTER a minute of listening and compare**, rather
 than glancing once — "zero" is only meaningful against a previous zero.
 
 If 250k gives errors and 500k gives clean frames, the bus is 500k — J1939 is
