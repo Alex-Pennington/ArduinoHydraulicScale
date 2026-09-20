@@ -20,11 +20,10 @@ documents:
 - num: '01'
   source: 01_controller_card.md
   title: Controller Card — PLC #4 Tractor Scale
-  subtitle: The controller, the sensor bus and its channels, the display and the operator
-    keys
+  subtitle: The controller, the sensor bus and its channels, the console and the
+    display
   kind: Cabinet Reference Card
-  subject: Board, multiplexer channel map, console commands, display rows, key actions
-    and rollover
+  subject: Board, multiplexer channel map, console commands, display rows
   version: '1'
   odin_id: pending
   last_updated: '2026-09-17'

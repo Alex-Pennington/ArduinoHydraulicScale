@@ -1,0 +1,17 @@
+// build_provenance.h.example — the committed sentinel.
+//
+// Copy to `include/build_provenance.h`, or let tools/gen-provenance.sh write it.
+// The real file is gitignored: it changes on every commit, and a tracked copy
+// would dirty the tree on every build, which would make the next build report
+// +dirty for no reason but itself.
+//
+// These sentinel values are what a build gets when provenance was never
+// captured. "UNKNOWN" is deliberately not SHA-shaped, so a reader can never
+// mistake it for a commit — it says the build was not identified, rather than
+// naming a commit that might be wrong.
+
+#pragma once
+
+#define BUILD_SHA        "UNKNOWN"
+#define BUILD_DIRTY      0
+#define BUILD_PROVENANCE "UNKNOWN"

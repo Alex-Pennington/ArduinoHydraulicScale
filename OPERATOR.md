@@ -27,35 +27,43 @@ re-tare at the mark rather than trusting a zero of unknown provenance.
 
 ## Commands
 
-Sent over the Bluetooth console (HC-05, 9600 baud), or from the LCD keypad.
+Every command in this table runs from the console — USB, or Bluetooth (HC-05, 9600 baud).
+The ones marked **yes** in the MQTT column also run from the phone app; see *Phone app
+(MQTT)* below. The console is the only path for the rest, and the only one that works with
+no broker in range.
 
-| Command | Does |
-|---|---|
-| `tare` | Set zero from the current reading. Stored. **At the mark, empty.** |
-| `kv` | Calibrate span against `calWeight`. Stored. **At the mark, with the load.** Refuses if at or below tare. |
-| `+` | Record the current weight to the tally, and publish it |
-| `-` | Remove the last recorded entry |
-| `sum` | Total the recorded entries |
-| `b` | Clear the tally |
-| `read` | Print the current weight |
-| `net` | Print WiFi, MQTT, IP, queued and dropped counts, and sensor state |
-| `debug` | Toggle verbose output. Not stored — off at every boot. |
-| `c<value>` | Set the calibration factor directly. Stored. Rejected if out of range. |
-| `w<value>` | Set the smoothing factor, 0 to 1. Stored. |
-| `sm<value>` | Set the transducer full-scale pressure in psi. **NOT stored — reverts to 3000 on every reset.** |
+| Command | Does | Over MQTT |
+|---|---|---|
+| `tare` | Set zero from the current reading. Stored. **At the mark, empty.** | yes |
+| `kv` | Calibrate span against `calWeight`. Stored. **At the mark, with the load.** Refuses if at or below tare. | yes |
+| `+` | Record the current weight to the tally, and publish it | yes |
+| `-` | Remove the last recorded entry | yes |
+| `sum` | Total the recorded entries | console only |
+| `b` | Clear the tally — immediately, no confirmation, over either path | yes |
+| `read` | Print the current weight | console only |
+| `net` | Print WiFi, MQTT, IP, queued and dropped counts, sensor state, and the MQTT command counters | console only |
+| `debug` | Toggle verbose output. Not stored — off at every boot. | console only |
+| `c<value>` | Set the calibration factor directly. Stored. Rejected if out of range. | yes |
+| `w<value>` | Set the smoothing factor, 0 to 1. Stored. | yes |
+| `sm<value>` | Set the transducer full-scale pressure in psi. **NOT stored — reverts to 3000 on every reset.** | yes |
 
 ### Service commands — not for the seat
 
-These exist for diagnosing the board and are typed, never on the keypad.
+These exist for diagnosing the board and are typed at the console. Neither is on the MQTT
+allowlist, so neither reaches the board from the app.
 
 | Command | Does |
 |---|---|
-| `keys` | Reports the raw keypad value and decoded button for 15 s. Use it to check the button ladder against a replacement shield. |
-| `hang` | **Deliberately stops the board.** It stops answering, the watchdog resets it after about 35 seconds, and it comes back reporting `WATCHDOG`. It exists to prove the watchdog still works. Nothing is lost — the tally and calibration are stored — but anything queued for upload goes. |
+| `hang` | **Deliberately stops the board.** It stops answering, the watchdog resets it after about 35 seconds, and it comes back reporting `WATCHDOG`. It exists to prove the watchdog still works. Nothing is lost — the tally and calibration are stored — but anything queued for upload goes. **Refused over MQTT** — stopping a machine that is holding a load, from a phone, is a denial of service rather than a diagnostic. |
+
+**Removed 2026-09-18: the `keys` command.** It reported the raw keypad value and decoded
+button, to check the button ladder against a replacement shield. There is no keypad left to
+check, and the command is gone from the firmware with it.
 
 **Note the renames:** `cal` became `kv` and `clear` became `b` on this firmware line.
-The Bluetooth macro set in `serial_bluetooth_terminal_cfg.txt` has been reissued to
-match — reload it on the phone, or two of the buttons will do nothing.
+The Bluetooth terminal's macro set in `serial_bluetooth_terminal_cfg.txt` (not the MQTT
+app above) has been reissued to match — reload it on the phone, or two of the buttons in
+that terminal app will do nothing.
 
 **`tare`, `+` and `kv` all refuse unless the loop reads `ok`** — including when it
 reads `SATURATED`. The refusal names the state. A reading pinned at full scale
@@ -69,44 +77,52 @@ wrong — with nothing on the display to say so.
 For a sensor that is staying on the machine, do not rely on `sm` at all: the default
 belongs in the firmware, so it survives every reset without anyone remembering.
 
-## Keypad
+## Phone app (MQTT)
 
-**Updated 2026-09-16.** Five discrete buttons to GND, on pins freed by the I2C
-display — no longer part of a display-shield ladder. Same order as before.
+**Added 2026-09-18.** The app sends `{"id":"<unique>","verb":"<verb>"}` — add
+`"arg":"<value>"` too for `c`, `w` and `sm` — to `plc4/jd5055e/cmd`, and the board answers
+on `plc4/jd5055e/ack`:
 
-| Key | Command |
-|---|---|
-| Right | `+` |
-| Up | `sum` |
-| Down | `b` |
-| Left | `-` |
-| Select | `tare` |
+    {"id":"7f3a9c21","verb":"+","ok":true,"detail":"recorded","n":12,"total":19408}
+    {"id":"7f3a9c22","verb":"tare","ok":false,"detail":"UNDER ZERO"}
+    {"id":"7f3a9c21","verb":"+","ok":true,"detail":"recorded","dup":true}
 
-**Updated 2026-09-16: press one button at a time, and let it come all the
-way back up before the next.** Rolling from one held button onto another, or
-releasing a button while a different one is still held, now does nothing —
-it used to fire whichever button the keypad scan landed on. Press, then
-release, then press the next one. A phantom press could tare the scale or
-record the tally against a loaded bucket; a press that simply fails to
-register is the safer of the two failures, which is why it works this way
-now.
+A refusal's `detail` is the same state word the console and the LCD would show, so the app
+and the machine can never disagree about why something was refused. A repeated `id` is
+acked with `"dup":true` and not re-run, so retrying a command whose ack never arrived is
+always safe. A command sent as a retained MQTT message is dropped and never acked — it
+would otherwise re-run on every reconnect — and `net`'s `cmd_retained` count is how you'd
+notice that happening.
 
-**A button held down more than 10 seconds is treated as stuck**, not held on
-purpose — nothing on this keypad repeats while held, so a long hold is never
-meaningful. A stuck button is ignored so the other four keep working, and
-the status row (row 4) shows `KEY STUCK` for as long as it stays down.
-Releasing it clears the fault immediately — no reset needed.
+Only the commands marked **yes** in *Commands* above reach the board this way. `hang` is
+refused regardless — see *Service commands* above — and `read`, `net`, `sum` and `debug`
+are refused too: the app already gets that data from the telemetry and status topics, so
+there is nothing for those verbs to do remotely. A refused command still gets an ack, with
+`"ok":false` and a `detail` naming why.
+
+## Operator input
+
+**Updated 2026-09-18: the five physical buttons are gone**, and with them the menu, the
+confirm screen and the check-cal screen — all three were reachable only by button. The LCD
+is now a read-only readout behind a clear coverplate; nothing on the machine responds to a
+touch. Every action that used to be a key press is now a command from the phone app, over
+MQTT — see *Phone app (MQTT)* and the MQTT column in *Commands*, both above. The console
+(USB or Bluetooth) still takes every command it always did, as the service and recovery
+path.
+
+**UNDO TARE has no replacement.** It existed only in the button menu, never had a console
+verb, and is not on the MQTT allowlist. If the zero needs correcting, `tare` again at the
+mark — there is no way to step back to the previous one.
 
 ## What the display tells you
 
-**Updated 2026-09-16: the display is now 20x4, and row 4 is a permanent status
-row.** It is written on every screen — home, menu, and the calibration-check
-screen alike — so a fault stays visible even while you are off the home screen.
-Row 4 shows worst first, one thing at a time, in this order: the loop or ADC
-state (`NO SENSOR`, `XMTR FAULT`, or `NO ADC`), then `CAL NOT SET!`, then an
-I2C error count, then `KEY STUCK`, and otherwise blank. If two of these are
-true at once — say a stuck key while the sensor is also down — you only see
-the higher one on the list; clearing it is what reveals the next.
+**The display shows one screen, and row 4 is a permanent status row on it.**
+There is no menu and no calibration-check screen to navigate away to, so a
+fault stays visible for as long as it is true. Row 4 shows worst first, one
+thing at a time, in this order: the loop or ADC state (`NO SENSOR`,
+`XMTR FAULT`, or `NO ADC`), then `CAL NOT SET!`, then an I2C error count, and
+otherwise blank. If two of these are true at once, you only see the higher
+one on the list; clearing it is what reveals the next.
 
 - A number — the current weight.
 - **`NO SENSOR`** — dead loop, below 3.5 mA: cut wire, no loop supply, or the
@@ -141,17 +157,17 @@ the higher one on the list; clearing it is what reveals the next.
   count, shown once calibration is set if the Qwiic bus to the ADC has logged a
   failure. It does not blank the weight; treat a rising count as the warning to
   act on before the bus fails outright.
-- **`KEY STUCK`** (new 2026-09-16, row 4, the status row) — a button has been
-  held down more than 10 seconds. The other four keys still work; let the
-  stuck one go and the message clears on its own.
 - **`TALLY n LEFT`** (new 2026-09-16, row 3, just above the status row) —
   shown once 5 or fewer tally slots remain, so you get warning before you hit
   the wall. At 50 recorded entries it changes to **`TALLY FULL`** and `+`
   stops recording — `sum` the tally, then `b` to clear it, before you can
   record another.
-- `Buffer Full` — the one-time message on pressing `+` after the tally is
+- `Buffer Full` — the one-time message on sending `+` after the tally is
   already full (the `TALLY FULL` line above is the standing warning; this is
-  what you see if you press `+` anyway). Use `sum`, then `b`.
+  what you see if you send `+` anyway). Use `sum`, then `b`.
+
+**Removed 2026-09-18: `KEY STUCK`.** It reported a button held past 10 seconds. There is no
+keypad left to stick, and the message is gone from the firmware with it.
 
 **`SATURATED` and `UNDER ZERO` never reach the LCD, and the status row does not
 blank the weight for either of them.** Both are still real measurements — pinned
@@ -199,9 +215,10 @@ fitted, a silent revert leaves the scale working and reading wrong.
 
 ## Mind the RESET button
 
-The LCD shield has a **RESET button in the same row as the five operator keys.** It is
-easy to catch with a glove, and it restarts the board.
+**There is still a RESET button, easy to catch with a glove, and it restarts the board.**
+The five operator keys it used to sit alongside are gone, but the RESET button is not one
+of them and it is still there.
 
-That is now survivable — the tally is kept — but it is not free: anything still queued
-for upload is lost, and the scale takes a few seconds to come back and re-associate.
-If you keep catching it, tape over it.
+That is survivable — the tally is kept — but it is not free: anything still queued for
+upload is lost, and the scale takes a few seconds to come back and re-associate. If you
+keep catching it, tape over it.

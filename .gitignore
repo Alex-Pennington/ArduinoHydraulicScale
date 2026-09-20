@@ -10,3 +10,4 @@ arduino_secrets*.h
 # Other sessions may create worktrees in here; never track them
 .claude/worktrees/
 include/wifi_networks.h
+include/build_provenance.h

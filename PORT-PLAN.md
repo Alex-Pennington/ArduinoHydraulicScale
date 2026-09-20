@@ -396,11 +396,19 @@ because the networking block touches them:
 
 - **Reissued `serial_bluetooth_terminal_cfg.txt`.** `main` renames `cal` → `kv` and `clear` →
   `b`, and adds `c<value>` and `w<value>`. Two of the seven committed macros no longer exist.
-  The operator config has to ship with the firmware or the phone stops matching the board.
+  The operator config has to ship with the firmware or the Bluetooth terminal stops matching
+  the board — this is the terminal's own macro set, not the MQTT command path below.
 - **`arduino_secrets.h.example`** already documents the five defines and the LAN-form broker
   requirement. It stays in step with whatever the port needs.
 - **A commissioning check**, not a code change: confirm `FOXTROTBRAVO` routes to
   `192.168.10.0/24` (`BRIEF.md` question 2). If it does not, none of this reaches the broker.
+- **The MQTT command contract, since built.** `plc4/jd5055e/cmd` (QoS 1, never retained)
+  takes `{"id":"<unique>","verb":"<verb>"}`, an allowlisted subset of the console's own verbs
+  (`tare + - b kv c w sm`) run through the same handler, and answers on `plc4/jd5055e/ack`
+  (QoS 0, never retained) in the console's own success and refusal vocabulary. This is the
+  replacement for the five physical buttons Alex is removing from the enclosure — see
+  `OPERATOR.md` for the full contract and the allowlist's reasoning. `hang`, `read`, `net`,
+  `sum` and `debug` stay console-only.
 
 ---
 
