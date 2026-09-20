@@ -1681,6 +1681,29 @@ void loop() {
     if (readingTrustworthy()) snprintf(psiField, sizeof(psiField), "%d", pressureValue);
     else                      snprintf(psiField, sizeof(psiField), "null");
 
+    // `w` IS GUARDED THE SAME WAY `psi` IS, AND FOR THE SAME REASON. It used to
+    // be published bare on every pass, so when the loop stopped measuring this
+    // payload declined to state a pressure while still asserting a weight
+    // derived from that same absent pressure. A frozen number and a live one
+    // were indistinguishable to anything reading `w` alone -- and `w` is the
+    // field consumers act on, so the unguarded one was the one that mattered.
+    //
+    // `stale` and `sensor` were always present and a careful consumer could
+    // discriminate, but it had to opt in, and nothing signalled that `w` needed
+    // it while `psi` did not. Two fields in one object using opposite
+    // conventions for the identical fault is the defect, not the omission.
+    //
+    // NOTE WHAT THIS DOES NOT DISCARD. readingTrustworthy() is
+    // loopIsMeasuring() && readingFresh(), and loopIsMeasuring() INCLUDES
+    // LOOP_UNDER and LOOP_SATURATED (include/loop_scaling.h:75-77). Both carry
+    // a real measurement and both keep publishing a number here. The
+    // over-range excursions this front end was fitted to capture are not lost.
+    // Only a loop that is not measuring at all, or an ADC that has gone quiet,
+    // nulls the field.
+    char wField[12];
+    if (readingTrustworthy()) snprintf(wField, sizeof(wField), "%d", outputValue);
+    else                      snprintf(wField, sizeof(wField), "null");
+
     const char *psiFault = "null";
     if (loopState == LOOP_DEAD)            psiFault = "\"low\"";
     else if (loopState == LOOP_FAULT_HIGH) psiFault = "\"high\"";
@@ -1691,9 +1714,9 @@ void loop() {
     // displayStateName() here, or a downstream consumer would lose the
     // distinction between "loop faulted" and "ADC not answering".
     snprintf(payload, sizeof(payload),
-             "{\"w\":%d,\"psi\":%s,\"mA\":%.2f,\"counts\":%d,\"sensor\":\"%s\","
+             "{\"w\":%s,\"psi\":%s,\"mA\":%.2f,\"counts\":%d,\"sensor\":\"%s\","
              "\"stale\":%s,\"psi_fault\":%s,\"queued\":%d,\"id\":\"%s\"}",
-             outputValue, psiField, (double)countsToMilliamps(sensorValue),
+             wField, psiField, (double)countsToMilliamps(sensorValue),
              sensorValue, sensorStateName(), readingFresh() ? "false" : "true",
              psiFault, queueCount, CLIENT_ID);
     // A5: the periodic stream is telemetry, not debug. The deliberate record
