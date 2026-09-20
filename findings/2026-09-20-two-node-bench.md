@@ -98,12 +98,36 @@ every half second. The drain cadence problem is unchanged.
 ## The transceiver — it worked, and that is not an endorsement
 
 The SN65HVD230 is a **3.3 V** part and the UNO R4 is fixed at **5 V** logic. This
-pairing is out of specification in both directions:
+pairing is out of specification in both directions, **and both claims are from the
+datasheets rather than from recollection** — they were checked after Alex rightly
+pushed back on them being asserted:
 
-- Minima CANTX at 5 V into the transceiver's `D` input, whose absolute maximum is
-  about 3.6 V.
-- Transceiver `R` output at 3.3 V into the Minima's input, against an RA4M1
-  input-high threshold of roughly 0.8 × VCC = 4.0 V.
+**Direction 1 — the Arduino overdrives the transceiver's input.**
+TI SN65HVD230 datasheet (SLLS555), §8.1 *Absolute Maximum Ratings*:
+
+> Digital Input and Output voltage, VI (D or R): **–0.5 to VCC + 0.5 V**
+
+§8.3 gives VCC as 3.0–3.6 V. At 3.3 V the ceiling is **3.8 V**; the Minima drives
+`D` at 5 V, exceeding the absolute maximum by about 1.2 V. Absolute maximum is a
+damage limit, not a performance limit.
+
+**Direction 2 — the transceiver underdrives the Arduino's input.**
+Renesas RA4M1 datasheet, Table 2.4 *I/O VIH, VIL*:
+
+> Other peripheral input pins excluding IIC: **VIH = VCC × 0.8**
+
+At VCC = 5 V that requires **4.0 V** for a guaranteed logic high. TI §8.6 specifies
+the receiver output as **VOH min 2.4 V** (at IO = –8 mA); unloaded it sits near the
+3.3 V rail. Either figure is below 4.0 V.
+
+On the Minima, `D4` is port **P103** and `D5` is **P102** (core `MINIMA/variant.cpp`),
+which are peripheral input/output pins covered by that row.
+
+**Why it worked anyway.** Those are guaranteed limits across process and
+temperature, not typical values. A real RA4M1 sample switches nearer VCC/2 than
+its specified 4.0 V, and a lightly loaded SN65HVD230 drives `R` close to 3.3 V.
+Neither manufacturer guarantees that margin, and nothing about this bench run
+establishes it holds on another sample, at temperature, or on longer leads.
 
 **It nonetheless worked perfectly here** — every test above passed with this
 part. That is precisely the outcome warned about: *it can pass on a bench and
