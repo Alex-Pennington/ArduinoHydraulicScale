@@ -27,7 +27,39 @@ Sketch `sketches/can_soak`, sender `tools/can_soak_send.py`. The sender puts a
 | 0 ms | 11,996 | 11,996 | 0 | **0 ppm** | 1 |
 | 5 ms | 6,000 | 6,000 | 0 | **0 ppm** | 2 |
 | 150 ms | 4,000 | 4,000 | 0 | **0 ppm** | **30** |
-| **500 ms** | 5,998 | 1,938 | **4,009** | **674,121 ppm (67.4%)** | **32 (full)** |
+| **500 ms** | 5,998 | 1,938 | **4,009** *(see below)* | **674,121 ppm (67.4%)** | **32 (full)** |
+
+### The 500 ms row does not subtract cleanly, and the reason is worth knowing
+
+5,998 − 1,938 = **4,060**, but the lost column says **4,009**. The 51 frame
+difference is not an error in either number; it is a **structural limit of
+gap-based measurement**, and it went unstated in the first version of this file.
+
+**The denominator is `lost / (received + lost)`** — loss as a fraction of the
+sequence span the receiver actually *observed*, which is 4,009 / 5,947 = 67.41%.
+
+The 51 are accounted for exactly. The receiver saw 1,938 frames and detected
+4,009 missing *between* them, so it observed sequence numbers 0 through
+**5,946**. The sender sent through **5,997**. Frames **5,947–5,997 — precisely
+51** — were transmitted after the last frame the receiver ever saw, so there is
+no later frame to reveal them as a gap. The sequence simply stops.
+
+**Gap detection is blind to loss at the tail, and at the head.** A gap needs a
+frame on both sides of it. Anything lost after the final received frame, or
+before the first one, is invisible to this method however large it is.
+
+Both figures are defensible and they bracket the truth:
+
+| Measure | Value | Meaning |
+|---|---|---|
+| Gap-based, `lost/(received+lost)` | 4,009 / 5,947 = **67.41%** | loss within the observed span |
+| Against frames sent | 4,060 / 5,998 = **67.69%** | true loss, knowable only because the sender reported its count |
+
+They agree to a third of a percent, so the conclusion is unaffected — but the
+second is the honest total and is only available here because the sender printed
+what it sent. **At the tractor there is no such cross-check**, which is one more
+reason the firmware needs its own liveness counter rather than relying on
+inference from the data.
 
 **The arithmetic is exact, which is what makes it trustworthy.** At 200 frames/s
 a 500 ms window admits 100 frames. The ring holds 32. So 68 of every 100 are
