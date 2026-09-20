@@ -31,6 +31,26 @@ command -v arduino-cli >/dev/null || { echo "arduino-cli not on PATH" >&2; exit 
 rm -rf "$SCRATCH"
 mkdir -p "$SKETCH"
 cp "$REPO/src/ArduinoHydraulicScale.cpp" "$SKETCH/ArduinoHydraulicScale.ino"
+
+# Provenance: capture the commit this image is compiled from. A repo with no git
+# (a tarball, a CI export) falls back to the committed sentinel rather than
+# failing the build -- "UNKNOWN" is honest about not knowing.
+#
+# THIS MUST RUN BEFORE THE COPY LOOP BELOW, and the ordering is the whole point.
+# gen-provenance.sh writes $REPO/include/build_provenance.h; the loop below is
+# what carries that file into the sketch. Generated AFTER the loop -- which is
+# where this call used to sit -- the fresh header never reached the build, so
+# every image was stamped with whatever the PREVIOUS run had left on disk, or
+# with the "UNKNOWN" sentinel on a fresh clone where the gitignored header did
+# not exist yet.
+#
+# Measured before the fix: a clean tree at 608aebf5 compiled an image that
+# identified itself as c601d792+dirty -- four commits adrift AND falsely dirty.
+# The board publishes that string as `build` on the status topic and a
+# technician asks it what is running, so a stale value here is a machine in a
+# field confidently reporting the wrong source. Do not move this call back down.
+"$REPO/tools/gen-provenance.sh" >/dev/null 2>&1 || true
+
 for h in "$REPO"/include/*.h "$REPO"/src/*.h; do
   [ -e "$h" ] && cp "$h" "$SKETCH/"
 done
@@ -46,10 +66,10 @@ if [ ! -f "$SKETCH/wifi_networks.h" ]; then
   cp "$REPO/include/wifi_networks.h.example" "$SKETCH/wifi_networks.h"
 fi
 
-# Provenance: capture the commit this image is compiled from. A repo with no git
-# (a tarball, a CI export) falls back to the committed sentinel rather than
-# failing the build -- "UNKNOWN" is honest about not knowing.
-"$REPO/tools/gen-provenance.sh" >/dev/null 2>&1 || true
+# The no-git fallback, kept deliberately: gen-provenance.sh exits non-zero
+# outside a repository and copies nothing, so the sentinel is what a tarball
+# build gets. Inside a repository the loop above has already placed the freshly
+# generated header and this branch does not fire.
 if [ ! -f "$SKETCH/build_provenance.h" ]; then
   cp "$REPO/include/build_provenance.h.example" "$SKETCH/build_provenance.h"
 fi
