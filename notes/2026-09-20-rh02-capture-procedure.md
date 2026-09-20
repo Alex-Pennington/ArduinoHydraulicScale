@@ -149,14 +149,30 @@ The counters to read are on the line beginning `re-started`:
   output above is that case, taken from a real run. Suspect wiring, ground, or
   the wrong connector.
 
-- **Wrong bit rate on a live bus — NOT MEASURED HERE, reasoned:** the error
-  counters should *climb*, particularly `bus-errors`, because the controller is
-  sampling real bus transitions at the wrong points and reading them as form and
-  stuff errors. The state may walk to `ERROR-WARNING` or `ERROR-PASSIVE`. This
-  follows from how CAN error counting works rather than from a measurement — I
-  had no second node to generate a live bus at a mismatched rate. **Confirm it
-  the first time you are at the tractor**, because it is the discriminator this
-  whole section rests on.
+- **Transmitting with nobody acknowledging — MEASURED 2026-09-20** on the
+  two-node bench with `CAN_H`/`CAN_L` swapped, so the far node could not hear us:
+  the state walks to `ERROR-PASSIVE` and `error-warn` / `error-pass` increment,
+  while **`bus-errors` stays at zero**.
+
+  ```
+	  re-started bus-errors arbit-lost error-warn error-pass bus-off
+	  0          0          0          4          1          0
+  ```
+
+  Zero bus-errors with climbing error-warn/error-pass means **the bits are fine
+  and nothing is answering** — we are alone on the bus, or the pair is swapped,
+  open, or landed on the wrong pins. It is a wiring fault, not a bit-rate fault.
+  Note this only appears if you TRANSMIT; a listen-only capture never acks and
+  never provokes it, which is another reason to bench-test in normal mode before
+  going to the tractor. See `findings/2026-09-20-two-node-bench.md`.
+
+- **Wrong bit rate on a live bus — STILL NOT MEASURED, reasoned:** here
+  `bus-errors` itself should climb, because the controller is sampling real bus
+  transitions at the wrong points and reading them as form and stuff errors. That
+  is the counter that distinguishes it from the case above. This follows from how
+  CAN error counting works rather than from a measurement — generating it needs a
+  second node transmitting at a mismatched rate, which the bench has not done.
+  **Confirm it the first time you are at the tractor.**
 
 **Rising error counters mean the bus is alive and you are listening wrongly.**
 Zero counters and zero frames mean you are not electrically on a bus at all.
