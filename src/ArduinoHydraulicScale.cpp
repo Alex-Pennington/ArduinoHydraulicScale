@@ -318,6 +318,15 @@ struct WeightRecord {
   uint8_t  sensorAtCapture;   // LoopState AS IT WAS when this weight was taken
   uint8_t  calDefaultAtCapture;
 };
+// THIS NUMBER IS STATED IN TWO PLACES AND ONLY ONE OF THEM IS IN THIS REPO.
+// The estate consumer's PLC #4 handler documents the same 200-record bound in
+// its own docstring, written independently and reconciled against this line for
+// the first time on 2026-09-20. Neither mentioned the other until then.
+//
+// So if this depth changes, the consumer's documented expectation goes stale
+// silently -- nothing builds both, nothing tests both, and the mismatch would
+// only surface as a surprise during a deep flush, which is exactly when nobody
+// wants a surprise. Tell whoever owns /opt/plc1-monitoring.
 const int QUEUE_DEPTH = 200;              // ~4 working days at 50 buckets/day
 WeightRecord queueBuf[QUEUE_DEPTH];
 int queueHead = 0;                        // oldest
