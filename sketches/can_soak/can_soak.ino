@@ -15,6 +15,14 @@
 //    counts SEQUENCE GAPS in the payload, so a dropped frame is detected by its
 //    absence rather than inferred from a total.
 //
+//    LIMIT OF THE METHOD, AND IT BIT THIS TEST: a gap needs a frame on BOTH
+//    sides of it. Loss after the last frame received, or before the first, is
+//    invisible however large -- the sequence just starts late or stops early.
+//    In the 500 ms run that hid 51 frames, about 1% of the total. So `lost` here
+//    is loss WITHIN THE OBSERVED SPAN, and the reported ppm uses
+//    lost/(received+lost). Always compare against what the sender says it sent;
+//    tools/can_soak_send.py prints that for exactly this reason.
+//
 // The far end must send frames whose first four payload bytes are a big-endian
 // incrementing counter. cangen does NOT do that, so use tools/can_soak_send.py.
 //
