@@ -68,7 +68,7 @@ The live stream. Nothing here was chosen by the operator.
 
 | Field | Meaning |
 |---|---|
-| `w` | Weight in pounds |
+| `w` | Weight in pounds, or null when the reading cannot be trusted |
 | `psi` | Pressure, or null when the reading cannot be trusted |
 | `mA` | Loop current, the unit a meter at the machine reads |
 | `counts` | Raw converter output |
@@ -77,8 +77,13 @@ The live stream. Nothing here was chosen by the operator.
 | `psi_fault` | `low`, `high`, or null — the direction of a loop fault |
 | `queued` | Weights waiting to be published |
 
-`psi` publishes null and never zero when the loop is not measuring. A real zero pressure and a
-dead transmitter are different facts and are reported differently at every layer.
+`w` and `psi` both publish null and never zero when the loop is not measuring. A real zero and a
+dead transmitter are different facts and are reported differently at every layer. The two fields
+carry the same convention so a consumer cannot read one as live while the other declines.
+
+Null here means the loop is not measuring or the converter has stopped answering. It does not
+mean over-range: a reading below the live zero or at full scale is a real measurement and both
+still publish a number.
 
 ## Status
 
