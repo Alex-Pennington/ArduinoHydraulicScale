@@ -193,7 +193,7 @@ outdoor enclosure needs no holes for a keypad, five holes being five places for 
 in. Every operator action now arrives over MQTT from a phone app, on `plc4/jd5055e/cmd`,
 through the same handler the console uses so the two paths cannot diverge. The serial and
 Bluetooth console keeps every verb it had, as the service and recovery path with no broker
-in reach. See `OPERATOR.md` for the full command table and the MQTT command contract.
+in reach. See `references/07_operating_card.md` for the full command table and the MQTT command contract.
 
 **Network — MQTT over WiFi** to `192.168.10.99:1883` on SSID `FOXTROTBRAVO` (see Decisions),
 `ArduinoMqttClient`, port 1883 plaintext (:74), credentials from
@@ -206,7 +206,7 @@ terminal profile targeting an **HC-05** adapter with macros for all seven serial
 HC-05 is a UART device, which on the R4 is `Serial1`; at baseline the firmware read only
 `Serial`, the USB CDC port, so whether an HC-05 was actually fitted was unknown. It is: the
 board announces itself as `JD5055e OK` on the Bluetooth console at every power-up
-(`OPERATOR.md`), and the console is now the service and recovery path beside the MQTT phone
+(`references/07_operating_card.md`), and the console is now the service and recovery path beside the MQTT phone
 app — see the superseded note above.
 
 **Serial verbs:** `tare`, `cal`, `+`, `-`, `read`, `sum`, `clear`, `debug`. Calibration is a
@@ -323,11 +323,11 @@ the firmware could not read it (audit A1) — so whether one was fitted, and wha
 operator interface" even meant, was open.
 
 **It is fitted, and it is the console's radio path.** The board announces itself as
-`JD5055e OK` on the Bluetooth console at every power-up (`OPERATOR.md`). The field interface
+`JD5055e OK` on the Bluetooth console at every power-up (`references/07_operating_card.md`). The field interface
 is now settled on two paths rather than one: the console (USB and Bluetooth together) as the
 service and recovery path with every verb, and a phone app over MQTT as the normal operator
 path, now that the five physical buttons are gone. See the superseded note under *Hardware —
-verified* and `OPERATOR.md`.
+verified* and `references/07_operating_card.md`.
 
 ### 5. What does "weight" mean on this hydraulic circuit? — **geometry half CLOSED, see Decisions**
 

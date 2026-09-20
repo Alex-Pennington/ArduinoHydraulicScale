@@ -78,3 +78,13 @@ documents:
   version: '1'
   odin_id: pending
   last_updated: '2026-09-17'
+- num: '07'
+  source: 07_operating_card.md
+  title: Operating Card — PLC #4 Tractor Scale
+  subtitle: The weighing procedure, the verbs that drive it, and what the machine refuses
+  kind: Cabinet Reference Card
+  subject: Weighing at the boom mark, the command table and which verbs reach the app, refusals,
+    the two faults that look alike, the tally, what survives a reset
+  version: '1'
+  odin_id: pending
+  last_updated: '2026-09-20'
