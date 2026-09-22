@@ -586,10 +586,11 @@ static void publishEngine(unsigned long now) {
   if (n >= sizeof(p)) return;
   snprintf(p + n, sizeof(p) - n,
            "\"frames\":%lu,\"unknown\":%lu,\"ring_full\":%lu,\"ring_high\":%lu,"
-           "\"can_err\":%lu,\"can_up\":%s,\"filt\":%s,\"id\":\"%s\"}",
+           "\"can_err\":%lu,\"can_last\":%d,\"drains\":%lu,\"can_up\":%s,\"filt\":%s,\"id\":\"%s\"}",
            (unsigned long)c.framesSeen, (unsigned long)c.framesUnknown,
            (unsigned long)canRingFull, (unsigned long)canRingHigh,
-           (unsigned long)canErrEvents, canUp ? "true" : "false",
+           (unsigned long)canErrEvents, (int)canLastErr, (unsigned long)canDrains,
+           canUp ? "true" : "false",
            canFiltered ? "true" : "false", CLIENT_ID);
   publishTo("engine", p);
 }
@@ -2010,6 +2011,7 @@ void loop() {
       const uint32_t now = millis();
       Console.print("can = ");      Console.println(canUp ? "up" : "DOWN");
       Console.print("drain = ");    Console.println(canTimerOn ? "timer" : "loop");
+      Console.print("drains = ");   Console.println((unsigned long)canDrains);
       Console.print("filter = ");   Console.println(canFiltered ? "on" : "off");
       Console.print("frames = ");   Console.println((unsigned long)c.framesSeen);
       Console.print("unknown = ");  Console.println((unsigned long)c.framesUnknown);

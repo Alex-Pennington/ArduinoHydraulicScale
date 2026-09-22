@@ -41,11 +41,16 @@ static volatile uint32_t canRingFull   = 0;      // drains that found the ring F
 static volatile uint32_t canRingHigh   = 0;      // deepest the ring has been, of 32
 static volatile uint32_t canErrEvents  = 0;      // times the driver flagged an error event
 static volatile int      canLastErr    = 0;      // the last driver error code (can_event_t)
+// How many times the drain has RUN, frames or not. With `frames` at 0 this is what
+// tells "the drain never runs" (drains 0) from "nothing is arriving at the pin"
+// (drains climbing at CAN_DRAIN_HZ) -- the two look identical otherwise.
+static volatile uint32_t canDrains     = 0;
 static bool              canTimerOn    = false;
 static FspTimer          canTimer;
 
 static void canDrainISR(timer_callback_args_t *) {
   if (!canActive) return;
+  canDrains++;
   const size_t n = CAN.available();
   if (n > canRingHigh) canRingHigh = n;
   if (n >= CanMsgRingbuffer::RING_BUFFER_SIZE) canRingFull++;
