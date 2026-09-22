@@ -1,6 +1,6 @@
 {
   "uid": "plc4-tractor-engine",
-  "title": "PLC #4 — Tractor Engine (J1939)",
+  "title": "PLC #4 \u2014 Tractor Engine (J1939)",
   "description": "Engine telemetry decoded from the JD 5055E CAN bus. PROPOSED, not deployed. Reads plc4_engine, plc4_dtc_* and the views v_plc4_engine_now, v_plc4_can_health, v_plc4_dm1_now from migration 067 (070 on the consumer side). Every tile tells three things apart: NO DATA (board silent), 'not reported' (the latest message omitted the value) and a real 0. Revised 2026-09-22 after the first field run of image 19f0c022.",
   "tags": [
     "plc4",
@@ -1088,6 +1088,134 @@
       }
     },
     {
+      "id": 26,
+      "type": "stat",
+      "title": "Fuel level",
+      "description": "SPN 96 (DD, SA 0x17), 0.4 % steps. Latest row only, never carried forward. NO DATA = no engine message in the last 50 s; 'not reported' = the latest message omitted it; 0 is a real 0.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "noValue": "NO DATA",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "not reported",
+                  "color": "text",
+                  "index": 99
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT fuel_level_pct AS \"fuel level\" FROM v_plc4_engine_now WHERE NOT board_silent"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": true,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/"
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 27,
+      "type": "stat",
+      "title": "Hydraulic oil",
+      "description": "SPN 1638 (VF, SA 0x47), hydraulic oil temperature. Viscosity follows it, which matters to a pressure-based scale. No threshold: no JD figure yet. Latest row only; NO DATA / 'not reported' / 0 as on the other tiles.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "noValue": "NO DATA",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "not reported",
+                  "color": "text",
+                  "index": 99
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT hyd_oil_c AS \"hyd oil\" FROM v_plc4_engine_now WHERE NOT board_silent"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": true,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/"
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "showPercentChange": false
+      }
+    },
+    {
       "id": 8,
       "type": "stat",
       "title": "Engine hours",
@@ -1454,7 +1582,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "RPM, load, torque and fuel",
-      "description": "rpm SPN 190 (left); load SPN 92 and torque SPN 513 (percent, right); fuel SPN 183 (L/h, right). Absent values are breaks, never zeros: no IS NOT NULL filter, spanNulls off, and a gap over 50 s between messages breaks the line too. Image 19f0c022 omitted rpm on most rows (the freshness bug fixed in the next flashed image (after 705bf3c)), so expect breaks before that flash.",
+      "description": "rpm SPN 190 (left); load SPN 92 and torque SPN 513 (percent, right); fuel SPN 183 (L/h, right). Absent values are breaks, never zeros: no IS NOT NULL filter, spanNulls off, and a gap over 50 s between messages breaks the line too. Image 19f0c022 omitted rpm on most rows (the freshness bug fixed in the next flashed image (after 705bf3c)), so expect breaks before that flash. rpm min/max and load max are per-15 s-window extremes from every ~50 Hz sample (the snapshot series can miss a peak between messages); they are NULL on images before the key.",
       "datasource": {
         "type": "postgres",
         "uid": "plc1-postgres"
@@ -1518,7 +1646,7 @@
           "refId": "A",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT recv_ts AS time, rpm AS \"rpm\", load_pct AS \"load %\", torque_pct AS \"torque %\", fuel_lph AS \"fuel L/h\" FROM plc4_engine WHERE $__timeFilter(recv_ts) ORDER BY recv_ts"
+          "rawSql": "SELECT recv_ts AS time, rpm AS \"rpm\", rpm_min AS \"rpm min\", rpm_max AS \"rpm max\", load_pct AS \"load %\", load_pct_max AS \"load % max\", torque_pct AS \"torque %\", fuel_lph AS \"fuel L/h\" FROM plc4_engine WHERE $__timeFilter(recv_ts) ORDER BY recv_ts"
         }
       ],
       "options": {

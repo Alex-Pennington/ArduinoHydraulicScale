@@ -42,6 +42,17 @@ CREATE TABLE IF NOT EXISTS plc4_engine (
     batt_v         double precision,
     keysw_v        double precision,
     hours          double precision,
+    fuel_level_pct double precision,
+    hyd_oil_c      double precision,
+    rpm_min        double precision,
+    rpm_max        double precision,
+    rpm_avg        double precision,
+    load_pct_min   double precision,
+    load_pct_max   double precision,
+    load_pct_avg   double precision,
+    torque_pct_min double precision,
+    torque_pct_max double precision,
+    torque_pct_avg double precision,
     frames         bigint,
     unknown_frames bigint,
     ring_full      bigint,
@@ -76,6 +87,28 @@ COMMENT ON COLUMN plc4_engine.batt_v IS
     'Battery potential / power input 1, volts. SPN 168 from PGN 65271 bytes 5-6, 0.05 V/bit, offset 0. EXPECT THIS TO BE NULL ALWAYS: in the Cal Poly 5055E corpus SPN 168 was not-available in all 1206 VEP1 frames. Use keysw_v for battery voltage on this machine. Kept because it is the standard primary and another ECU may populate it.';
 COMMENT ON COLUMN plc4_engine.keysw_v IS
     'Keyswitch battery potential, volts. SPN 158 from PGN 65271 bytes 7-8, 0.05 V/bit, offset 0. ON THE 5055E THIS IS THE REAL BATTERY VOLTAGE and the one to plot: available in all 1206 corpus frames, 12.4 V key-on, 14.2 V charging, dipping to 7.75 V on crank.';
+COMMENT ON COLUMN plc4_engine.fuel_level_pct IS
+    'Fuel level, percent of tank. SPN 96 from PGN 65276 (DD) byte 2, 0.4 %/bit, from SA 0x17 (35.6 % in the 2026-09-22 census). SA 0x47 also sends DD with every byte not-available; the board skips it. NULL: not received in 5 s, or the payload predates the key (images before the one adding it).';
+COMMENT ON COLUMN plc4_engine.hyd_oil_c IS
+    'Hydraulic oil temperature, degC. SPN 1638 from PGN 65128 (VF) byte 1, 1 degC/bit, offset -40, from SA 0x47 at 1 Hz (18-19 degC parked in the census). No standard PGN carries hydraulic PRESSURE on this tractor. NULL: not received in 5 s, or the payload predates the key.';
+COMMENT ON COLUMN plc4_engine.rpm_min IS
+    'Minimum of rpm over the 15 s window ending at this message, from every valid ~50 Hz sample the board decoded (Alex, 2026-09-22: catch peak load while the loader works). The board takes and resets the window on a fixed 15 s grid even while offline, so a row never spans an outage. NULL: no valid sample in the window, or the payload predates the key.';
+COMMENT ON COLUMN plc4_engine.rpm_max IS
+    'Maximum of rpm over the 15 s window ending at this message, from every valid ~50 Hz sample the board decoded (Alex, 2026-09-22: catch peak load while the loader works). The board takes and resets the window on a fixed 15 s grid even while offline, so a row never spans an outage. NULL: no valid sample in the window, or the payload predates the key.';
+COMMENT ON COLUMN plc4_engine.rpm_avg IS
+    'Mean of rpm over the 15 s window ending at this message, from every valid ~50 Hz sample the board decoded (Alex, 2026-09-22: catch peak load while the loader works). The board takes and resets the window on a fixed 15 s grid even while offline, so a row never spans an outage. NULL: no valid sample in the window, or the payload predates the key.';
+COMMENT ON COLUMN plc4_engine.load_pct_min IS
+    'Minimum of load_pct over the 15 s window ending at this message, from every valid ~50 Hz sample the board decoded (Alex, 2026-09-22: catch peak load while the loader works). The board takes and resets the window on a fixed 15 s grid even while offline, so a row never spans an outage. NULL: no valid sample in the window, or the payload predates the key.';
+COMMENT ON COLUMN plc4_engine.load_pct_max IS
+    'Maximum of load_pct over the 15 s window ending at this message, from every valid ~50 Hz sample the board decoded (Alex, 2026-09-22: catch peak load while the loader works). The board takes and resets the window on a fixed 15 s grid even while offline, so a row never spans an outage. NULL: no valid sample in the window, or the payload predates the key.';
+COMMENT ON COLUMN plc4_engine.load_pct_avg IS
+    'Mean of load_pct over the 15 s window ending at this message, from every valid ~50 Hz sample the board decoded (Alex, 2026-09-22: catch peak load while the loader works). The board takes and resets the window on a fixed 15 s grid even while offline, so a row never spans an outage. NULL: no valid sample in the window, or the payload predates the key.';
+COMMENT ON COLUMN plc4_engine.torque_pct_min IS
+    'Minimum of torque_pct over the 15 s window ending at this message, from every valid ~50 Hz sample the board decoded (Alex, 2026-09-22: catch peak load while the loader works). The board takes and resets the window on a fixed 15 s grid even while offline, so a row never spans an outage. NULL: no valid sample in the window, or the payload predates the key.';
+COMMENT ON COLUMN plc4_engine.torque_pct_max IS
+    'Maximum of torque_pct over the 15 s window ending at this message, from every valid ~50 Hz sample the board decoded (Alex, 2026-09-22: catch peak load while the loader works). The board takes and resets the window on a fixed 15 s grid even while offline, so a row never spans an outage. NULL: no valid sample in the window, or the payload predates the key.';
+COMMENT ON COLUMN plc4_engine.torque_pct_avg IS
+    'Mean of torque_pct over the 15 s window ending at this message, from every valid ~50 Hz sample the board decoded (Alex, 2026-09-22: catch peak load while the loader works). The board takes and resets the window on a fixed 15 s grid even while offline, so a row never spans an outage. NULL: no valid sample in the window, or the payload predates the key.';
 COMMENT ON COLUMN plc4_engine.hours IS
     'Engine total hours of operation. SPN 247 from PGN 65253 bytes 1-4, 0.05 h/bit, offset 0. NOT broadcast on this tractor: every 18FEE500 frame in the 2026-09-22 census answers a PGN request from another ECU (SA 0x06 to global, SA 0x17 to the engine) -- a pair every 30 s once running. The board never transmits a request; it reads those answers, so NULL can also mean nobody asked recently. Advancing values across the Cal Poly sessions (138.15 h to 156.35 h) confirm the scaling.';
 COMMENT ON COLUMN plc4_engine.frames IS
@@ -284,7 +317,7 @@ SELECT b.*,
                e.frames, e.unknown_frames, e.ring_full, e.ring_high, e.can_err,
                e.drains, e.can_last,
                e.rpm, e.load_pct, e.torque_pct, e.coolant_c, e.oil_temp_c,
-               e.oil_kpa, e.fuel_lph, e.batt_v, e.keysw_v, e.hours,
+               e.oil_kpa, e.fuel_lph, e.batt_v, e.keysw_v, e.hours, e.fuel_level_pct, e.hyd_oil_c,
                p.recv_ts        AS prev_ts,
                p.filt           AS prev_filt,
                p.frames         AS p_frames,
@@ -341,7 +374,7 @@ SELECT c.id IS NOT NULL                                             AS has_row,
        EXTRACT(EPOCH FROM (now() - c.recv_ts))::double precision    AS age_s,
        s.silent                                                     AS board_silent,
        c.rpm, c.load_pct, c.torque_pct, c.coolant_c, c.oil_temp_c,
-       c.oil_kpa, c.fuel_lph, c.batt_v, c.keysw_v, c.hours,
+       c.oil_kpa, c.fuel_lph, c.batt_v, c.keysw_v, c.hours, c.fuel_level_pct, c.hyd_oil_c,
        h.hours                                                      AS hours_last,
        h.recv_ts                                                    AS hours_ts,
        c.can_up, c.filt, c.frames, c.ring_high, c.can_last,

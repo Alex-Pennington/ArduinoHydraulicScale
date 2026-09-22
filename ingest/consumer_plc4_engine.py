@@ -63,6 +63,17 @@ _PLC4_ENGINE_FIELDS = (
     "batt_v",
     "keysw_v",
     "hours",
+    "fuel_level_pct",
+    "hyd_oil_c",
+    "rpm_min",
+    "rpm_max",
+    "rpm_avg",
+    "load_pct_min",
+    "load_pct_max",
+    "load_pct_avg",
+    "torque_pct_min",
+    "torque_pct_max",
+    "torque_pct_avg",
 )
 
 # Plausibility bounds. A value outside these is stored as NULL with an
@@ -80,6 +91,17 @@ _PLC4_ENGINE_BOUNDS = {
     "batt_v": (0.0, 60.0),
     "keysw_v": (0.0, 60.0),
     "hours": (0.0, 200000.0),
+    "fuel_level_pct": (0.0, 100.0),
+    "hyd_oil_c": (-40.0, 210.0),
+    "rpm_min": (0.0, 5000.0),
+    "rpm_max": (0.0, 5000.0),
+    "rpm_avg": (0.0, 5000.0),
+    "load_pct_min": (0.0, 125.0),
+    "load_pct_max": (0.0, 125.0),
+    "load_pct_avg": (0.0, 125.0),
+    "torque_pct_min": (-125.0, 125.0),
+    "torque_pct_max": (-125.0, 125.0),
+    "torque_pct_avg": (-125.0, 125.0),
 }
 
 # --- ingest_unmapped ----------------------------------------------------------
