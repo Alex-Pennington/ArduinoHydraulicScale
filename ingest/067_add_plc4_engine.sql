@@ -3,7 +3,14 @@
 -- NOT APPLIED, AND NOT THIS REPOSITORY'S TO APPLY. db/migrations/ lives in the
 -- consumer workspace and belongs to the consumer coordinator. This file is a
 -- proposal to hand over, numbered against what was there on 2026-09-18 (066 was
--- the highest). If another migration lands first, renumber before applying.
+-- the highest). THE FILE NAME STAYS 067 HERE; THE CONSUMER RENUMBERS IT TO 070 ON
+-- THEIR SIDE (issue #25 hand-over: 067-069 are taken there). Do not renumber it in
+-- this repository -- the hand-over trail refers to it as 067.
+--
+-- REVISED 2026-09-22 after the first field run of image 19f0c022 on the tractor:
+-- CAN health counters, board_id, three views (v_plc4_can_health, v_plc4_engine_now,
+-- v_plc4_dm1_now), plc4_alert_threshold, and a per-SA DM1 index. See the section
+-- headed "2026-09-22" below and ingest/README.md.
 --
 -- Shape follows the existing PLC #4 tables (026, 037, 061, 066): one wide row
 -- per received payload, recv_ts as the plot axis, NULL where the board did not
@@ -15,6 +22,11 @@
 -- (0xFE..) sentinel. So NULL here means "the engine did not say", not "the
 -- reading was suspect". There is no sibling status string to consult, because
 -- there is nothing to distrust: an absent J1939 parameter is absent, not wrong.
+--
+-- THE #25 CONDITION (consumer coordinator, 2026-09-20): a NULL must not collapse
+-- "never broadcast" into "arrived and the handler could not use it". A key that
+-- arrives unusable goes to ingest_unmapped as kind 'field' with the field named,
+-- and every nullable column's comment below says which absence its NULL encodes.
 
 BEGIN;
 
@@ -32,12 +44,20 @@ CREATE TABLE IF NOT EXISTS plc4_engine (
     hours          double precision,
     frames         bigint,
     unknown_frames bigint,
+    ring_full      bigint,
+    ring_high      smallint,
+    can_err        bigint,
+    can_up         boolean,
+    filt           boolean,
+    drains         bigint,
+    can_last       integer,
+    board_id       text,
     recv_ts        timestamptz NOT NULL DEFAULT now(),
     ts_kind        text        NOT NULL DEFAULT 'unknown'
 );
 
 COMMENT ON TABLE  plc4_engine IS
-    'J1939 engine telemetry decoded on the board from the tractor CAN bus, 15 s cadence, topic plc4/jd5055e/engine. NULL in any value column means the engine did not broadcast that parameter in the window, or broadcast the J1939 not-available sentinel.';
+    'J1939 engine telemetry decoded on the board from the tractor CAN bus, 15 s cadence while the board is online, QoS 0, not retained, topic plc4/jd5055e/engine. NULL IN A J1939 VALUE COLUMN (rpm .. hours) HAS TWO CAUSES AND ingest_unmapped TELLS THEM APART: (a) the key was OMITTED -- the engine did not broadcast that parameter within the board''s freshness window (5 s; 90 s for hours from the next flashed image (after 705bf3c); image 19f0c022 also dropped most values through a clock-ordering bug) or broadcast the not-available/error sentinel; no ingest_unmapped row; (b) the key ARRIVED UNUSABLE (not a number, or outside the plausibility bounds) -- an ingest_unmapped kind=field row names it. Counter/health columns carry their own NULL meaning in their comments.';
 COMMENT ON COLUMN plc4_engine.rpm IS
     'Engine speed, rpm. SPN 190 from PGN 61444 bytes 4-5, 0.125 rpm/bit, offset 0.';
 COMMENT ON COLUMN plc4_engine.load_pct IS
@@ -57,11 +77,27 @@ COMMENT ON COLUMN plc4_engine.batt_v IS
 COMMENT ON COLUMN plc4_engine.keysw_v IS
     'Keyswitch battery potential, volts. SPN 158 from PGN 65271 bytes 7-8, 0.05 V/bit, offset 0. ON THE 5055E THIS IS THE REAL BATTERY VOLTAGE and the one to plot: available in all 1206 corpus frames, 12.4 V key-on, 14.2 V charging, dipping to 7.75 V on crank.';
 COMMENT ON COLUMN plc4_engine.hours IS
-    'Engine total hours of operation. SPN 247 from PGN 65253 bytes 1-4, 0.05 h/bit, offset 0. Broadcast unprompted on this model - it appears in 39 of 44 Cal Poly captures and advances across sessions (138.15 h to 156.35 h), which also confirms the scaling. No PGN request is transmitted.';
+    'Engine total hours of operation. SPN 247 from PGN 65253 bytes 1-4, 0.05 h/bit, offset 0. NOT broadcast on this tractor: every 18FEE500 frame in the 2026-09-22 census answers a PGN request from another ECU (SA 0x06 to global, SA 0x17 to the engine) -- a pair every 30 s once running. The board never transmits a request; it reads those answers, so NULL can also mean nobody asked recently. Advancing values across the Cal Poly sessions (138.15 h to 156.35 h) confirm the scaling.';
 COMMENT ON COLUMN plc4_engine.frames IS
-    'Lifetime count of CAN frames the board has seen since boot. A flat frames count across rows means the bus went quiet or the transceiver dropped -- it is the liveness signal for the CAN side.';
+    'CAN frames the board has decoded or counted SINCE BOOT. uint32 on the board: resets to 0 on every reboot and wraps after about 107 days at the ~465 fps measured on this tractor (2026-09-22 census). NOT a lifetime count. A counter that DECREASES between rows is a reboot (or a wrap), and v_plc4_can_health nulls the delta there. A flat count across live rows means the bus went quiet or the transceiver dropped. NULL: the key arrived unusable and was routed to ingest_unmapped (every image, 19f0c022 included, sends it).';
 COMMENT ON COLUMN plc4_engine.unknown_frames IS
-    'Lifetime count of frames whose PGN the board does not decode. Expected to be large; it is the denominator for "are we missing something new".';
+    'Payload key "unknown": frames whose PGN the board does not decode, SINCE BOOT, same uint32 reset/wrap behaviour as frames. Expected to be large with the filter off; d_unknown/d_frames is the evidence for the hardware filter trial. NULL: arrived unusable, routed to ingest_unmapped.';
+COMMENT ON COLUMN plc4_engine.ring_full IS
+    'Drains (200 Hz timer ISR passes) that found the 32-slot receive ring FULL since boot -- each one means frames were lost. uint32, resets on reboot. Field 19f0c022: 0 throughout. NULL: arrived unusable, routed to ingest_unmapped (sent by every image).';
+COMMENT ON COLUMN plc4_engine.ring_high IS
+    'High-water mark of the receive ring since boot, 0-32. A running maximum, so it never falls except on reboot. Field 19f0c022: 9 of 32 throughout. NULL: arrived unusable, routed to ingest_unmapped (sent by every image).';
+COMMENT ON COLUMN plc4_engine.can_err IS
+    'Times the CAN driver flagged an error event since boot (CAN.isError), uint32, resets on reboot. NULL: arrived unusable, routed to ingest_unmapped (sent by every image).';
+COMMENT ON COLUMN plc4_engine.can_up IS
+    'The LAST CAN.begin() succeeded (at setup, or at the last canf console toggle). It does NOT mean the bus is live -- a board with no transceiver wired reports true with frames at 0. Liveness is d_frames in v_plc4_can_health. NULL: arrived unusable (not JSON true/false), routed to ingest_unmapped.';
+COMMENT ON COLUMN plc4_engine.filt IS
+    'Hardware acceptance filter in force (the canf console verb toggles it). false on every row until someone runs canf on the USB console. NULL: arrived unusable (not JSON true/false), routed to ingest_unmapped.';
+COMMENT ON COLUMN plc4_engine.drains IS
+    'Times the 200 Hz drain ISR has RUN since boot, frames or not. uint32, resets on reboot. Expected ~200/s; with frames flat it separates "drain never runs" from "nothing at the pin". NULL has two causes, told apart by ingest_unmapped: (a) the image PREDATES THE KEY -- anything before commit e82bcb7, including 19f0c022 which is on the tractor now, so every 19f0c022 row is NULL here BY DESIGN; (b) the key arrived unusable and an ingest_unmapped kind=field row names it.';
+COMMENT ON COLUMN plc4_engine.can_last IS
+    'Last CAN driver error event code (r_can_api.h can_event_t): 0 none since boot, 2 error warning, 4 error passive, 8 bus off, 16 bus-off recovery, 32 mailbox overrun, 128 bus lock, 256 channel error, 512 tx aborted, 4096 global error, 8192 tx FIFO empty. Signed int on the board. NULL: (a) image PREDATES THE KEY (before e82bcb7; every 19f0c022 row), or (b) arrived unusable, routed to ingest_unmapped.';
+COMMENT ON COLUMN plc4_engine.board_id IS
+    'Payload key "id": the board''s MQTT client id. Stored so a strict unmapped-key sweep does not flag it on every row. NULL: the key was absent, or arrived unusable and was routed to ingest_unmapped.';
 COMMENT ON COLUMN plc4_engine.recv_ts IS
     'When the consumer received the payload. THE PLOT AXIS. The board has no clock on the CAN path, so there is no sample_ts here at all.';
 
@@ -89,19 +125,21 @@ CREATE TABLE IF NOT EXISTS plc4_dtc_snapshot (
     rsl     smallint,
     awl     smallint,
     pl      smallint,
+    trunc   boolean,
     recv_ts timestamptz NOT NULL DEFAULT now(),
     ts_kind text        NOT NULL DEFAULT 'unknown'
 );
 
 COMMENT ON TABLE  plc4_dtc_snapshot IS
-    'One row per DM1 payload received on plc4/jd5055e/dtc/<sa>. n = 0 is a real, meaningful row: that ECU reporting no active faults.';
+    'One row per DM1 payload received on plc4/jd5055e/dtc/<sa>. n = 0 is a real, meaningful row: that ECU reporting no active faults. ts_kind is ''retained'' when the broker delivered it as a retained message (a redelivery on subscribe/reconnect, NOT a new DM1 from the ECU) and ''live'' otherwise -- so a reconnect does not look like a lamp transition.';
 COMMENT ON COLUMN plc4_dtc_snapshot.sa IS
     'J1939 source address of the ECU that sent this DM1. Observed on the 5055E: 3, 6, 23, 71. Engine data (EEC1 and the rest) comes from SA 0, which does NOT publish DM1.';
 COMMENT ON COLUMN plc4_dtc_snapshot.mil IS
-    'Malfunction indicator lamp, SPN 1213. J1939 two-bit lamp state: 0 off, 1 on, 2 reserved, 3 not available. 3 is NOT "on".';
+    'Malfunction indicator lamp, SPN 1213. J1939 two-bit lamp state: 0 off, 1 on, 2 reserved, 3 not available. 3 is NOT "on". NULL: the key was missing or arrived outside 0-3; either way an ingest_unmapped kind=field row names it (every image sends all four lamps).';
 COMMENT ON COLUMN plc4_dtc_snapshot.rsl IS 'Red stop lamp, SPN 623. Same two-bit encoding as mil.';
 COMMENT ON COLUMN plc4_dtc_snapshot.awl IS 'Amber warning lamp, SPN 624. Same two-bit encoding as mil.';
 COMMENT ON COLUMN plc4_dtc_snapshot.pl  IS 'Protect lamp, SPN 987. Same two-bit encoding as mil.';
+COMMENT ON COLUMN plc4_dtc_snapshot.trunc IS 'true when the ECU sent more real codes than the board keeps (12) or than fit its buffer, so n and the code list are a PREFIX of what the ECU reported. NULL = the payload predates the key (images 19f0c022..705bf3c9); an unusable value goes to ingest_unmapped.';
 
 CREATE TABLE IF NOT EXISTS plc4_dtc_code (
     id          bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
@@ -115,9 +153,9 @@ CREATE TABLE IF NOT EXISTS plc4_dtc_code (
 COMMENT ON TABLE  plc4_dtc_code IS
     'The individual active DTCs in one DM1 snapshot. SPN identifies the parameter at fault, FMI how it failed, OC how many times it has occurred.';
 COMMENT ON COLUMN plc4_dtc_code.spn IS
-    '19-bit suspect parameter number, reassembled from DM1 bytes 3-5 under conversion method 0. If the board ever reports CM=1 the reassembly differs and these values are wrong -- the firmware flags that case rather than guessing.';
+    '19-bit suspect parameter number, reassembled from DM1 bytes 3-5 under conversion method 0. The firmware does NOT check the CM bit (DM1 byte 6 bit 7): every SPN is reassembled as CM=0, the only layout J1939-73 has used since 1996. A CM=1 ECU would produce wrong SPNs here with nothing on the wire to say so.';
 COMMENT ON COLUMN plc4_dtc_code.fmi IS 'Failure mode identifier, 0-31. DM1 byte 5 low five bits.';
-COMMENT ON COLUMN plc4_dtc_code.oc  IS 'Occurrence count, 0-127. DM1 byte 6 low seven bits.';
+COMMENT ON COLUMN plc4_dtc_code.oc  IS 'Occurrence count, 0-127. DM1 byte 6 low seven bits. NULL: the key was missing or outside 0-127, and an ingest_unmapped kind=field row names it. A code with an unusable spn or fmi is not stored here at all -- it goes to ingest_unmapped whole.';
 
 CREATE INDEX IF NOT EXISTS idx_plc4_dtc_code_snap ON plc4_dtc_code (snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_plc4_dtc_snapshot_recv ON plc4_dtc_snapshot (recv_ts DESC);
@@ -139,11 +177,277 @@ SELECT s.sa,
        s.n,
        s.mil, s.rsl, s.awl, s.pl,
        c.spn, c.fmi, c.oc,
-       EXTRACT(EPOCH FROM (now() - s.recv_ts))::int AS age_s
+       EXTRACT(EPOCH FROM (now() - s.recv_ts))::int AS age_s,
+       s.ts_kind
   FROM latest s
   LEFT JOIN plc4_dtc_code c ON c.snapshot_id = s.id;
 
 COMMENT ON VIEW v_plc4_dtc_active IS
     'The most recent DM1 snapshot per source address, expanded one row per code. LEFT JOIN on purpose: a no-fault snapshot still yields one row, with NULL spn, so the dashboard can tell "no faults" from "no data". A lit lamp with a NULL spn is a real state on this machine - the 5055E raises the protect lamp while sending a not-available DTC record.';
+COMMENT ON COLUMN v_plc4_dtc_active.age_s IS
+    'Seconds since the consumer last RECEIVED a DM1 for this SA -- a live publish OR a retained redelivery on reconnect (see ts_kind). NOT ECU liveness: DM1 is published on change and retained, so a healthy ECU with nothing new to say ages without limit. Label it "since last DM1 publish", never "age".';
+
+-- ===========================================================================
+-- 2026-09-22: added after the first field run of image 19f0c022 on the tractor.
+--
+-- Everything below exists so that a dashboard tile and an alert rule read the
+-- SAME definition of "running", "bus quiet" and "board silent", instead of each
+-- panel re-deriving it from raw rows. Read from source, not measured on a DB
+-- holding field data: the field rows exist only as MQTT messages seen by the
+-- field laptop.
+--
+-- CUT POINTS. 400 rpm, 100 kPa oil, 0.5 L/h fuel and 13.5 V keyswitch are
+-- PLACEHOLDERS taken from values observed on this tractor (census 2026-09-22 and
+-- the 19f0c022 field messages), NOT John Deere specifications. They classify a
+-- row's state; they are never an alarm limit. Alarm limits live in
+-- plc4_alert_threshold and ship NULL.
+-- ===========================================================================
+
+CREATE INDEX IF NOT EXISTS idx_plc4_dtc_snapshot_sa_recv ON plc4_dtc_snapshot (sa, recv_ts DESC);
+-- v_plc4_engine_now's hours_last looks back for the newest non-NULL hours. Without
+-- this partial index that is a sequential scan whenever hours has been absent for
+-- a while (measured on a scratch PG16 with 100k synthetic rows and no hours).
+CREATE INDEX IF NOT EXISTS idx_plc4_engine_hours_recv ON plc4_engine (recv_ts DESC) WHERE hours IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- Alarm limits, shared by panels and alert rules. Seeded NULL ON PURPOSE.
+-- A NULL limit FAILS CLOSED: every comparison against it yields NULL, so the
+-- derived flag is NULL (unknown), no alert fires on a guessed number, and the
+-- dashboard says "limit not set". Filling a value is a data change with a
+-- source, not a migration.
+CREATE TABLE IF NOT EXISTS plc4_alert_threshold (
+    key    text PRIMARY KEY,
+    value  double precision,
+    unit   text NOT NULL,
+    source text NOT NULL,
+    note   text
+);
+
+COMMENT ON TABLE plc4_alert_threshold IS
+    'Alarm limits for PLC #4 engine alerts and panel threshold lines, one row per limit. value NULL = limit not known; every flag compared against it is NULL, so nothing alarms on a guess. source must say where a filled value came from.';
+COMMENT ON COLUMN plc4_alert_threshold.value IS
+    'The limit, in unit. NULL means NOT KNOWN (seeded that way), not "no limit" and not zero.';
+
+INSERT INTO plc4_alert_threshold (key, value, unit, source, note) VALUES
+    ('oil_kpa_low',        NULL, 'kPa',  'unknown: needs JD 5055E spec via coordinator',
+     'Low oil pressure while running_confirmed. The field saw 392 kPa running and 0 kPa on crank; neither is a limit.'),
+    ('coolant_c_high',     NULL, 'degC', 'unknown: needs JD 5055E spec via coordinator',
+     'High coolant temperature. Replaces the 100/110 C lines the first dashboard hardcoded without a source.'),
+    ('keysw_v_charge_min', NULL, 'V',    'unknown: needs JD 5055E spec via coordinator',
+     'Keyswitch voltage below which a confirmed-running engine is NOT charging. Field: 12.40 V key-on, 14.25 V running.')
+ON CONFLICT (key) DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- One row per engine row, with its predecessor.
+--
+-- LEFT JOIN LATERAL (... ORDER BY recv_ts DESC LIMIT 1), NOT LAG(): a window
+-- function makes the planner evaluate the whole table before a recv_ts predicate
+-- applies. The lateral form lets `WHERE recv_ts > now() - interval '5 min'` use
+-- idx_plc4_engine_recv, which is what an alert rule evaluated every minute needs.
+--
+-- REBOOT is either a counter going DOWN (the board's counters are since-boot
+-- uint32s) or a publish gap over 50 s (more than three missed 15 s publishes, so
+-- the interval cannot be read as one rate). On a reboot row, and on the first row
+-- ever, every d_* delta and every rate is NULL -- never a negative or a huge rate.
+CREATE OR REPLACE VIEW v_plc4_can_health AS
+SELECT b.*,
+       CASE WHEN b.gap_s > 0 THEN b.d_frames / b.gap_s END             AS fps,
+       b.d_frames * 200.0 / NULLIF(b.d_drains, 0)                        AS fps_board,
+       CASE WHEN b.gap_s > 0 THEN b.d_drains / b.gap_s END             AS drains_ps,
+       b.d_unknown::double precision / NULLIF(b.d_frames, 0)            AS unknown_frac,
+       (b.running_evidence AND b.prev_running_evidence AND NOT b.reboot) AS running_confirmed,
+       CASE
+           WHEN b.can_up IS FALSE     THEN 1   -- CAN DOWN
+           WHEN b.d_frames IS NULL    THEN 2   -- CAN ?  (first row, reboot, or gap: no rate)
+           WHEN b.d_frames = 0        THEN 3   -- BUS QUIET (key off OR CAN fault; BRIEF Q8)
+           WHEN b.rpm = 0             THEN 4   -- KEY ON, ENGINE OFF
+           WHEN b.rpm < 400           THEN 5   -- CRANKING
+           WHEN b.rpm >= 400          THEN 6   -- RUNNING
+           WHEN b.running_evidence    THEN 7   -- RUNNING, rpm not reported
+           ELSE                            8   -- KEY ON, rpm not reported
+       END                                                              AS state_code
+  FROM (
+    SELECT a.*,
+           (a.counter_reset OR a.publish_gap)                             AS reboot,
+           CASE WHEN a.prev_ts IS NULL OR a.counter_reset OR a.publish_gap THEN NULL
+                ELSE a.frames - a.p_frames END                            AS d_frames,
+           CASE WHEN a.prev_ts IS NULL OR a.counter_reset OR a.publish_gap THEN NULL
+                ELSE a.unknown_frames - a.p_unknown END                   AS d_unknown,
+           CASE WHEN a.prev_ts IS NULL OR a.counter_reset OR a.publish_gap THEN NULL
+                ELSE a.ring_full - a.p_ring_full END                      AS d_ring_full,
+           CASE WHEN a.prev_ts IS NULL OR a.counter_reset OR a.publish_gap THEN NULL
+                ELSE a.can_err - a.p_can_err END                          AS d_can_err,
+           CASE WHEN a.prev_ts IS NULL OR a.counter_reset OR a.publish_gap THEN NULL
+                ELSE a.drains - a.p_drains END                            AS d_drains
+      FROM (
+        SELECT e.id, e.recv_ts, e.board_id, e.can_up, e.filt,
+               e.frames, e.unknown_frames, e.ring_full, e.ring_high, e.can_err,
+               e.drains, e.can_last,
+               e.rpm, e.load_pct, e.torque_pct, e.coolant_c, e.oil_temp_c,
+               e.oil_kpa, e.fuel_lph, e.batt_v, e.keysw_v, e.hours,
+               p.recv_ts        AS prev_ts,
+               p.filt           AS prev_filt,
+               p.frames         AS p_frames,
+               p.unknown_frames AS p_unknown,
+               p.ring_full      AS p_ring_full,
+               p.can_err        AS p_can_err,
+               p.drains         AS p_drains,
+               EXTRACT(EPOCH FROM (e.recv_ts - p.recv_ts))::double precision AS gap_s,
+               (   COALESCE(e.frames         < p.frames,         false)
+                OR COALESCE(e.unknown_frames < p.unknown_frames, false)
+                OR COALESCE(e.ring_full      < p.ring_full,      false)
+                OR COALESCE(e.ring_high      < p.ring_high,      false)
+                OR COALESCE(e.can_err        < p.can_err,        false)
+                OR COALESCE(e.drains         < p.drains,         false)) AS counter_reset,
+               COALESCE(e.recv_ts - p.recv_ts > interval '50 seconds', false) AS publish_gap,
+               (   COALESCE(e.rpm >= 400, false)
+                OR (e.rpm IS NULL AND COALESCE(e.oil_kpa >= 100 OR e.fuel_lph >= 0.5
+                                               OR e.keysw_v >= 13.5, false)))   AS running_evidence,
+               (   COALESCE(p.rpm >= 400, false)
+                OR (p.rpm IS NULL AND COALESCE(p.oil_kpa >= 100 OR p.fuel_lph >= 0.5
+                                               OR p.keysw_v >= 13.5, false)))   AS prev_running_evidence
+          FROM plc4_engine e
+          LEFT JOIN LATERAL (
+                SELECT q.recv_ts, q.filt, q.frames, q.unknown_frames, q.ring_full,
+                       q.ring_high, q.can_err, q.drains,
+                       q.rpm, q.oil_kpa, q.fuel_lph, q.keysw_v
+                  FROM plc4_engine q
+                 WHERE q.recv_ts < e.recv_ts
+                 ORDER BY q.recv_ts DESC
+                 LIMIT 1) p ON true
+      ) a
+  ) b;
+
+COMMENT ON VIEW v_plc4_can_health IS
+    'One row per plc4_engine row joined to its predecessor. reboot = a counter decreased (counter_reset) or the gap exceeded 50 s (publish_gap); on those rows and the first row every d_* and rate is NULL. fps = d_frames/gap_s (consumer wall clock); fps_board = d_frames*200/d_drains (the board''s own 200 Hz drain clock, NULL on 19f0c022 rows which carry no drains); drains_ps expected ~200. running_confirmed = this row and the previous one both show running evidence and no reboot between them. state_code 1..8 as in v_plc4_engine_now (0 BOARD SILENT is only decidable against now()). Cut points 400 rpm / 100 kPa / 0.5 L/h / 13.5 V are placeholders from observed values, not JD specs.';
+COMMENT ON COLUMN v_plc4_can_health.can_up IS
+    'The last CAN.begin() succeeded. Not bus liveness -- d_frames is.';
+COMMENT ON COLUMN v_plc4_can_health.ring_high IS
+    'Receive-ring high-water mark since boot, out of 32. A running maximum, not a per-interval figure.';
+
+-- ---------------------------------------------------------------------------
+-- The present, as exactly ONE row -- even when plc4_engine is empty, so a stat
+-- tile or alert rule gets a row saying BOARD SILENT rather than "no data".
+--
+-- Values are the LATEST ROW'S, never carried forward: a parameter the latest row
+-- omits is NULL here, not the last value some earlier row had. The one exception
+-- is hours_last/hours_ts, because hours is a slowly advancing odometer and the
+-- tile says "as of". Every derived flag is NULL while board_silent, so a stale
+-- row cannot keep an alert firing.
+CREATE OR REPLACE VIEW v_plc4_engine_now AS
+SELECT c.id IS NOT NULL                                             AS has_row,
+       c.recv_ts,
+       c.board_id,
+       EXTRACT(EPOCH FROM (now() - c.recv_ts))::double precision    AS age_s,
+       s.silent                                                     AS board_silent,
+       c.rpm, c.load_pct, c.torque_pct, c.coolant_c, c.oil_temp_c,
+       c.oil_kpa, c.fuel_lph, c.batt_v, c.keysw_v, c.hours,
+       h.hours                                                      AS hours_last,
+       h.recv_ts                                                    AS hours_ts,
+       c.can_up, c.filt, c.frames, c.ring_high, c.can_last,
+       c.fps, c.fps_board, c.drains_ps, c.unknown_frac,
+       c.d_frames, c.d_ring_full, c.d_can_err, c.reboot,
+       c.running_evidence,
+       c.running_confirmed,
+       t.oil_kpa_low, t.coolant_c_high, t.keysw_v_charge_min,
+       CASE WHEN NOT s.silent THEN c.running_confirmed AND c.oil_kpa < t.oil_kpa_low END
+                                                                    AS oil_low_running,
+       CASE WHEN NOT s.silent THEN c.running_confirmed AND c.keysw_v < t.keysw_v_charge_min END
+                                                                    AS not_charging_running,
+       CASE WHEN NOT s.silent THEN c.coolant_c >= t.coolant_c_high END
+                                                                    AS coolant_high,
+       CASE WHEN NOT s.silent THEN c.drains_ps < 100 END            AS drain_stalled,
+       CASE WHEN NOT s.silent THEN c.d_ring_full > 0 END            AS lossy,
+       -- HELD NULL until BRIEF Q8 (switched or maintained board power) is answered.
+       -- Until then a quiet bus cannot be told from a key-off tractor, and the
+       -- #26 "bus quiet with key on" alert is written against this column so that
+       -- it yields no rows instead of paging at every shutdown.
+       NULL::boolean                                                AS key_on_evidence,
+       s.code                                                       AS state_code,
+       CASE s.code
+           WHEN 0 THEN 'BOARD SILENT'
+           WHEN 1 THEN 'CAN DOWN'
+           WHEN 2 THEN 'CAN ?'
+           WHEN 3 THEN 'BUS QUIET'
+           WHEN 4 THEN 'KEY ON, ENGINE OFF'
+           WHEN 5 THEN 'CRANKING'
+           WHEN 6 THEN 'RUNNING'
+           WHEN 7 THEN 'RUNNING, rpm not reported'
+           WHEN 8 THEN 'KEY ON, rpm not reported'
+       END
+       || CASE WHEN NOT s.silent AND (c.running_confirmed AND c.oil_kpa < t.oil_kpa_low) IS TRUE
+               THEN ' - LOW OIL' ELSE '' END                        AS state_text
+  FROM (SELECT 1) AS one
+  LEFT JOIN LATERAL (
+        SELECT * FROM v_plc4_can_health ORDER BY recv_ts DESC LIMIT 1) c ON true
+  LEFT JOIN LATERAL (
+        SELECT hours, recv_ts FROM plc4_engine
+         WHERE hours IS NOT NULL ORDER BY recv_ts DESC LIMIT 1) h ON true
+  CROSS JOIN (
+        SELECT max(value) FILTER (WHERE key = 'oil_kpa_low')        AS oil_kpa_low,
+               max(value) FILTER (WHERE key = 'coolant_c_high')     AS coolant_c_high,
+               max(value) FILTER (WHERE key = 'keysw_v_charge_min') AS keysw_v_charge_min
+          FROM plc4_alert_threshold) t
+  CROSS JOIN LATERAL (
+        SELECT (c.id IS NULL OR now() - c.recv_ts > interval '50 seconds') AS silent) s0
+  CROSS JOIN LATERAL (
+        SELECT s0.silent,
+               CASE WHEN s0.silent THEN 0 ELSE c.state_code END AS code) s;
+
+COMMENT ON VIEW v_plc4_engine_now IS
+    'Exactly one row, even with plc4_engine empty. Latest-row values, never carried forward, except hours_last/hours_ts. state_code: 0 BOARD SILENT (no row, or newest row older than 50 s), 1 CAN DOWN (can_up false), 2 CAN ? (no rate yet after first row/reboot/gap), 3 BUS QUIET (d_frames 0: key off or CAN fault, indistinguishable until BRIEF Q8), 4 KEY ON ENGINE OFF (rpm 0), 5 CRANKING (0<rpm<400), 6 RUNNING (rpm>=400), 7 RUNNING rpm not reported, 8 KEY ON rpm not reported. Flags are NULL while board_silent and NULL while their plc4_alert_threshold limit is NULL. Every stat tile and alert rule reads this view.';
+COMMENT ON COLUMN v_plc4_engine_now.running_confirmed IS
+    'This row AND the previous row show running evidence (rpm>=400, or rpm not reported with oil>=100 kPa, fuel>=0.5 L/h or keysw>=13.5 V), with no reboot between. Masks the crank row (field 19:41:20: 161 rpm, 0 kPa, 0 L/h). Placeholder cut points, not JD specs.';
+COMMENT ON COLUMN v_plc4_engine_now.key_on_evidence IS
+    'Always NULL until BRIEF Q8 (switched or maintained board power) is answered. The #26 bus-quiet alert filters on it and so yields no rows until then.';
+
+-- ---------------------------------------------------------------------------
+-- DM1 now: one row per ECU. The four source addresses seen on the 5055E are
+-- always listed, received or not, so "never sent DM1" is a row and not an
+-- absence; any other SA that does send DM1 is listed too (FULL JOIN).
+--
+-- *_on is TRUE only for lamp value exactly 1. 2 (reserved) and 3 (not available)
+-- are never lit. lamp_lit_no_code: a lamp is 1 while n = 0 -- the ECU is asking
+-- for attention without naming a code; it is NOT "clear".
+CREATE OR REPLACE VIEW v_plc4_dm1_now AS
+SELECT COALESCE(x.sa, l.sa)                                   AS sa,
+       x.sa IS NOT NULL                                       AS expected,
+       l.id IS NOT NULL                                       AS received,
+       l.n, l.mil, l.rsl, l.awl, l.pl,
+       l.recv_ts,
+       l.ts_kind,
+       EXTRACT(EPOCH FROM (now() - l.recv_ts))::int           AS since_publish_s,
+       COALESCE(l.rsl = 1, false)                             AS rsl_on,
+       COALESCE(l.awl = 1, false)                             AS awl_on,
+       COALESCE(l.pl  = 1, false)                             AS pl_on,
+       COALESCE(l.mil = 1, false)                             AS mil_on,
+       COALESCE(l.n = 0 AND (l.mil = 1 OR l.rsl = 1 OR l.awl = 1 OR l.pl = 1), false)
+                                                              AS lamp_lit_no_code
+  FROM (VALUES (3::smallint), (6::smallint), (23::smallint), (71::smallint)) AS x(sa)
+  FULL JOIN (
+        SELECT DISTINCT ON (sa) *
+          FROM plc4_dtc_snapshot
+         ORDER BY sa, recv_ts DESC) l ON l.sa = x.sa;
+
+COMMENT ON VIEW v_plc4_dm1_now IS
+    'One row per ECU: the expected DM1 senders (SA 3, 6, 23, 71) always, plus any other SA that has sent DM1. received false = that ECU has never published DM1 to this consumer. *_on true only for lamp value 1. since_publish_s is time since the consumer last received this SA''s DM1 (live or retained redelivery), not ECU liveness. One row per ECU so a red-stop alert produces one instance per ECU.';
+
+-- ---------------------------------------------------------------------------
+-- ALERT QUERIES for issue #26 -- NOT provisioned by this migration; they are the
+-- WHERE clauses a Grafana alert rule would carry, recorded here so the rule and
+-- the dashboard read one definition.
+--
+--   Red stop, one instance per ECU (no age condition: in the census DM1 is seen
+--   around power-up only, and it is retained):
+--     SELECT sa, rsl_on FROM v_plc4_dm1_now;                       -- fire on rsl_on
+--   Board silent:        SELECT board_silent   FROM v_plc4_engine_now;
+--   CAN down:            SELECT (state_code = 1) AS can_down FROM v_plc4_engine_now;
+--   Drain stalled:       SELECT drain_stalled  FROM v_plc4_engine_now;  -- NULL on 19f0c022 rows
+--   Lossy (ring full):   SELECT lossy          FROM v_plc4_engine_now;
+--   Low oil running:     SELECT oil_low_running FROM v_plc4_engine_now; -- NULL until limit set
+--   Bus quiet, key on:   SELECT 1 FROM v_plc4_engine_now
+--                         WHERE state_code = 3 AND key_on_evidence;   -- no rows until BRIEF Q8
+--   CAN liveness threshold is fps < 1, never a fraction of the ~460 fps seen here:
+--   the filter trial is expected to cut fps to ~140 (host replay prediction).
 
 COMMIT;

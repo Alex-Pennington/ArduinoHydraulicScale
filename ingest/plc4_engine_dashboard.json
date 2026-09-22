@@ -1,218 +1,2629 @@
 {
   "uid": "plc4-tractor-engine",
   "title": "PLC #4 — Tractor Engine (J1939)",
-  "description": "Engine telemetry decoded from the JD 5055E CAN bus. PROPOSED, not deployed. Every panel reads plc4_engine / plc4_dtc_* from migration 067. A gap in a series means the engine did not broadcast that PGN — not that the value was zero.",
-  "tags": ["plc4", "tractor", "j1939", "proposed"],
+  "description": "Engine telemetry decoded from the JD 5055E CAN bus. PROPOSED, not deployed. Reads plc4_engine, plc4_dtc_* and the views v_plc4_engine_now, v_plc4_can_health, v_plc4_dm1_now from migration 067 (070 on the consumer side). Every tile tells three things apart: NO DATA (board silent), 'not reported' (the latest message omitted the value) and a real 0. Revised 2026-09-22 after the first field run of image 19f0c022.",
+  "tags": [
+    "plc4",
+    "tractor",
+    "j1939",
+    "proposed"
+  ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
-  "time": { "from": "now-6h", "to": "now" },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "name": "Reboots, publish gaps, filter toggles",
+        "datasource": {
+          "type": "postgres",
+          "uid": "plc1-postgres"
+        },
+        "enable": true,
+        "iconColor": "orange",
+        "target": {
+          "refId": "Anno",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT recv_ts AS time, CASE WHEN counter_reset THEN 'board counters reset (reboot)' WHEN publish_gap THEN 'publish gap ' || round(gap_s) || ' s' ELSE 'hardware filter ' || CASE WHEN filt THEN 'ON' ELSE 'OFF' END END AS text, 'plc4' AS tags FROM v_plc4_can_health WHERE $__timeFilter(recv_ts) AND (reboot OR (prev_ts IS NOT NULL AND filt IS DISTINCT FROM prev_filt)) ORDER BY recv_ts"
+        }
+      }
+    ]
+  },
   "panels": [
     {
       "id": 1,
-      "type": "timeseries",
-      "title": "Engine speed",
-      "description": "SPN 190, PGN 61444. Resolution 0.125 rpm. Absent while the key is off.",
-      "datasource": { "type": "postgres", "uid": "plc1-postgres" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "type": "stat",
+      "title": "Tractor state",
+      "description": "From v_plc4_engine_now.state_code. 0 BOARD SILENT: no engine message for over 50 s (or never). 1 CAN DOWN: the last CAN.begin() failed. 2 CAN ?: first row after a reboot or publish gap, no rate yet. 3 BUS QUIET: no frames in the last interval -- key off OR a CAN fault; the two cannot be told apart until BRIEF Q8 (switched or maintained board power) is answered. 4 KEY ON, ENGINE OFF: rpm reported 0. 5 CRANKING: 0 < rpm < 400. 6 RUNNING: rpm >= 400. 7 RUNNING, rpm not reported: no rpm, but oil >= 100 kPa, fuel >= 0.5 L/h or keyswitch >= 13.5 V (image 19f0c022 reads like this). 8 KEY ON, rpm not reported. ' - LOW OIL' is appended when running is confirmed on two rows and oil is under plc4_alert_threshold.oil_kpa_low (which ships NULL, so it cannot appear until that limit is set). Cut points 400 rpm / 100 kPa / 0.5 L/h / 13.5 V are PLACEHOLDERS taken from values observed on this tractor, not John Deere specifications.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "fieldConfig": {
         "defaults": {
-          "unit": "rotrpm",
-          "custom": { "drawStyle": "line", "lineWidth": 1, "spanNulls": false, "showPoints": "never" }
+          "mappings": [],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "noValue": "never"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "state"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": ".*LOW OIL$",
+                      "result": {
+                        "color": "red",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "BOARD SILENT": {
+                        "text": "BOARD SILENT",
+                        "color": "dark-red",
+                        "index": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "CAN DOWN": {
+                        "text": "CAN DOWN",
+                        "color": "red",
+                        "index": 2
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "CAN ?": {
+                        "text": "CAN ?",
+                        "color": "text",
+                        "index": 3
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "BUS QUIET": {
+                        "text": "BUS QUIET",
+                        "color": "blue",
+                        "index": 4
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "KEY ON, ENGINE OFF": {
+                        "text": "KEY ON, ENGINE OFF",
+                        "color": "yellow",
+                        "index": 5
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "CRANKING": {
+                        "text": "CRANKING",
+                        "color": "orange",
+                        "index": 6
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "RUNNING": {
+                        "text": "RUNNING",
+                        "color": "green",
+                        "index": 7
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "RUNNING, rpm not reported": {
+                        "text": "RUNNING, rpm not reported",
+                        "color": "semi-dark-green",
+                        "index": 8
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "KEY ON, rpm not reported": {
+                        "text": "KEY ON, rpm not reported",
+                        "color": "semi-dark-yellow",
+                        "index": 9
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "last heard (s ago)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": []
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
       },
       "targets": [
         {
           "refId": "A",
-          "format": "time_series",
+          "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT recv_ts AS time, rpm FROM plc4_engine WHERE $__timeFilter(recv_ts) AND rpm IS NOT NULL ORDER BY recv_ts"
+          "rawSql": "SELECT state_text AS \"state\", CASE WHEN has_row THEN round(age_s)::int END AS \"last heard (s ago)\" FROM v_plc4_engine_now"
         }
-      ]
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": true,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/"
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "showPercentChange": false
+      }
     },
     {
       "id": 2,
-      "type": "timeseries",
-      "title": "Coolant and oil temperature",
-      "description": "SPN 110 (coolant, PGN 65262 byte 1) and SPN 175 (oil, bytes 3-4).",
-      "datasource": { "type": "postgres", "uid": "plc1-postgres" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "type": "stat",
+      "title": "Faults",
+      "description": "From v_plc4_dm1_now, one row per ECU (SA 3, 6, 23, 71 always listed). Priority: RED STOP > PROTECT > AMBER > MIL > N CODES > CLEAR - k ECUs > NO DM1 RECEIVED. ', CODE WITHHELD' is appended when a lamp is 1 while that ECU reports n = 0 -- that is NOT clear. Lamp values 2 (reserved) and 3 (not available) never count as lit. 'as of' is the newest DM1 the consumer received: DM1 is sent on change and retained, so an old time is normal and is not a fault.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 4
+      },
       "fieldConfig": {
         "defaults": {
-          "unit": "celsius",
-          "custom": { "drawStyle": "line", "lineWidth": 1, "spanNulls": false, "showPoints": "never" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 100 },
-              { "color": "red", "value": 110 }
+          "mappings": [],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "noValue": "never"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "faults"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^RED STOP.*",
+                      "result": {
+                        "color": "red",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^PROTECT.*",
+                      "result": {
+                        "color": "orange",
+                        "index": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^AMBER.*",
+                      "result": {
+                        "color": "orange",
+                        "index": 2
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^MIL.*",
+                      "result": {
+                        "color": "yellow",
+                        "index": 3
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": ".*CODE WITHHELD$",
+                      "result": {
+                        "color": "orange",
+                        "index": 4
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": ".*CODES$",
+                      "result": {
+                        "color": "orange",
+                        "index": 5
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^CLEAR.*",
+                      "result": {
+                        "color": "green",
+                        "index": 6
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "NO DM1 RECEIVED": {
+                        "text": "NO DM1 RECEIVED",
+                        "color": "text",
+                        "index": 7
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "as of"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
             ]
           }
-        },
-        "overrides": []
+        ]
       },
       "targets": [
         {
           "refId": "A",
-          "format": "time_series",
+          "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT recv_ts AS time, coolant_c AS \"coolant\", oil_temp_c AS \"oil\" FROM plc4_engine WHERE $__timeFilter(recv_ts) AND (coolant_c IS NOT NULL OR oil_temp_c IS NOT NULL) ORDER BY recv_ts"
+          "rawSql": "SELECT CASE WHEN bool_or(rsl_on) THEN 'RED STOP' WHEN bool_or(pl_on) THEN 'PROTECT' WHEN bool_or(awl_on) THEN 'AMBER' WHEN bool_or(mil_on) THEN 'MIL' WHEN COALESCE(sum(n), 0) > 0 THEN sum(n) || ' CODES' WHEN bool_or(received) THEN 'CLEAR - ' || count(*) FILTER (WHERE received) || ' ECUs' ELSE 'NO DM1 RECEIVED' END || CASE WHEN bool_or(lamp_lit_no_code) THEN ', CODE WITHHELD' ELSE '' END AS \"faults\", (EXTRACT(EPOCH FROM max(recv_ts)) * 1000)::bigint AS \"as of\" FROM v_plc4_dm1_now"
         }
-      ]
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": true,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/"
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "showPercentChange": false
+      }
     },
     {
       "id": 3,
-      "type": "timeseries",
-      "title": "Oil pressure",
-      "description": "SPN 100, PGN 65263 byte 4. Wire resolution is 4 kPa (0.58 psi) — the trace is genuinely stepped, and that is the sensor, not the plot.",
-      "datasource": { "type": "postgres", "uid": "plc1-postgres" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "kpascal",
-          "custom": { "drawStyle": "line", "lineWidth": 1, "spanNulls": false, "showPoints": "never" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "red", "value": null },
-              { "color": "green", "value": 100 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT recv_ts AS time, oil_kpa FROM plc4_engine WHERE $__timeFilter(recv_ts) AND oil_kpa IS NOT NULL ORDER BY recv_ts"
-        }
-      ]
-    },
-    {
-      "id": 4,
-      "type": "timeseries",
-      "title": "Battery potential",
-      "description": "PLOTS SPN 158 (keyswitch, PGN 65271 bytes 7-8), which is the one the 5055E actually populates — SPN 168 was not-available in all 1206 frames of the Cal Poly corpus, so the batt_v series is expected to be empty. Reference: ~12.4 V key-on, ~14.2 V charging, dipping under crank.",
-      "datasource": { "type": "postgres", "uid": "plc1-postgres" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "volt",
-          "min": 0,
-          "custom": { "drawStyle": "line", "lineWidth": 1, "spanNulls": false, "showPoints": "never" }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT recv_ts AS time, keysw_v AS \"battery (SPN 158)\", batt_v AS \"SPN 168 (expected empty)\" FROM plc4_engine WHERE $__timeFilter(recv_ts) AND (batt_v IS NOT NULL OR keysw_v IS NOT NULL) ORDER BY recv_ts"
-        }
-      ]
-    },
-    {
-      "id": 5,
       "type": "stat",
-      "title": "Engine hours",
-      "description": "SPN 247, PGN 65253. MAY READ 'No data' FOREVER: this PGN is on-request for many engines and the board does not transmit requests. An empty panel here is an open question, not a fault.",
-      "datasource": { "type": "postgres", "uid": "plc1-postgres" },
-      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 16 },
-      "fieldConfig": {
-        "defaults": { "unit": "h", "decimals": 1 },
-        "overrides": []
+      "title": "Engine speed",
+      "description": "SPN 190 (EEC1). Latest row only, never carried forward. NO DATA = no engine message in the last 50 s (see Tractor state); 'not reported' = the latest message omitted it (engine did not broadcast it, or the value arrived unusable -- ingest_unmapped says which); 0 is a real 0.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT recv_ts AS time, hours FROM plc4_engine WHERE hours IS NOT NULL ORDER BY recv_ts DESC LIMIT 1"
-        }
-      ]
-    },
-    {
-      "id": 6,
-      "type": "stat",
-      "title": "CAN liveness (frames/min)",
-      "description": "Rate of change of the board's lifetime frame counter. Zero with the key on means the transceiver, the wiring or the bus has dropped — the engine panels would simply go blank and tell you nothing.",
-      "datasource": { "type": "postgres", "uid": "plc1-postgres" },
-      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 16 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 4
+      },
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
+          "unit": "rotrpm",
           "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "red", "value": null },
-              { "color": "green", "value": 1 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT recv_ts AS time, (frames - LAG(frames) OVER (ORDER BY recv_ts))::double precision / NULLIF(EXTRACT(EPOCH FROM (recv_ts - LAG(recv_ts) OVER (ORDER BY recv_ts))) / 60.0, 0) AS \"frames/min\" FROM plc4_engine WHERE $__timeFilter(recv_ts) ORDER BY recv_ts"
-        }
-      ]
-    },
-    {
-      "id": 7,
-      "type": "table",
-      "title": "Lamps, per ECU",
-      "description": "DM1 lamp states per source address. 0 off, 1 on, 3 not available — a steady 3 means that ECU does not implement the lamp. Four ECUs publish DM1 on the 5055E and they disagree, so this is a table, not a single state.",
-      "datasource": { "type": "postgres", "uid": "plc1-postgres" },
-      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 16 },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "noValue": "NO DATA",
           "mappings": [
-            { "type": "value", "options": { "0": { "text": "off", "color": "green", "index": 0 } } },
-            { "type": "value", "options": { "1": { "text": "ON", "color": "red", "index": 1 } } },
-            { "type": "value", "options": { "2": { "text": "reserved", "color": "text", "index": 2 } } },
-            { "type": "value", "options": { "3": { "text": "n/a", "color": "text", "index": 3 } } }
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "not reported",
+                  "color": "text",
+                  "index": 99
+                }
+              }
+            }
           ]
         },
         "overrides": []
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
       "targets": [
         {
           "refId": "A",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT DISTINCT sa AS \"ECU\", mil AS \"MIL\", rsl AS \"Red stop\", awl AS \"Amber\", pl AS \"Protect\", age_s AS \"age (s)\" FROM v_plc4_dtc_active ORDER BY sa"
+          "rawSql": "SELECT rpm AS \"rpm\" FROM v_plc4_engine_now WHERE NOT board_silent"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": true,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/"
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Oil pressure",
+      "description": "SPN 100, 4 kPa per bit -- the value moves in 4 kPa steps. No colour on the raw value: the field's crank row read 0 kPa and that is normal. The low-oil judgement is the view's (running confirmed on two rows AND oil under plc4_alert_threshold.oil_kpa_low); the limit ships NULL, so the check reads 'limit not set' until a JD figure is entered. Latest row only, never carried forward. NO DATA = no engine message in the last 50 s (see Tractor state); 'not reported' = the latest message omitted it (engine did not broadcast it, or the value arrived unusable -- ingest_unmapped says which); 0 is a real 0.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "kpascal",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "noValue": "NO DATA",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "not reported",
+                  "color": "text",
+                  "index": 99
+                }
+              }
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "low-oil check"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "LOW": {
+                        "text": "LOW",
+                        "color": "red",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "HIGH": {
+                        "text": "HIGH",
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "ok": {
+                        "text": "ok",
+                        "color": "green",
+                        "index": 2
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "below limit": {
+                        "text": "below limit",
+                        "color": "green",
+                        "index": 3
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "limit not set": {
+                        "text": "limit not set",
+                        "color": "text",
+                        "index": 4
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "not running": {
+                        "text": "not running",
+                        "color": "text",
+                        "index": 5
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "charging": {
+                        "text": "charging",
+                        "color": "green",
+                        "index": 6
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "not charging": {
+                        "text": "not charging",
+                        "color": "text",
+                        "index": 7
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT oil_kpa AS \"oil\", CASE WHEN oil_kpa_low IS NULL THEN 'limit not set' WHEN oil_low_running THEN 'LOW' WHEN running_confirmed THEN 'ok' ELSE 'not running' END AS \"low-oil check\" FROM v_plc4_engine_now WHERE NOT board_silent"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": true,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/"
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Coolant",
+      "description": "SPN 110. Neutral colour below the limit. The limit is plc4_alert_threshold.coolant_c_high, which ships NULL (no JD figure yet) -- the earlier 100/110 C lines had no source and are gone. Latest row only, never carried forward. NO DATA = no engine message in the last 50 s (see Tractor state); 'not reported' = the latest message omitted it (engine did not broadcast it, or the value arrived unusable -- ingest_unmapped says which); 0 is a real 0.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "noValue": "NO DATA",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "not reported",
+                  "color": "text",
+                  "index": 99
+                }
+              }
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "vs limit"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "LOW": {
+                        "text": "LOW",
+                        "color": "red",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "HIGH": {
+                        "text": "HIGH",
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "ok": {
+                        "text": "ok",
+                        "color": "green",
+                        "index": 2
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "below limit": {
+                        "text": "below limit",
+                        "color": "green",
+                        "index": 3
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "limit not set": {
+                        "text": "limit not set",
+                        "color": "text",
+                        "index": 4
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "not running": {
+                        "text": "not running",
+                        "color": "text",
+                        "index": 5
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "charging": {
+                        "text": "charging",
+                        "color": "green",
+                        "index": 6
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "not charging": {
+                        "text": "not charging",
+                        "color": "text",
+                        "index": 7
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT coolant_c AS \"coolant\", CASE WHEN coolant_c_high IS NULL THEN 'limit not set' WHEN coolant_high THEN 'HIGH' WHEN coolant_c IS NOT NULL THEN 'below limit' END AS \"vs limit\" FROM v_plc4_engine_now WHERE NOT board_silent"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": true,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/"
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Battery",
+      "description": "Keyswitch potential, SPN 158 -- the 5055E's real battery reading. 'charging' at 13.5 V or above (placeholder from the field: 12.40 V key-on, 14.25 V running). batt_v (SPN 168) is not shown: it is FFFF in every VEP1 frame of the census. Latest row only, never carried forward. NO DATA = no engine message in the last 50 s (see Tractor state); 'not reported' = the latest message omitted it (engine did not broadcast it, or the value arrived unusable -- ingest_unmapped says which); 0 is a real 0.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "volt",
+          "decimals": 2,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "noValue": "NO DATA",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "not reported",
+                  "color": "text",
+                  "index": 99
+                }
+              }
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "LOW": {
+                        "text": "LOW",
+                        "color": "red",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "HIGH": {
+                        "text": "HIGH",
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "ok": {
+                        "text": "ok",
+                        "color": "green",
+                        "index": 2
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "below limit": {
+                        "text": "below limit",
+                        "color": "green",
+                        "index": 3
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "limit not set": {
+                        "text": "limit not set",
+                        "color": "text",
+                        "index": 4
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "not running": {
+                        "text": "not running",
+                        "color": "text",
+                        "index": 5
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "charging": {
+                        "text": "charging",
+                        "color": "green",
+                        "index": 6
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "not charging": {
+                        "text": "not charging",
+                        "color": "text",
+                        "index": 7
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT keysw_v AS \"battery\", CASE WHEN keysw_v >= 13.5 THEN 'charging' WHEN keysw_v IS NOT NULL THEN 'not charging' END AS \"status\" FROM v_plc4_engine_now WHERE NOT board_silent"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": true,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/"
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Fuel rate",
+      "description": "SPN 183, 0.05 L/h per bit. Latest row only, never carried forward. NO DATA = no engine message in the last 50 s (see Tractor state); 'not reported' = the latest message omitted it (engine did not broadcast it, or the value arrived unusable -- ingest_unmapped says which); 0 is a real 0.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: L/h",
+          "decimals": 2,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "noValue": "NO DATA",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "not reported",
+                  "color": "text",
+                  "index": 99
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT fuel_lph AS \"fuel\" FROM v_plc4_engine_now WHERE NOT board_silent"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": true,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/"
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Engine hours",
+      "description": "SPN 247. NOT broadcast on this tractor: the engine sends it only in answer to requests from other ECUs (SA 0x06, 0x17) -- a pair every 30 s once running, 1 Hz for ~5 s at power-up (census). This board never transmits, so hours are only as fresh as those requests. The ONLY carried-forward tile: the newest non-NULL hours value and when it arrived. On image 19f0c022 hours appeared in only 4 of 8 messages (clock-ordering bug plus a 5 s window); the next flashed image (after 705bf3c) uses a 90 s window.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 4,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "decimals": 2,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "noValue": "never reported",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "never reported",
+                  "color": "text",
+                  "index": 99
+                }
+              }
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "as of"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT hours_last AS \"hours\", (EXTRACT(EPOCH FROM hours_ts) * 1000)::bigint AS \"as of\" FROM v_plc4_engine_now"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": true,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/"
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "CAN link",
+      "description": "Frames per second over the last interval (v_plc4_can_health, consumer wall clock). 0 = BUS QUIET. Red below 1 fps -- never a fraction of the ~460 fps seen here, because the hardware filter is expected to cut it to ~140 fps. 'DROPPING' = the receive ring was found full in the last interval (frames lost). 'filtered' = hardware filter on. NO DATA = board silent.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 10,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 0,
+                "result": {
+                  "text": "BUS QUIET",
+                  "color": "blue",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "no rate yet",
+                  "color": "text",
+                  "index": 99
+                }
+              }
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "link"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "null",
+                      "result": {
+                        "text": "ok, unfiltered",
+                        "color": "text",
+                        "index": 99
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^DROPPING.*",
+                      "result": {
+                        "color": "red",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT fps AS \"fps\", NULLIF(concat_ws(', ', CASE WHEN d_ring_full > 0 THEN 'DROPPING' END, CASE WHEN filt THEN 'filtered' END, CASE WHEN fps IS NULL THEN 'no rate yet' END), '') AS \"link\" FROM v_plc4_engine_now WHERE NOT board_silent"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": true,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/"
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 10,
+      "type": "state-timeline",
+      "title": "State over time",
+      "description": "Same codes and colours as the Tractor state tile. Each bucket (15 s, or the panel interval if coarser) takes the newest row in the 50 s before it; a bucket with none is BOARD SILENT. LOW OIL is not drawn here. Cut points 400 rpm / 100 kPa / 0.5 L/h / 13.5 V are PLACEHOLDERS taken from values observed on this tractor, not John Deere specifications.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "fillOpacity": 80,
+            "lineWidth": 0
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "BOARD SILENT",
+                  "color": "dark-red",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "CAN DOWN",
+                  "color": "red",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "2": {
+                  "text": "CAN ?",
+                  "color": "text",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "3": {
+                  "text": "BUS QUIET",
+                  "color": "blue",
+                  "index": 3
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "4": {
+                  "text": "KEY ON, ENGINE OFF",
+                  "color": "yellow",
+                  "index": 4
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "5": {
+                  "text": "CRANKING",
+                  "color": "orange",
+                  "index": 5
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "6": {
+                  "text": "RUNNING",
+                  "color": "green",
+                  "index": 6
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "7": {
+                  "text": "RUNNING, rpm not reported",
+                  "color": "semi-dark-green",
+                  "index": 7
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "8": {
+                  "text": "KEY ON, rpm not reported",
+                  "color": "semi-dark-yellow",
+                  "index": 8
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT b.t AS time, COALESCE(h.state_code, 0) AS \"state\" FROM generate_series($__timeFrom()::timestamptz, $__timeTo()::timestamptz, make_interval(secs => greatest(15, $__interval_ms / 1000.0))) AS b(t) LEFT JOIN LATERAL (SELECT state_code FROM v_plc4_can_health WHERE recv_ts <= b.t AND recv_ts > b.t - interval '50 seconds' ORDER BY recv_ts DESC LIMIT 1) h ON true ORDER BY 1"
+        }
+      ],
+      "options": {
+        "showValue": "never",
+        "mergeValues": true,
+        "rowHeight": 0.9,
+        "alignValue": "left",
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "RPM, load, torque and fuel",
+      "description": "rpm SPN 190 (left); load SPN 92 and torque SPN 513 (percent, right); fuel SPN 183 (L/h, right). Absent values are breaks, never zeros: no IS NOT NULL filter, spanNulls off, and a gap over 50 s between messages breaks the line too. Image 19f0c022 omitted rpm on most rows (the freshness bug fixed in the next flashed image (after 705bf3c)), so expect breaks before that flash.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "spanNulls": false,
+            "insertNulls": 50000,
+            "showPoints": "auto",
+            "pointSize": 3,
+            "fillOpacity": 0
+          },
+          "unit": "rotrpm"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(load|torque) %$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fuel L/h"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "suffix: L/h"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recv_ts AS time, rpm AS \"rpm\", load_pct AS \"load %\", torque_pct AS \"torque %\", fuel_lph AS \"fuel L/h\" FROM plc4_engine WHERE $__timeFilter(recv_ts) ORDER BY recv_ts"
+        }
+      ],
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Oil pressure and coolant",
+      "description": "Oil (kPa, left): the faint line is every row; the bold line is only rows where running is confirmed on this and the previous row, which hides the crank dip (field 19:41:20: 161 rpm, 0 kPa). Coolant (C, right). Dashed limit lines come from plc4_alert_threshold and are empty while the limits are NULL, as shipped. Oil temperature (SPN 175) is hidden: ET1 bytes 3-4 are FFFF in the census, so it is expected absent. Absent values are breaks, never zeros: no IS NOT NULL filter, spanNulls off, and a gap over 50 s between messages breaks the line too.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "spanNulls": false,
+            "insertNulls": 50000,
+            "showPoints": "auto",
+            "pointSize": 3,
+            "fillOpacity": 0
+          },
+          "unit": "kpascal"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "oil (all rows)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "rgba(87, 148, 242, 0.35)"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "oil (running confirmed)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "oil low limit"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.spanNulls",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^coolant"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "coolant high limit"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.spanNulls",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "oil temp (expected absent)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": false,
+                  "tooltip": false
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT h.recv_ts AS time, h.oil_kpa AS \"oil (all rows)\", CASE WHEN h.running_confirmed THEN h.oil_kpa END AS \"oil (running confirmed)\", h.coolant_c AS \"coolant\", h.oil_temp_c AS \"oil temp (expected absent)\", t.oil_kpa_low AS \"oil low limit\", t.coolant_c_high AS \"coolant high limit\" FROM v_plc4_can_health h CROSS JOIN (SELECT max(value) FILTER (WHERE key = 'oil_kpa_low') AS oil_kpa_low, max(value) FILTER (WHERE key = 'coolant_c_high') AS coolant_c_high, max(value) FILTER (WHERE key = 'keysw_v_charge_min') AS keysw_v_charge_min FROM plc4_alert_threshold) t WHERE $__timeFilter(h.recv_ts) ORDER BY 1"
+        }
+      ],
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Battery trend",
+      "description": "Keyswitch potential, SPN 158. Bands: below 12.4 V (under the field's key-on reading), 12.4-13.5 V (key on, not charging), 13.5 V and up (charging). Band edges are placeholders from the field, not JD figures. batt_v (SPN 168) is hidden: FFFF in every census VEP1 frame. Absent values are breaks, never zeros: no IS NOT NULL filter, spanNulls off, and a gap over 50 s between messages breaks the line too.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "spanNulls": false,
+            "insertNulls": 50000,
+            "showPoints": "auto",
+            "pointSize": 3,
+            "fillOpacity": 0,
+            "thresholdsStyle": {
+              "mode": "line+area"
+            }
+          },
+          "unit": "volt",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "rgba(242, 73, 92, 0.08)",
+                "value": null
+              },
+              {
+                "color": "rgba(250, 222, 42, 0.08)",
+                "value": 12.4
+              },
+              {
+                "color": "rgba(115, 191, 105, 0.12)",
+                "value": 13.5
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "SPN 168 (expected empty)"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": true,
+                  "legend": false,
+                  "tooltip": false
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recv_ts AS time, keysw_v AS \"battery (SPN 158)\", batt_v AS \"SPN 168 (expected empty)\" FROM plc4_engine WHERE $__timeFilter(recv_ts) ORDER BY recv_ts"
+        }
+      ],
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "bargauge",
+      "title": "Signal coverage while the bus is live",
+      "description": "Of the rows whose interval saw frames (d_frames > 0), the percentage that carry each value. Target 100%. oil_temp_c and batt_v are left out because they are always absent on this tractor. THIS IS THE ACCEPTANCE CHECK AFTER FLASHING THE NEXT FLASHED IMAGE (AFTER 705BF3C): image 19f0c022 showed rpm in 0 of 8 key-on messages, hours in 4 of 8, fuel in 6 of 8. Set the time range to after the flash to judge the new image alone. load/torque at key-on engine-off: whether EEC2 is broadcast then has not been checked, so a gap there may be the tractor, not the board.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "decimals": 1,
+          "noValue": "no bus-live rows",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 50
+              },
+              {
+                "color": "green",
+                "value": 99.5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT round(100.0 * count(rpm) / NULLIF(count(*), 0), 1) AS \"rpm\", round(100.0 * count(load_pct) / NULLIF(count(*), 0), 1) AS \"load_pct\", round(100.0 * count(torque_pct) / NULLIF(count(*), 0), 1) AS \"torque_pct\", round(100.0 * count(coolant_c) / NULLIF(count(*), 0), 1) AS \"coolant_c\", round(100.0 * count(oil_kpa) / NULLIF(count(*), 0), 1) AS \"oil_kpa\", round(100.0 * count(fuel_lph) / NULLIF(count(*), 0), 1) AS \"fuel_lph\", round(100.0 * count(keysw_v) / NULLIF(count(*), 0), 1) AS \"keysw_v\", round(100.0 * count(hours) / NULLIF(count(*), 0), 1) AS \"hours\" FROM v_plc4_can_health WHERE $__timeFilter(recv_ts) AND d_frames > 0"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": true,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "left",
+        "minVizHeight": 10,
+        "maxVizHeight": 24
+      }
+    },
+    {
+      "id": 15,
+      "type": "table",
+      "title": "Lamps per ECU",
+      "description": "v_plc4_dm1_now. SA 3, 6, 23 and 71 are always listed; 'never received' means that ECU has not published DM1 to this consumer. Lamps: 0 off, 1 ON, 2 reserved and 3 not available are grey and never lit. 'delivery' retained = the broker replayed the last DM1 on reconnect, not a new message from the ECU. 'since last DM1 publish' is not ECU liveness: DM1 is sent on change.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 33
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(MIL|Red stop|Amber|Protect)$"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "off",
+                        "color": "green",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": {
+                        "text": "ON",
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "2": {
+                        "text": "reserved",
+                        "color": "text",
+                        "index": 2
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "3": {
+                        "text": "n/a",
+                        "color": "text",
+                        "index": 3
+                      }
+                    }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "null",
+                      "result": {
+                        "text": "-",
+                        "color": "text",
+                        "index": 4
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "DM1"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "never received": {
+                        "text": "never received",
+                        "color": "text",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "received": {
+                        "text": "received",
+                        "color": "green",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT sa AS \"ECU (SA)\", CASE WHEN received THEN 'received' ELSE 'never received' END AS \"DM1\", n AS \"codes\", mil AS \"MIL\", rsl AS \"Red stop\", awl AS \"Amber\", pl AS \"Protect\", recv_ts AS \"as of\", ts_kind AS \"delivery\", since_publish_s AS \"since last DM1 publish (s)\" FROM v_plc4_dm1_now ORDER BY sa"
+        }
+      ],
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 16,
+      "type": "table",
+      "title": "Active DTCs",
+      "description": "v_plc4_dtc_active: the newest DM1 per ECU, one row per code. A row with an empty SPN is a no-fault snapshot (or a lit lamp with no code -- see Lamps per ECU). 'since last DM1 publish' counts from the last live publish or retained redelivery; it is not ECU liveness.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "plc1-postgres"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 33
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT sa AS \"ECU\", recv_ts AS \"reported\", age_s AS \"since last DM1 publish (s)\", ts_kind AS \"delivery\", n AS \"count\", spn AS \"SPN\", fmi AS \"FMI\", oc AS \"occurrences\" FROM v_plc4_dtc_active ORDER BY sa, spn NULLS FIRST"
+        }
+      ],
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 22,
+      "type": "row",
+      "title": "CAN health",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "panels": [
+        {
+          "id": 17,
+          "type": "timeseries",
+          "title": "Frames per second",
+          "description": "fps (wall) = d_frames / seconds between messages, by the consumer's clock. fps (board clock) = d_frames x 200 / d_drains, timed by the board's own 200 Hz drain timer, so network jitter drops out. Rows from 19f0c022 carry no drains, so the board-clock line is empty there by design. Measured: ~441-444 fps around crank, 454.8 key-on engine off on 19f0c022; census 458.6 key-on, 465 idle.",
+          "datasource": {
+            "type": "postgres",
+            "uid": "plc1-postgres"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 41
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "spanNulls": false,
+                "insertNulls": 50000,
+                "showPoints": "auto",
+                "pointSize": 3,
+                "fillOpacity": 0
+              },
+              "unit": "none",
+              "decimals": 1,
+              "min": 0
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "time_series",
+              "rawQuery": true,
+              "rawSql": "SELECT recv_ts AS time, fps AS \"fps (wall)\", fps_board AS \"fps (board clock)\" FROM v_plc4_can_health WHERE $__timeFilter(recv_ts) ORDER BY 1"
+            }
+          ],
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "none"
+            }
+          }
+        },
+        {
+          "id": 18,
+          "type": "timeseries",
+          "title": "Drains per second",
+          "description": "How often the 200 Hz drain ISR ran; expected ~200. The drain-stalled alert fires below 100, and only when drains is reported (image e82bcb7 on) -- empty on 19f0c022 rows by design.",
+          "datasource": {
+            "type": "postgres",
+            "uid": "plc1-postgres"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 41
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "spanNulls": false,
+                "insertNulls": 50000,
+                "showPoints": "auto",
+                "pointSize": 3,
+                "fillOpacity": 0,
+                "thresholdsStyle": {
+                  "mode": "line"
+                }
+              },
+              "unit": "none",
+              "decimals": 1,
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 100
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "time_series",
+              "rawQuery": true,
+              "rawSql": "SELECT recv_ts AS time, drains_ps AS \"drains/s\" FROM v_plc4_can_health WHERE $__timeFilter(recv_ts) ORDER BY 1"
+            }
+          ],
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "none"
+            }
+          }
+        },
+        {
+          "id": 19,
+          "type": "timeseries",
+          "title": "Ring full and CAN errors, per interval",
+          "description": "d_ring_full: drains that found the 32-slot ring full in the interval -- each one means frames were lost. d_can_err: driver error events in the interval. Field 19f0c022: both 0 throughout. NULL on reboot/gap rows.",
+          "datasource": {
+            "type": "postgres",
+            "uid": "plc1-postgres"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 48
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "bars",
+                "lineWidth": 1,
+                "spanNulls": false,
+                "insertNulls": 50000,
+                "showPoints": "auto",
+                "pointSize": 3,
+                "fillOpacity": 80
+              },
+              "unit": "none",
+              "decimals": 0,
+              "min": 0
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "time_series",
+              "rawQuery": true,
+              "rawSql": "SELECT recv_ts AS time, d_ring_full AS \"ring full\", d_can_err AS \"CAN errors\" FROM v_plc4_can_health WHERE $__timeFilter(recv_ts) ORDER BY 1"
+            }
+          ],
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "none"
+            }
+          }
+        },
+        {
+          "id": 20,
+          "type": "timeseries",
+          "title": "Ring high-water mark",
+          "description": "Deepest the receive ring has been since boot, out of 32. A running maximum: it only falls on reboot. Field 19f0c022: 9 of 32 throughout.",
+          "datasource": {
+            "type": "postgres",
+            "uid": "plc1-postgres"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 8,
+            "x": 12,
+            "y": 48
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "spanNulls": false,
+                "insertNulls": 50000,
+                "showPoints": "auto",
+                "pointSize": 3,
+                "fillOpacity": 0,
+                "lineInterpolation": "stepAfter"
+              },
+              "unit": "none",
+              "decimals": 0,
+              "min": 0,
+              "max": 32,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 24
+                  },
+                  {
+                    "color": "red",
+                    "value": 32
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "time_series",
+              "rawQuery": true,
+              "rawSql": "SELECT recv_ts AS time, ring_high AS \"ring high-water (of 32)\" FROM v_plc4_can_health WHERE $__timeFilter(recv_ts) ORDER BY 1"
+            }
+          ],
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "none"
+            }
+          }
+        },
+        {
+          "id": 21,
+          "type": "stat",
+          "title": "Last CAN error",
+          "description": "can_last: the last driver error event, as r_can_api.h can_event_t (Arduino renesas_uno 1.6.0). 'not reported' = the image predates the key (before e82bcb7, including 19f0c022) or it arrived unusable. NO DATA = board silent.",
+          "datasource": {
+            "type": "postgres",
+            "uid": "plc1-postgres"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 4,
+            "x": 20,
+            "y": 48
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "decimals": 0,
+              "noValue": "NO DATA",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "text"
+              },
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "none since boot",
+                      "color": "green",
+                      "index": 0
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "2": {
+                      "text": "error warning",
+                      "color": "orange",
+                      "index": 1
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "4": {
+                      "text": "error passive",
+                      "color": "orange",
+                      "index": 2
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "8": {
+                      "text": "BUS OFF",
+                      "color": "red",
+                      "index": 3
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "16": {
+                      "text": "bus-off recovery",
+                      "color": "orange",
+                      "index": 4
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "32": {
+                      "text": "mailbox overrun",
+                      "color": "red",
+                      "index": 5
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "128": {
+                      "text": "bus lock",
+                      "color": "red",
+                      "index": 6
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "256": {
+                      "text": "channel error",
+                      "color": "red",
+                      "index": 7
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "512": {
+                      "text": "tx aborted",
+                      "color": "orange",
+                      "index": 8
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "1024": {
+                      "text": "rx complete",
+                      "color": "text",
+                      "index": 9
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "2048": {
+                      "text": "tx complete",
+                      "color": "text",
+                      "index": 10
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "4096": {
+                      "text": "global error",
+                      "color": "red",
+                      "index": 11
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "8192": {
+                      "text": "tx FIFO empty",
+                      "color": "text",
+                      "index": 12
+                    }
+                  }
+                },
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null",
+                    "result": {
+                      "text": "not reported",
+                      "color": "text",
+                      "index": 99
+                    }
+                  }
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT can_last AS \"last CAN error\" FROM v_plc4_engine_now WHERE NOT board_silent"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "values": true,
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "/.*/"
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "value",
+            "justifyMode": "center",
+            "orientation": "vertical",
+            "showPercentChange": false
+          }
         }
       ]
     },
     {
-      "id": 8,
-      "type": "table",
-      "title": "Active DTCs",
-      "description": "The most recent DM1 snapshot. An empty table with a recent timestamp means the ECU reported no active faults; an empty table with no timestamp means no DM1 has ever arrived. The age column is how you tell.",
-      "datasource": { "type": "postgres", "uid": "plc1-postgres" },
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 21 },
-      "fieldConfig": { "defaults": {}, "overrides": [] },
-      "options": { "showHeader": true },
-      "targets": [
+      "id": 25,
+      "type": "row",
+      "title": "Filter check",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 41
+      },
+      "panels": [
         {
-          "refId": "A",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT sa AS \"ECU\", recv_ts AS \"reported\", age_s AS \"age (s)\", n AS \"count\", spn AS \"SPN\", fmi AS \"FMI\", oc AS \"occurrences\" FROM v_plc4_dtc_active ORDER BY sa, spn NULLS FIRST"
+          "id": 23,
+          "type": "timeseries",
+          "title": "Unknown-frame fraction",
+          "description": "d_unknown / d_frames per interval: the share of bus traffic the decoder does not use. With the hardware filter off it is ~0.8 (census). 'filter on' is 1 while filt is true.",
+          "datasource": {
+            "type": "postgres",
+            "uid": "plc1-postgres"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 42
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "spanNulls": false,
+                "insertNulls": 50000,
+                "showPoints": "auto",
+                "pointSize": 3,
+                "fillOpacity": 0
+              },
+              "unit": "percentunit",
+              "decimals": 1,
+              "min": 0,
+              "max": 1
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "filter on"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "none"
+                  },
+                  {
+                    "id": "custom.axisPlacement",
+                    "value": "right"
+                  },
+                  {
+                    "id": "custom.lineInterpolation",
+                    "value": "stepAfter"
+                  }
+                ]
+              }
+            ]
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "time_series",
+              "rawQuery": true,
+              "rawSql": "SELECT recv_ts AS time, unknown_frac AS \"unknown fraction\", CASE WHEN filt THEN 1 WHEN filt IS FALSE THEN 0 END AS \"filter on\" FROM v_plc4_can_health WHERE $__timeFilter(recv_ts) ORDER BY 1"
+            }
+          ],
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "none"
+            }
+          }
+        },
+        {
+          "id": 24,
+          "type": "table",
+          "title": "Filter off vs on",
+          "description": "Evidence for the first canf trial (the verb needs the USB console on farm1). Bus-live rows only; the row where filt changes is left out because its interval mixes both settings. PREDICTED, FROM THE HOST REPLAY ONLY (census candump-2026-09-22_175858.log through test/test_j1939_replay.cpp): filter on ~140 fps, unknown fraction ~0.18 (1921 of 10477 passed frames unused), and no frame the decoder uses is dropped -- so rpm and hours dropout should not rise. Not measured on the board.",
+          "datasource": {
+            "type": "postgres",
+            "uid": "plc1-postgres"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 42
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT CASE WHEN filt THEN 'filter ON' WHEN filt IS FALSE THEN 'filter OFF' ELSE 'unknown' END AS \"filter\", count(*) AS \"bus-live rows\", round(avg(fps)::numeric, 1) AS \"mean fps\", round(avg(unknown_frac)::numeric, 3) AS \"unknown fraction\", round(100 - 100.0 * count(rpm) / count(*), 1) AS \"rpm dropout %\", round(100 - 100.0 * count(hours) / count(*), 1) AS \"hours dropout %\" FROM v_plc4_can_health WHERE $__timeFilter(recv_ts) AND d_frames > 0 AND filt IS NOT DISTINCT FROM prev_filt GROUP BY 1 ORDER BY 1"
+            }
+          ],
+          "options": {
+            "showHeader": true
+          }
         }
       ]
     }
