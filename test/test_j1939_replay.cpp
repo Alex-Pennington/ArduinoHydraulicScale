@@ -167,6 +167,14 @@ int main(int argc, char **argv) {
   }
   if (st.fuelLph.ok) checkRange("fuel_lph (SPN 183)", st.fuelLph, 0.0, 60.0);
   if (st.loadPct.ok) checkRange("load_pct (SPN 92)", st.loadPct, 0.0, 125.0);
+  checkRange("fuel_level_pct (SPN 96, DD)", st.fuelLevelPct, 30.0, 40.0);
+  checkRange("hyd_oil_c (SPN 1638, VF)", st.hydOilC, 10.0, 30.0);
+  {
+    const J1939Win &w = st.rpmWin;   // never taken in the replay: the whole capture
+    snprintf(d, sizeof(d), "n=%lu min %.0f avg %.0f max %.0f", (unsigned long)w.n,
+             (double)w.mn, (double)(w.n ? w.sum / w.n : 0), (double)w.mx);
+    check("rpm window min <= avg <= max", w.n > 0 && w.mn <= w.sum / w.n && w.sum / w.n <= w.mx, d);
+  }
 
   printf("  -- DM1 per source address --\n");
   for (size_t i = 0; i < J1939_MAX_DM1_SRC; i++) {

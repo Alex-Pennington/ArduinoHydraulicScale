@@ -575,11 +575,28 @@ static size_t appendSig(char *buf, size_t cap, size_t n, const char *key,
   return (w > 0) ? n + (size_t)w : n;
 }
 
+// Append "<key>_min","<key>_max","<key>_avg" for one window, or nothing when the
+// window saw no valid sample -- the same omission contract as a stale signal.
+static size_t appendWin(char *buf, size_t cap, size_t n, const char *key,
+                        const J1939Win &w, int decimals) {
+  if (w.n == 0 || n >= cap) return n;
+  int k = snprintf(buf + n, cap - n, "\"%s_min\":%.*f,\"%s_max\":%.*f,\"%s_avg\":%.*f,",
+                   key, decimals, (double)w.mn, key, decimals, (double)w.mx,
+                   key, decimals, (double)(w.sum / (float)w.n));
+  return (k > 0) ? n + (size_t)k : n;
+}
+
+// Called every ENGINE_MS whether or not the broker is up: the min/max/mean
+// windows are taken and reset on the same 15 s grid either way, so a published
+// window never silently spans an outage. publishTo() refuses when offline.
 static void publishEngine() {
   CanSigSnapshot c;
   canSnapshotSigs(c);
+  CanWinSnapshot win;
+  canTakeWindows(win);
   const uint32_t now = millis();   // read AFTER the snapshot, never the loop's older clock
-  char p[448];
+  if (netState != NET_ONLINE) return;
+  char p[704];
   size_t n = 0;
   n += snprintf(p + n, sizeof(p) - n, "{");
   n = appendSig(p, sizeof(p), n, "rpm",        c.rpm,       0, now);
@@ -592,6 +609,11 @@ static void publishEngine() {
   n = appendSig(p, sizeof(p), n, "batt_v",     c.battV,     2, now);
   n = appendSig(p, sizeof(p), n, "keysw_v",    c.keyswV,    2, now);
   n = appendSig(p, sizeof(p), n, "hours",      c.hours,     2, now, J1939_HOURS_STALE_MS);
+  n = appendSig(p, sizeof(p), n, "fuel_level_pct", c.fuelLevelPct, 1, now);
+  n = appendSig(p, sizeof(p), n, "hyd_oil_c",  c.hydOilC,   0, now);
+  n = appendWin(p, sizeof(p), n, "rpm",        win.rpm,     0);
+  n = appendWin(p, sizeof(p), n, "load_pct",   win.load,    0);
+  n = appendWin(p, sizeof(p), n, "torque_pct", win.torque,  0);
   if (n >= sizeof(p)) return;
   snprintf(p + n, sizeof(p) - n,
            "\"frames\":%lu,\"unknown\":%lu,\"ring_full\":%lu,\"ring_high\":%lu,"
@@ -2048,6 +2070,8 @@ void loop() {
       Console.print("coolant_c = "); if (j1939SigFresh(c.coolantC, now)) Console.println(c.coolantC.v, 1); else Console.println("--");
       Console.print("oil_kpa = ");  if (j1939SigFresh(c.oilKpa, now)) Console.println(c.oilKpa.v, 0); else Console.println("--");
       Console.print("keysw_v = ");  if (j1939SigFresh(c.keyswV, now)) Console.println(c.keyswV.v, 2); else Console.println("--");
+      Console.print("fuel_level_pct = "); if (j1939SigFresh(c.fuelLevelPct, now)) Console.println(c.fuelLevelPct.v, 1); else Console.println("--");
+      Console.print("hyd_oil_c = "); if (j1939SigFresh(c.hydOilC, now)) Console.println(c.hydOilC.v, 0); else Console.println("--");
       Console.print("hours = ");    if (j1939SigFresh(c.hours, now, J1939_HOURS_STALE_MS)) Console.println(c.hours.v, 2); else Console.println("--");
     }
     else if (inputString == "canf") {
@@ -2223,9 +2247,9 @@ void loop() {
   // DTC publish can spin for its PUBACK; sitting between cmdPoll() and the
   // handler, that spin could age the reading and get a queued phone command
   // refused as stale -- the hazard publishStatus() is already rate-limited for.
-  if (netState == NET_ONLINE && millis() - lastEngineMs >= ENGINE_MS) {
+  if (millis() - lastEngineMs >= ENGINE_MS) {
     lastEngineMs = millis();
-    publishEngine();
+    publishEngine();         // takes the windows on schedule even offline; publishes only online
   }
   publishNextDtc();          // faults go out on change, rate-limited
 }

@@ -36,6 +36,8 @@ static const uint32_t PGN_HOURS = 65253;  // total engine hours -- sent only in 
 static const uint32_t PGN_LFE   = 65266;  // fuel rate
 static const uint32_t PGN_VEP1  = 65271;  // battery potential
 static const uint32_t PGN_DM1   = 65226;  // active DTCs
+static const uint32_t PGN_DD    = 65276;  // dash display: fuel level (SPN 96), from SA 0x17 on the 5055E
+static const uint32_t PGN_VF    = 65128;  // vehicle fluids: hydraulic temperature (SPN 1638), from SA 0x47
 static const uint32_t PGN_TPCM  = 60416;  // transport protocol, connection mgmt (0xEC00)
 static const uint32_t PGN_TPDT  = 60160;  // transport protocol, data transfer (0xEB00)
 // TP.DT is 60160, NOT 60417. A public source said 60417 and it is wrong: in the Cal
@@ -51,6 +53,22 @@ struct J1939Sig {
 };
 
 inline void j1939SigSet(J1939Sig &s, float v, uint32_t now) { s.v = v; s.ts = now; s.ok = true; }
+
+// Min / max / mean of a fast signal over one publish window. rpm, load and torque
+// arrive at ~50 Hz and the 15 s engine message carried one snapshot of each, so a
+// load peak while the loader worked could fall between two messages unseen
+// (Alex, 2026-09-22). The ISR adds every valid sample; the publisher takes the
+// window and resets it (canTakeWindows()).
+struct J1939Win {
+  float    mn, mx, sum;
+  uint32_t n;
+};
+inline void j1939WinAdd(J1939Win &w, float v) {
+  if (w.n == 0 || v < w.mn) w.mn = v;
+  if (w.n == 0 || v > w.mx) w.mx = v;
+  w.sum += v;
+  w.n++;
+}
 // THE CALLER MUST READ `now` AFTER SNAPSHOTTING THE SIGNAL. The decoder runs in
 // a timer ISR, so a value stamped after the caller read its clock makes the
 // unsigned age wrap to ~49 days and a signal updated a millisecond ago reads as
@@ -146,6 +164,9 @@ struct J1939Bam {
 struct J1939State {
   J1939Sig rpm, torquePct, loadPct, coolantC, oilTempC;
   J1939Sig oilKpa, hours, fuelLph, battV, keyswV;
+  J1939Sig fuelLevelPct, hydOilC;
+
+  J1939Win rpmWin, loadWin, torqueWin;   // since the publisher last took them
 
   J1939Dm1Src dm1[J1939_MAX_DM1_SRC];
 
@@ -301,6 +322,7 @@ inline void j1939Tick(J1939State &st, uint32_t now) {
   j1939Forget(st.oilTempC, now); j1939Forget(st.oilKpa, now);
   j1939Forget(st.hours, now);    j1939Forget(st.fuelLph, now);
   j1939Forget(st.battV, now);    j1939Forget(st.keyswV, now);
+  j1939Forget(st.fuelLevelPct, now); j1939Forget(st.hydOilC, now);
 }
 
 // One received frame. `len` is the DLC, clamped by the caller to <= 8.
@@ -316,10 +338,14 @@ inline void j1939OnFrame(J1939State &st, bool extended, uint32_t id, const uint8
     case PGN_EEC1:
       if (len >= 5) {
         const uint16_t raw = j1939Le16(&d[3]);                    // bytes 4-5
-        if (!j1939U16Bad(raw)) j1939SigSet(st.rpm, raw * 0.125f, now); // 0.125 rpm/bit
+        if (!j1939U16Bad(raw)) {
+          j1939SigSet(st.rpm, raw * 0.125f, now);                 // 0.125 rpm/bit
+          j1939WinAdd(st.rpmWin, raw * 0.125f);
+        }
       }
       if (len >= 3 && !j1939U8Bad(d[2])) {
         j1939SigSet(st.torquePct, (float)d[2] - 125.0f, now);    // SPN 513, 1 %/bit, -125
+        j1939WinAdd(st.torqueWin, (float)d[2] - 125.0f);
       }
       break;
 
@@ -327,7 +353,25 @@ inline void j1939OnFrame(J1939State &st, bool extended, uint32_t id, const uint8
       // SPN 92 Engine Percent Load At Current Speed lives HERE, in EEC2 byte 3 --
       // not in EEC1. EEC1 byte 3 is actual percent TORQUE, a different number
       // with a different offset.
-      if (len >= 3 && !j1939U8Bad(d[2])) j1939SigSet(st.loadPct, (float)d[2], now);
+      if (len >= 3 && !j1939U8Bad(d[2])) {
+        j1939SigSet(st.loadPct, (float)d[2], now);
+        j1939WinAdd(st.loadWin, (float)d[2]);
+      }
+      break;
+
+    case PGN_DD:
+      // SPN 96 Fuel Level 1, byte 2, 0.4 %/bit. SA 0x17 sends it live (35.6 % in
+      // the 2026-09-22 census); SA 0x47 also sends DD with every byte 0xFF, which
+      // the sentinel check skips, so it can never overwrite the real reading.
+      if (len >= 2 && !j1939U8Bad(d[1])) j1939SigSet(st.fuelLevelPct, d[1] * 0.4f, now);
+      break;
+
+    case PGN_VF:
+      // SPN 1638 Hydraulic Temperature, byte 1, 1 degC/bit, offset -40. From SA
+      // 0x47, 1 Hz; 18-19 degC parked in the census. The rest of VF is 0xFF on this
+      // tractor, and no standard PGN carries hydraulic PRESSURE -- the scale's own
+      // transducer remains the only source of that.
+      if (len >= 1 && !j1939U8Bad(d[0])) j1939SigSet(st.hydOilC, (float)d[0] - 40.0f, now);
       break;
 
     case PGN_ET1:
@@ -403,31 +447,30 @@ inline void j1939OnFrame(J1939State &st, bool extended, uint32_t id, const uint8
 // Hardware acceptance filter for the RA4M1's 8 extended receive mailboxes.
 //
 // All 8 share ONE mask (Arduino_CAN's setFilterMask_Extended writes both mailbox
-// groups), and a mask bit of 1 means "compare". Ten PGNs are wanted and only 8
-// slots exist, so the mask ignores the low 3 bits of PS as well as priority and
-// source address: EEC1/EEC2, ET1/EFLP1 and LFE/VEP1 then share a slot each.
-//   ignored: bits 0-7 (SA), bits 8-10 (PS low 3), bits 26-28 (priority)
-//   compared: bits 11-25 (PS high 5, PF, DP, EDP)
-// What leaks through is the other PGNs in each block of 8 -- ETC1, CCVS and the
-// like -- which the decoder counts as `unknown` and drops. What is kept OUT is
-// the proprietary traffic (PropA 0xEF00, PropB 0xFFxx), ~60% of this bus in the
-// 2026-09-22 census. TP.CM/TP.DT are kept only for destination 0xF8-0xFF, which
-// covers BAM (destination 0xFF).
+// groups), and a mask bit of 1 means "compare". Twelve PGNs are wanted and only 8
+// slots exist, so the mask ignores the low 4 bits of PS as well as priority and
+// source address, and PGNs in the same block of 16 share a slot:
+//   ignored: bits 0-7 (SA), bits 8-11 (PS low 4), bits 26-28 (priority)
+//   compared: bits 12-25 (PS high 4, PF, DP, EDP)
+// What leaks through is the other PGNs in each block -- counted as `unknown` and
+// dropped. What is kept OUT is the proprietary traffic (PropA 0xEF00, PropB
+// 0xFFxx), ~60% of this bus in the 2026-09-22 census. TP.CM/TP.DT are kept only
+// for destination 0xF0-0xFF, which covers BAM (destination 0xFF).
 //
 // test/test_j1939_replay.cpp proves against the census that every frame the
 // decoder uses passes this filter. That the SILICON applies it the same way is
 // NOT proven: it has never run on a board. The firmware therefore boots with the
 // filter OFF and the `canf` console verb turns it on, so it can be tried at the
 // machine with the `unknown` and `frames` counts as the evidence.
-static const uint32_t J1939_FILTER_MASK = 0x03FFF800UL;
+static const uint32_t J1939_FILTER_MASK = 0x03FFF000UL;
 static const uint32_t J1939_FILTER_IDS[8] = {
   0xF000UL << 8,   // EEC2 0xF003, EEC1 0xF004
-  0xFEE0UL << 8,   // HOURS 0xFEE5
-  0xFEE8UL << 8,   // ET1 0xFEEE, EFLP1 0xFEEF
-  0xFEF0UL << 8,   // LFE 0xFEF2, VEP1 0xFEF7
-  0xFEC8UL << 8,   // DM1 0xFECA
-  0xECF8UL << 8,   // TP.CM to 0xF8-0xFF (BAM)
-  0xEBF8UL << 8,   // TP.DT to 0xF8-0xFF (BAM)
+  0xFEE0UL << 8,   // HOURS 0xFEE5, ET1 0xFEEE, EFLP1 0xFEEF
+  0xFEF0UL << 8,   // LFE 0xFEF2, VEP1 0xFEF7, DD 0xFEFC
+  0xFEC0UL << 8,   // DM1 0xFECA
+  0xFE60UL << 8,   // VF 0xFE68
+  0xECF0UL << 8,   // TP.CM to 0xF0-0xFF (BAM)
+  0xEBF0UL << 8,   // TP.DT to 0xF0-0xFF (BAM)
   0xF000UL << 8,   // spare slot: a duplicate is harmless and never matches anything new
 };
 

@@ -144,6 +144,7 @@ static bool canSetFilter(bool filtered) {
 struct CanSigSnapshot {
   J1939Sig rpm, torquePct, loadPct, coolantC, oilTempC;
   J1939Sig oilKpa, hours, fuelLph, battV, keyswV;
+  J1939Sig fuelLevelPct, hydOilC;
   uint32_t framesSeen, framesUnknown;
 };
 
@@ -154,8 +155,21 @@ static void canSnapshotSigs(CanSigSnapshot &o) {
   o.oilTempC = canState.oilTempC; o.oilKpa = canState.oilKpa;
   o.hours = canState.hours;       o.fuelLph = canState.fuelLph;
   o.battV = canState.battV;       o.keyswV = canState.keyswV;
+  o.fuelLevelPct = canState.fuelLevelPct; o.hydOilC = canState.hydOilC;
   o.framesSeen = canState.framesSeen;
   o.framesUnknown = canState.framesUnknown;
+  interrupts();
+}
+
+// Take the min/max/mean windows and start new ones, atomically, so no sample is
+// counted in two windows or in none.
+struct CanWinSnapshot { J1939Win rpm, load, torque; };
+static void canTakeWindows(CanWinSnapshot &o) {
+  noInterrupts();
+  o.rpm = canState.rpmWin;   o.load = canState.loadWin;   o.torque = canState.torqueWin;
+  memset(&canState.rpmWin, 0, sizeof(J1939Win));
+  memset(&canState.loadWin, 0, sizeof(J1939Win));
+  memset(&canState.torqueWin, 0, sizeof(J1939Win));
   interrupts();
 }
 
