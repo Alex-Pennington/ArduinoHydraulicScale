@@ -16,6 +16,10 @@
 #include <string.h>
 
 static const uint32_t J1939_SIG_STALE_MS = 5000UL;   // a value older than this is not reported
+// Engine hours arrive every ~4.8 s on this tractor (12 frames in 53 s, 2026-09-22
+// census), which sits ON the 5 s window and was omitted from every payload on
+// the first field run. They change by 0.05 h at a time; 30 s is plenty fresh.
+static const uint32_t J1939_HOURS_STALE_MS = 30000UL;
 
 static const uint32_t PGN_EEC1  = 61444;  // engine speed, actual percent torque
 static const uint32_t PGN_EEC2  = 61443;  // engine percent load at current speed
@@ -40,8 +44,15 @@ struct J1939Sig {
 };
 
 inline void j1939SigSet(J1939Sig &s, float v, uint32_t now) { s.v = v; s.ts = now; s.ok = true; }
-inline bool j1939SigFresh(const J1939Sig &s, uint32_t now) {
-  return s.ok && (uint32_t)(now - s.ts) <= J1939_SIG_STALE_MS;
+// SIGNED age, and it is the whole fix for the first field run. The decoder runs
+// in a timer ISR, so a value can be stamped AFTER the caller read its `now`. An
+// unsigned `now - ts` then wraps to ~49 days and a signal updated a millisecond
+// ago reads as stale. EEC1/EEC2 at ~50 Hz are nearly always newer than the
+// loop's clock, so rpm, load and torque vanished from the payload while the
+// engine ran. A negative age means "newer than now", which is fresh.
+inline bool j1939SigFresh(const J1939Sig &s, uint32_t now,
+                          uint32_t staleMs = J1939_SIG_STALE_MS) {
+  return s.ok && (int32_t)(now - s.ts) <= (int32_t)staleMs;
 }
 
 // J1939 "not available" / "error" sentinels. One byte: FF = N/A, FE = error.

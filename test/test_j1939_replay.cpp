@@ -100,6 +100,14 @@ int main(int argc, char **argv) {
          passed, secs > 0 ? passed / secs : 0.0, lines ? 100.0 * passed / lines : 0.0);
 
   char d[64];
+  // The field bug of 2026-09-22: a signal stamped AFTER the reader's clock must
+  // read as fresh, not wrap to ~49 days old.
+  {
+    J1939Sig s{}; j1939SigSet(s, 900.0f, 100005);
+    check("sig newer than now is fresh", j1939SigFresh(s, 100000), "ts = now + 5 ms");
+    check("sig 6 s old is stale", !j1939SigFresh(s, 106006), "5 s window");
+    check("hours 25 s old is fresh at 30 s", j1939SigFresh(s, 125005, J1939_HOURS_STALE_MS), "");
+  }
   snprintf(d, sizeof(d), "%lu of %lu", usedDropped, usedTotal);
   check("filter drops no frame the decoder uses", usedDropped == 0, d);
 

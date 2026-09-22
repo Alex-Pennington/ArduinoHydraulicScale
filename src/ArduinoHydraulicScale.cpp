@@ -561,15 +561,17 @@ static void queueFlush() {
 // from frames being lost (`ring_full` climbing).
 // ---------------------------------------------------------------------------
 static size_t appendSig(char *buf, size_t cap, size_t n, const char *key,
-                        const J1939Sig &s, int decimals, uint32_t now) {
-  if (!j1939SigFresh(s, now) || n >= cap) return n;
+                        const J1939Sig &s, int decimals, uint32_t now,
+                        uint32_t staleMs = J1939_SIG_STALE_MS) {
+  if (!j1939SigFresh(s, now, staleMs) || n >= cap) return n;
   int w = snprintf(buf + n, cap - n, "\"%s\":%.*f,", key, decimals, (double)s.v);
   return (w > 0) ? n + (size_t)w : n;
 }
 
-static void publishEngine(unsigned long now) {
+static void publishEngine() {
   CanSigSnapshot c;
   canSnapshotSigs(c);
+  const uint32_t now = millis();   // read AFTER the snapshot, never the loop's older clock
   char p[448];
   size_t n = 0;
   n += snprintf(p + n, sizeof(p) - n, "{");
@@ -582,7 +584,7 @@ static void publishEngine(unsigned long now) {
   n = appendSig(p, sizeof(p), n, "fuel_lph",   c.fuelLph,   2, now);
   n = appendSig(p, sizeof(p), n, "batt_v",     c.battV,     2, now);
   n = appendSig(p, sizeof(p), n, "keysw_v",    c.keyswV,    2, now);
-  n = appendSig(p, sizeof(p), n, "hours",      c.hours,     2, now);
+  n = appendSig(p, sizeof(p), n, "hours",      c.hours,     2, now, J1939_HOURS_STALE_MS);
   if (n >= sizeof(p)) return;
   snprintf(p + n, sizeof(p) - n,
            "\"frames\":%lu,\"unknown\":%lu,\"ring_full\":%lu,\"ring_high\":%lu,"
@@ -1838,7 +1840,7 @@ void loop() {
 
   if (netState == NET_ONLINE && currentMillis - lastEngineMs >= ENGINE_MS) {
     lastEngineMs = currentMillis;
-    publishEngine(currentMillis);
+    publishEngine();
   }
   publishNextDtc();          // faults go out on change, not on the 15 s tick
 
@@ -2023,7 +2025,7 @@ void loop() {
       Console.print("coolant_c = "); if (j1939SigFresh(c.coolantC, now)) Console.println(c.coolantC.v, 1); else Console.println("--");
       Console.print("oil_kpa = ");  if (j1939SigFresh(c.oilKpa, now)) Console.println(c.oilKpa.v, 0); else Console.println("--");
       Console.print("keysw_v = ");  if (j1939SigFresh(c.keyswV, now)) Console.println(c.keyswV.v, 2); else Console.println("--");
-      Console.print("hours = ");    if (j1939SigFresh(c.hours, now)) Console.println(c.hours.v, 2); else Console.println("--");
+      Console.print("hours = ");    if (j1939SigFresh(c.hours, now, J1939_HOURS_STALE_MS)) Console.println(c.hours.v, 2); else Console.println("--");
     }
     else if (inputString == "canf") {
       // Toggle the hardware acceptance filter and reopen the controller. The
