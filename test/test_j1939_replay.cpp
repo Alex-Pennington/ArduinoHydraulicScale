@@ -100,14 +100,54 @@ int main(int argc, char **argv) {
          passed, secs > 0 ? passed / secs : 0.0, lines ? 100.0 * passed / lines : 0.0);
 
   char d[64];
-  // The field bug of 2026-09-22: a signal stamped AFTER the reader's clock must
-  // read as fresh, not wrap to ~49 days old.
+  // Freshness. Callers read `now` AFTER snapshotting, so ts <= now; the age is
+  // unsigned, and j1939Tick() forgets a signal after J1939_SIG_FORGET_MS so no
+  // compare ever runs near the wrap. (705bf3c's signed age made a signal dead
+  // for 24.9+ days read fresh again -- the second check below.)
   {
-    J1939Sig s{}; j1939SigSet(s, 900.0f, 100005);
-    check("sig newer than now is fresh", j1939SigFresh(s, 100000), "ts = now + 5 ms");
-    check("sig 6 s old is stale", !j1939SigFresh(s, 106006), "5 s window");
-    check("hours 25 s old is fresh at 30 s", j1939SigFresh(s, 125005, J1939_HOURS_STALE_MS), "");
+    J1939Sig s{}; j1939SigSet(s, 900.0f, 1000);
+    check("sig 4.9 s old is fresh", j1939SigFresh(s, 5900), "5 s window");
+    check("sig 5.001 s old is stale", !j1939SigFresh(s, 6001), "5 s window");
+    check("sig 24.9 days old is stale", !j1939SigFresh(s, 1000u + 2147483648u), "no signed wrap");
+    check("hours 85 s old fresh at 90 s", j1939SigFresh(s, 86000, J1939_HOURS_STALE_MS), "");
+    static J1939State t; j1939Init(t); t.rpm = s;
+    j1939Tick(t, 1000 + J1939_SIG_FORGET_MS + 1);
+    check("tick forgets a signal after 10 min", !t.rpm.ok, "");
   }
+
+  // Two BAMs at once: SA 0x00 sends FEE3 (not DM1) while SA 0x03 sends a
+  // two-fault DM1. The single-session decoder abandoned the DM1 here.
+  {
+    static J1939State t; j1939Init(t);
+    const uint8_t cmDm1[8]  = {0x20, 10, 0, 2, 0xFF, 0xCA, 0xFE, 0x00};   // 10 bytes, 2 packets, PGN 65226
+    const uint8_t cmFee3[8] = {0x20, 30, 0, 5, 0xFF, 0xE3, 0xFE, 0x00};
+    // lamps 0x10 (red stop on) 0xFF, then SPN 2825 FMI 7 OC 1, SPN 100 FMI 1 OC 3
+    const uint8_t dt1[8] = {1, 0x10, 0xFF, 0x09, 0x0B, 0x07, 0x01, 0x64};
+    const uint8_t dt2[8] = {2, 0x00, 0x01, 0x03, 0xFF, 0xFF, 0xFF, 0xFF};
+    const uint8_t dtX[8] = {1, 1, 2, 3, 4, 5, 6, 7};
+    j1939OnFrame(t, true, 0x1CECFF03, cmDm1, 8, 10);
+    j1939OnFrame(t, true, 0x1CECFF00, cmFee3, 8, 11);
+    j1939OnFrame(t, true, 0x1CEBFF03, dt1, 8, 60);
+    j1939OnFrame(t, true, 0x1CEBFF00, dtX, 8, 61);
+    j1939OnFrame(t, true, 0x1CEBFF03, dt2, 8, 110);
+    const int k = j1939Dm1Slot(t, 3);
+    char b[64];
+    snprintf(b, sizeof(b), "n=%u rsl=%u spn=%lu/%lu", t.dm1[k].count, t.dm1[k].lampRed,
+             (unsigned long)t.dm1[k].dtc[0].spn, (unsigned long)t.dm1[k].dtc[1].spn);
+    check("DM1 BAM survives a concurrent BAM", t.dm1[k].count == 2 && t.dm1[k].lampRed == 1
+          && t.dm1[k].dtc[0].spn == 2825 && t.dm1[k].dtc[1].spn == 100, b);
+  }
+
+  // More real codes than MAX_DTC: kept at 12, and trunc says so.
+  {
+    static J1939State t; j1939Init(t);
+    uint8_t p[2 + 4 * 14]; p[0] = 0x04; p[1] = 0xFF;
+    for (int i = 0; i < 14; i++) { p[2+4*i] = (uint8_t)(10 + i); p[3+4*i] = 0; p[4+4*i] = 2; p[5+4*i] = 1; }
+    j1939Dm1Parse(t, p, sizeof(p), 0x17);
+    const int k = j1939Dm1Slot(t, 0x17);
+    check("14 codes: 12 kept, trunc set", t.dm1[k].count == 12 && t.dm1[k].trunc, "");
+  }
+
   snprintf(d, sizeof(d), "%lu of %lu", usedDropped, usedTotal);
   check("filter drops no frame the decoder uses", usedDropped == 0, d);
 

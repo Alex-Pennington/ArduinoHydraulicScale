@@ -308,6 +308,13 @@ const unsigned long TELEMETRY_MS = 5000;
 // the scale's 5 s is a weighing cadence and engine numbers do not need it.
 const unsigned long ENGINE_MS = 15000;
 unsigned long lastEngineMs = 0;
+// DTC publishes are QoS 1 and each can spin up to MQTT_CONNECT_TIMEOUT_MS for its
+// PUBACK. Rate-limited whether they succeed or not -- a failed one used to be
+// retried on the very next pass, 2 s at a time, which is the stall this file
+// already refuses for publishStatus(). A failure backs off for longer.
+const unsigned long DTC_GAP_MS     = 2000;
+const unsigned long DTC_BACKOFF_MS = 30000;
+unsigned long nextDtcMs = 0;
 bool canUp = false;
 
 // --- RAM backlog queue -----------------------------------------------------
@@ -602,6 +609,7 @@ static void publishEngine() {
 // loop pass, because each is a QoS 1 publish that spins for its PUBACK.
 static void publishNextDtc() {
   if (netState != NET_ONLINE) return;
+  if ((long)(millis() - nextDtcMs) < 0) return;
   for (size_t i = 0; i < J1939_MAX_DM1_SRC; i++) {
     J1939Dm1Src s;
     if (!canDm1TakeDirty(i, s)) continue;
@@ -617,18 +625,26 @@ static void publishNextDtc() {
                   "{\"sa\":%u,\"n\":%u,\"mil\":%u,\"rsl\":%u,\"awl\":%u,\"pl\":%u,\"dtc\":[",
                   (unsigned)s.sa, (unsigned)s.count, (unsigned)s.lampMil,
                   (unsigned)s.lampRed, (unsigned)s.lampAmber, (unsigned)s.lampProtect);
-    for (uint8_t k = 0; k < s.count && n < sizeof(p) - 48; k++) {
+    // `trunc` is true when the ECU sent more real codes than the board keeps
+    // (J1939_MAX_DTC) or than fit this buffer, so `n` alone never hides a loss.
+    bool trunc = s.trunc;
+    for (uint8_t k = 0; k < s.count; k++) {
+      if (n >= sizeof(p) - 64) { trunc = true; break; }
       n += snprintf(p + n, sizeof(p) - n, "%s{\"spn\":%lu,\"fmi\":%u,\"oc\":%u}",
                     k ? "," : "", (unsigned long)s.dtc[k].spn,
                     (unsigned)s.dtc[k].fmi, (unsigned)s.dtc[k].oc);
     }
-    snprintf(p + n, sizeof(p) - n, "],\"id\":\"%s\"}", CLIENT_ID);
+    snprintf(p + n, sizeof(p) - n, "],\"trunc\":%s,\"id\":\"%s\"}",
+             trunc ? "true" : "false", CLIENT_ID);
 
     // Retained, QoS 1, STREAMED with its size -- the same form as publishStatus().
+    bool ok = false;
     if (mqttClient.beginMessage(topic, (unsigned long)strlen(p), true, 1)) {
       mqttClient.print(p);
-      if (mqttClient.endMessage() == 1) canDm1MarkPublished(i, s.fingerprint);
+      ok = (mqttClient.endMessage() == 1);
     }
+    if (ok) canDm1MarkPublished(i, s.fingerprint);
+    nextDtcMs = millis() + (ok ? DTC_GAP_MS : DTC_BACKOFF_MS);
     return;
   }
 }
@@ -1838,11 +1854,6 @@ void loop() {
     publishTo("telemetry", payload);
   }
 
-  if (netState == NET_ONLINE && currentMillis - lastEngineMs >= ENGINE_MS) {
-    lastEngineMs = currentMillis;
-    publishEngine();
-  }
-  publishNextDtc();          // faults go out on change, not on the 15 s tick
 
   hmiPoll();
 
@@ -2005,8 +2016,18 @@ void loop() {
       }
     }
     // `can` and `canf` MUST sit above the bare 'c' branch below, which would
-    // otherwise take them as a calibration factor and reject them. Console only:
-    // neither is on the MQTT allowlist.
+    // otherwise take them as a calibration factor and reject them.
+    //
+    // CONSOLE ONLY, ENFORCED HERE. They are not on the MQTT allowlist, but the
+    // allowlisted arg-taking verb `c` is concatenated with its arg before it
+    // reaches this chain, so {"verb":"c","arg":"anf"} arrives as "canf". An
+    // MQTT-originated command always has ackPending set by this point, so both
+    // refuse it -- and the ack says so instead of reporting "set".
+    else if ((inputString == "can" || inputString == "canf") && ackPending) {
+      verbRefused = true;
+      snprintf(verbRefusedReason, sizeof(verbRefusedReason), "CONSOLE ONLY");
+      Console.println("can/canf: console only, refused over MQTT");
+    }
     else if (inputString == "can") {
       CanSigSnapshot c;
       canSnapshotSigs(c);
@@ -2014,7 +2035,9 @@ void loop() {
       Console.print("can = ");      Console.println(canUp ? "up" : "DOWN");
       Console.print("drain = ");    Console.println(canTimerOn ? "timer" : "loop");
       Console.print("drains = ");   Console.println((unsigned long)canDrains);
-      Console.print("filter = ");   Console.println(canFiltered ? "on" : "off");
+      Console.print("filter = ");   Console.print(canFiltered ? "on" : "off");
+      if (canWantFilter != canFiltered) Console.print(" (asked on, REOPEN FAILED, fell back)");
+      Console.println();
       Console.print("frames = ");   Console.println((unsigned long)c.framesSeen);
       Console.print("unknown = ");  Console.println((unsigned long)c.framesUnknown);
       Console.print("ring_full = "); Console.println((unsigned long)canRingFull);
@@ -2031,10 +2054,12 @@ void loop() {
       // Toggle the hardware acceptance filter and reopen the controller. The
       // evidence it works is `unknown` growing far slower while `rpm` et al.
       // stay fresh; if engine values go to "--" with it on, turn it back off.
-      canUp = canSetFilter(!canFiltered);
+      const bool asked = !canFiltered;
+      canUp = canSetFilter(asked);
       Console.print("can filter = ");
       Console.println(canFiltered ? "on" : "off");
-      if (!canUp) Console.println("can REOPEN FAILED");
+      if (asked && !canFiltered && canUp) Console.println("filtered reopen FAILED; back on unfiltered");
+      if (!canUp) Console.println("can REOPEN FAILED -- power-cycle the board");
     }
     else if (inputString.charAt(0) == 'c') {
       // A7: main added this direct setter with no validation at all.
@@ -2193,6 +2218,16 @@ void loop() {
     cmdRemember(ackId, ackVerb, ok, detail);
     cmdAck(ackId, ackVerb, ok, detail, false, ok && strcmp(ackVerb, "+") == 0);
   }
+
+  // Engine data LAST in the pass, after any command has run and been acked. A
+  // DTC publish can spin for its PUBACK; sitting between cmdPoll() and the
+  // handler, that spin could age the reading and get a queued phone command
+  // refused as stale -- the hazard publishStatus() is already rate-limited for.
+  if (netState == NET_ONLINE && millis() - lastEngineMs >= ENGINE_MS) {
+    lastEngineMs = millis();
+    publishEngine();
+  }
+  publishNextDtc();          // faults go out on change, rate-limited
 }
 
 void printDebug()

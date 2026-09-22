@@ -16,16 +16,23 @@
 #include <string.h>
 
 static const uint32_t J1939_SIG_STALE_MS = 5000UL;   // a value older than this is not reported
-// Engine hours arrive every ~4.8 s on this tractor (12 frames in 53 s, 2026-09-22
-// census), which sits ON the 5 s window and was omitted from every payload on
-// the first field run. They change by 0.05 h at a time; 30 s is plenty fresh.
-static const uint32_t J1939_HOURS_STALE_MS = 30000UL;
+// Engine hours are NOT broadcast on this tractor. Every 18FEE500 frame in the
+// 2026-09-22 census answers a PGN request (EA00) for 65253 from ANOTHER ECU:
+// SA 0x06 to global and SA 0x17 to the engine. At power-up SA 0x06 asks at 1 Hz
+// for ~5 s; after that the pair recurs every 30.0 s (answers 4.95 s apart, then
+// a 25 s gap). This board never transmits, so it reads those answers passively
+// and hours are only as fresh as the other ECUs make them. 90 s covers a lost
+// answer (a 30 s gap becomes 55-60 s) with margin. Hours move 0.05 h at a time.
+static const uint32_t J1939_HOURS_STALE_MS = 90000UL;
+// A signal not seen for this long is forgotten outright (ok = false) by
+// j1939Tick(), so no age comparison ever runs near the 2^31/2^32 ms wrap.
+static const uint32_t J1939_SIG_FORGET_MS = 600000UL;
 
 static const uint32_t PGN_EEC1  = 61444;  // engine speed, actual percent torque
 static const uint32_t PGN_EEC2  = 61443;  // engine percent load at current speed
 static const uint32_t PGN_ET1   = 65262;  // coolant temp, oil temp
 static const uint32_t PGN_EFLP1 = 65263;  // oil pressure
-static const uint32_t PGN_HOURS = 65253;  // total engine hours -- broadcast unprompted on the 5055E
+static const uint32_t PGN_HOURS = 65253;  // total engine hours -- sent only in answer to OTHER ECUs' requests
 static const uint32_t PGN_LFE   = 65266;  // fuel rate
 static const uint32_t PGN_VEP1  = 65271;  // battery potential
 static const uint32_t PGN_DM1   = 65226;  // active DTCs
@@ -44,15 +51,20 @@ struct J1939Sig {
 };
 
 inline void j1939SigSet(J1939Sig &s, float v, uint32_t now) { s.v = v; s.ts = now; s.ok = true; }
-// SIGNED age, and it is the whole fix for the first field run. The decoder runs
-// in a timer ISR, so a value can be stamped AFTER the caller read its `now`. An
-// unsigned `now - ts` then wraps to ~49 days and a signal updated a millisecond
-// ago reads as stale. EEC1/EEC2 at ~50 Hz are nearly always newer than the
-// loop's clock, so rpm, load and torque vanished from the payload while the
-// engine ran. A negative age means "newer than now", which is fresh.
+// THE CALLER MUST READ `now` AFTER SNAPSHOTTING THE SIGNAL. The decoder runs in
+// a timer ISR, so a value stamped after the caller read its clock makes the
+// unsigned age wrap to ~49 days and a signal updated a millisecond ago reads as
+// stale. That is what dropped rpm/load/torque/hours on the first field run
+// (19f0c022): publishEngine() used the loop's older clock. Both firmware
+// callers now read millis() after canSnapshotSigs(), so ts <= now always holds.
+//
+// The age is UNSIGNED on purpose. A signed compare (705bf3c) hid the ordering
+// bug instead of fixing it, and made a signal dead for 24.9+ days read as fresh
+// again. j1939Tick() forgets any signal older than J1939_SIG_FORGET_MS, so the
+// unsigned 49.7-day wrap cannot resurrect one either.
 inline bool j1939SigFresh(const J1939Sig &s, uint32_t now,
                           uint32_t staleMs = J1939_SIG_STALE_MS) {
-  return s.ok && (int32_t)(now - s.ts) <= (int32_t)staleMs;
+  return s.ok && (uint32_t)(now - s.ts) <= staleMs;
 }
 
 // J1939 "not available" / "error" sentinels. One byte: FF = N/A, FE = error.
@@ -103,17 +115,33 @@ struct J1939Dm1Src {
   bool     used;
   uint8_t  lampMil, lampRed, lampAmber, lampProtect;
   J1939Dtc dtc[J1939_MAX_DTC];
-  uint8_t  count;
+  uint8_t  count;             // codes KEPT (at most J1939_MAX_DTC)
+  bool     trunc;             // the ECU sent more real codes than were kept
   uint32_t fingerprint;
   uint32_t lastFingerprint;   // the fingerprint last PUBLISHED; owned by the publisher
   bool     dirty;
 };
 
-// BAM reassembly. Single session only: a second BAM opening while one is in
-// flight abandons the first. Real J1939 allows one BAM per source address at a
-// time, so this is correct for one ECU and lossy for several.
+// BAM reassembly, ONE SESSION PER SOURCE ADDRESS. J1939-21 allows each SA one
+// BAM at a time, and several SAs at once: the 2026-09-22 census has three ECUs
+// opening BAMs within 16 ms, and SA 0x00 opening a 5-packet BAM (PGN 0xFEE3)
+// every ~5 s. A single global session let any of those abandon a DM1 in flight.
+// Only BAMs announcing DM1 are reassembled; the rest are skipped at TP.CM, so
+// they cost nothing and cannot evict a DM1 session.
 static const size_t   J1939_BAM_MAX        = 128;
+static const size_t   J1939_BAM_SESSIONS   = 4;
 static const uint32_t J1939_BAM_TIMEOUT_MS = 1500;   // J1939-21 allows 750 ms between TP.DT
+
+struct J1939Bam {
+  uint8_t  buf[J1939_BAM_MAX];
+  uint32_t pgn;
+  uint16_t total;
+  uint8_t  packets;
+  uint8_t  nextSeq;
+  uint8_t  sa;
+  bool     active;
+  uint32_t lastMs;
+};
 
 struct J1939State {
   J1939Sig rpm, torquePct, loadPct, coolantC, oilTempC;
@@ -121,14 +149,8 @@ struct J1939State {
 
   J1939Dm1Src dm1[J1939_MAX_DM1_SRC];
 
-  uint8_t  bamBuf[J1939_BAM_MAX];
-  uint32_t bamPgn;
-  uint16_t bamTotal;
-  uint8_t  bamPackets;
-  uint8_t  bamNextSeq;
-  uint8_t  bamSa;
-  bool     bamActive;
-  uint32_t bamStartMs;
+  J1939Bam bam[J1939_BAM_SESSIONS];
+  uint32_t bamDropped;      // DM1 BAMs refused because every session slot was busy
 
   uint32_t framesSeen;      // every frame taken off the ring, decoded or not
   uint32_t framesUnknown;   // extended frames on a PGN this decoder does not use
@@ -167,8 +189,9 @@ inline void j1939Dm1Parse(J1939State &st, const uint8_t *d, size_t len, uint8_t 
   s->lampProtect =  d[0]       & 0x3;
 
   s->count = 0;
+  s->trunc = false;
   uint32_t fp = 0;
-  for (size_t off = 2; off + 4 <= len && s->count < J1939_MAX_DTC; off += 4) {
+  for (size_t off = 2; off + 4 <= len; off += 4) {
     const uint8_t b0 = d[off], b1 = d[off + 1], b2 = d[off + 2], b3 = d[off + 3];
 
     const uint32_t spn = (uint32_t)b0 | ((uint32_t)b1 << 8) | ((uint32_t)(b2 >> 5) << 16);
@@ -187,6 +210,10 @@ inline void j1939Dm1Parse(J1939State &st, const uint8_t *d, size_t len, uint8_t 
     // 524020. Emitting it would put a permanent phantom DTC on the dashboard.
     if (spn >= 0x7F000UL) continue;
     if (fmi == 31 && oc == 0) continue;
+    // CM (byte 4 bit 7) is NOT checked: every SPN is reassembled as CM=0, the
+    // only layout J1939-73 has used since 1996. Nothing on the wire records CM.
+
+    if (s->count >= J1939_MAX_DTC) { s->trunc = true; continue; }
 
     s->dtc[s->count].spn = spn;
     s->dtc[s->count].fmi = fmi;
@@ -200,49 +227,80 @@ inline void j1939Dm1Parse(J1939State &st, const uint8_t *d, size_t len, uint8_t 
   fp = fp * 31u + ((uint32_t)s->lampMil << 6 | (uint32_t)s->lampRed << 4 |
                    (uint32_t)s->lampAmber << 2 | s->lampProtect);
   fp = fp * 31u + s->count;
+  fp = fp * 31u + (s->trunc ? 1u : 0u);
 
   s->fingerprint = fp;
   if (fp != s->lastFingerprint) s->dirty = true;
 }
 
+inline int j1939BamFind(J1939State &st, uint8_t sa) {
+  for (size_t i = 0; i < J1939_BAM_SESSIONS; i++)
+    if (st.bam[i].active && st.bam[i].sa == sa) return (int)i;
+  return -1;
+}
+
 inline void j1939BamCm(J1939State &st, const uint8_t *d, uint8_t sa, uint32_t now) {
   if (d[0] != 0x20) return;                  // 0x20 = BAM; RTS/CTS sessions are point-to-point
-  st.bamTotal   = j1939Le16(&d[1]);
-  st.bamPackets = d[3];
-  st.bamPgn     = (uint32_t)d[5] | ((uint32_t)d[6] << 8) | ((uint32_t)d[7] << 16);
-  st.bamSa      = sa;
-  st.bamNextSeq = 1;
-  st.bamActive  = (st.bamTotal > 0 && st.bamTotal <= J1939_BAM_MAX);
-  st.bamStartMs = now;
-  if (st.bamActive) memset(st.bamBuf, 0, sizeof(st.bamBuf));
+  const uint32_t pgn   = (uint32_t)d[5] | ((uint32_t)d[6] << 8) | ((uint32_t)d[7] << 16);
+  const uint16_t total = j1939Le16(&d[1]);
+
+  // A new CM from an SA replaces THAT SA's session (J1939-21: one per SA), never
+  // anyone else's.
+  int i = j1939BamFind(st, sa);
+  if (i >= 0) st.bam[i].active = false;
+
+  if (pgn != PGN_DM1) return;                // only DM1 is reassembled
+  if (total == 0 || total > J1939_BAM_MAX) return;
+
+  if (i < 0)
+    for (size_t k = 0; k < J1939_BAM_SESSIONS; k++)
+      if (!st.bam[k].active) { i = (int)k; break; }
+  if (i < 0) { st.bamDropped++; return; }
+
+  J1939Bam &b = st.bam[i];
+  memset(b.buf, 0, sizeof(b.buf));
+  b.pgn = pgn; b.total = total; b.packets = d[3];
+  b.nextSeq = 1; b.sa = sa; b.active = true; b.lastMs = now;
 }
 
 inline void j1939BamDt(J1939State &st, const uint8_t *d, uint8_t sa, uint32_t now) {
-  if (!st.bamActive || sa != st.bamSa) return;
-  if (d[0] != st.bamNextSeq) { st.bamActive = false; return; }   // a gap loses the session
+  const int i = j1939BamFind(st, sa);
+  if (i < 0) return;
+  J1939Bam &b = st.bam[i];
+  if (d[0] != b.nextSeq) { b.active = false; return; }   // a gap loses the session
 
   const size_t off = (size_t)(d[0] - 1) * 7u;
-  for (size_t i = 0; i < 7; i++) {
-    const size_t dst = off + i;
-    if (dst < st.bamTotal && dst < J1939_BAM_MAX) st.bamBuf[dst] = d[1 + i];
+  for (size_t k = 0; k < 7; k++) {
+    const size_t dst = off + k;
+    if (dst < b.total && dst < J1939_BAM_MAX) b.buf[dst] = d[1 + k];
   }
-  st.bamNextSeq++;
-  st.bamStartMs = now;
+  b.nextSeq++;
+  b.lastMs = now;
 
-  if (st.bamNextSeq > st.bamPackets) {
-    st.bamActive = false;
-    // In the Cal Poly 5055E corpus NO multipacket session ever announces DM1 --
-    // all 358 transport sessions carry PGN 65251 (Engine Configuration). So this
-    // path is unexercised on that machine. It stays because a DM1 with two or more
-    // active faults is required by J1939-73 to arrive this way, and the day it
-    // does is the day we most want it.
-    if (st.bamPgn == PGN_DM1) j1939Dm1Parse(st, st.bamBuf, st.bamTotal, st.bamSa);
+  if (b.nextSeq > b.packets) {
+    b.active = false;
+    // In the Cal Poly 5055E corpus and the 2026-09-22 census NO multipacket
+    // session announces DM1, so this path is unexercised on this machine. It
+    // stays because a DM1 with two or more active faults is required by J1939-73
+    // to arrive this way, and the day it does is the day we most want it.
+    j1939Dm1Parse(st, b.buf, b.total, b.sa);
   }
 }
 
 // Abandon a BAM session whose next packet never came.
+inline void j1939Forget(J1939Sig &s, uint32_t now) {
+  if (s.ok && (uint32_t)(now - s.ts) > J1939_SIG_FORGET_MS) s.ok = false;
+}
+
 inline void j1939Tick(J1939State &st, uint32_t now) {
-  if (st.bamActive && (uint32_t)(now - st.bamStartMs) > J1939_BAM_TIMEOUT_MS) st.bamActive = false;
+  for (size_t i = 0; i < J1939_BAM_SESSIONS; i++)
+    if (st.bam[i].active && (uint32_t)(now - st.bam[i].lastMs) > J1939_BAM_TIMEOUT_MS)
+      st.bam[i].active = false;
+  j1939Forget(st.rpm, now);      j1939Forget(st.torquePct, now);
+  j1939Forget(st.loadPct, now);  j1939Forget(st.coolantC, now);
+  j1939Forget(st.oilTempC, now); j1939Forget(st.oilKpa, now);
+  j1939Forget(st.hours, now);    j1939Forget(st.fuelLph, now);
+  j1939Forget(st.battV, now);    j1939Forget(st.keyswV, now);
 }
 
 // One received frame. `len` is the DLC, clamped by the caller to <= 8.
@@ -285,9 +343,9 @@ inline void j1939OnFrame(J1939State &st, bool extended, uint32_t id, const uint8
       break;
 
     case PGN_HOURS:
-      // J1939-71 lists this PGN as on-request for many engines. The 5055E
-      // broadcasts it unprompted (39 of 44 Cal Poly captures, advancing across
-      // sessions), so nothing is ever transmitted to read it.
+      // On-request on the 5055E: every frame answers another ECU's request (SA
+      // 0x06 or 0x17; see J1939_HOURS_STALE_MS). This board reads the answers
+      // and never transmits a request of its own.
       if (len >= 4) {
         const uint32_t raw = j1939Le32(&d[0]);                    // bytes 1-4
         if (!j1939U32Bad(raw)) j1939SigSet(st.hours, raw * 0.05f, now); // SPN 247, 0.05 h/bit
@@ -322,9 +380,9 @@ inline void j1939OnFrame(J1939State &st, bool extended, uint32_t id, const uint8
 
     // BAM is addressed to global (PS = 0xFF). A point-to-point RTS/CTS session is
     // not ours to read, and its TP.DT from the SAME source would otherwise be taken
-    // for the next packet of an open BAM and corrupt it. The 2026-09-22 census has
-    // exactly that: SA 0x00 running RTS/CTS to SA 0x06 (PGN 0xFEE3) during start-up
-    // while also broadcasting BAM.
+    // for the next packet of an open BAM and corrupt it. Both kinds come from SA
+    // 0x00 on this bus (RTS/CTS to SA 0x06 for PGN 0xFEE3, and BAM); the census
+    // does not happen to interleave them, and this check makes sure it never matters.
     case PGN_TPCM:
       if (((id >> 8) & 0xFF) != 0xFF) { st.framesUnknown++; break; }
       if (len >= 8) j1939BamCm(st, d, sa, now);

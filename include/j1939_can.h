@@ -37,6 +37,7 @@ static J1939State canState;
 
 static volatile bool     canActive     = false;  // CAN.begin() succeeded and the drain may run
 static volatile bool     canFiltered   = false;  // hardware acceptance filter in force
+static bool              canWantFilter = false;  // what `canf` last asked for
 static volatile uint32_t canRingFull   = 0;      // drains that found the ring FULL: frames were lost
 static volatile uint32_t canRingHigh   = 0;      // deepest the ring has been, of 32
 static volatile uint32_t canErrEvents  = 0;      // times the driver flagged an error event
@@ -108,16 +109,30 @@ static bool canBegin(bool filtered) {
 // Fallback for a board where no timer was free: drain from loop(), which loses
 // frames during blocking network calls but is better than nothing. Never runs
 // when the timer is on.
+// Under noInterrupts(): the timer path runs at the CAN ISRs' own priority and
+// cannot be preempted by them, but from loop() a CAN error interrupt could land
+// between isError() and clearError() and be wiped out.
 static void canPollFromLoop() {
   if (canTimerOn || !canActive) return;
+  noInterrupts();
   canDrainISR(nullptr);
+  interrupts();
 }
 
 // The `canf` verb: reopen with the filter on or off. Decode state is kept.
+// If a FILTERED reopen fails, fall straight back to unfiltered -- the known-good
+// configuration -- so a failed trial can never leave the board deaf, and the
+// next `canf` still toggles from the state actually in force.
 static bool canSetFilter(bool filtered) {
   canActive = false;               // the ISR stops touching CAN before it is closed
   CAN.end();
-  const bool ok = canOpen(filtered);
+  canWantFilter = filtered;
+  bool ok = canOpen(filtered);
+  if (!ok && filtered) {
+    CAN.end();
+    canWantFilter = false;
+    ok = canOpen(false);
+  }
   canActive = ok;
   return ok;
 }
