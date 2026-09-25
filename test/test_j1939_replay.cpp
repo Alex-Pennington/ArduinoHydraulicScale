@@ -138,6 +138,19 @@ int main(int argc, char **argv) {
           && t.dm1[k].dtc[0].spn == 2825 && t.dm1[k].dtc[1].spn == 100, b);
   }
 
+  // #57: the power-up EEC1 placeholder (torque raw 0 at rpm 0) is not data, but a
+  // raw 0 while the engine turns is kept -- -125 % motoring is real.
+  {
+    static J1939State t; j1939Init(t);
+    const uint8_t first[8]    = {0xF0, 0xFF, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF};   // census _175648 t+0
+    const uint8_t motoring[8] = {0xF0, 0xFF, 0x00, 0x20, 0x1C, 0xFF, 0xFF, 0xFF};   // 900 rpm, torque raw 0
+    j1939OnFrame(t, true, 0x0CF00400, first, 8, 10);
+    check("power-up torque raw 0 at 0 rpm dropped", !t.torquePct.ok && t.torqueWin.n == 0 && t.rpm.ok, "");
+    j1939OnFrame(t, true, 0x0CF00400, motoring, 8, 20);
+    check("torque raw 0 while turning kept (-125)", t.torquePct.ok && t.torquePct.v == -125.0f
+          && t.torqueWin.n == 1, "");
+  }
+
   // More real codes than MAX_DTC: kept at 12, and trunc says so.
   {
     static J1939State t; j1939Init(t);
@@ -174,6 +187,11 @@ int main(int argc, char **argv) {
     snprintf(d, sizeof(d), "n=%lu min %.0f avg %.0f max %.0f", (unsigned long)w.n,
              (double)w.mn, (double)(w.n ? w.sum / w.n : 0), (double)w.mx);
     check("rpm window min <= avg <= max", w.n > 0 && w.mn <= w.sum / w.n && w.sum / w.n <= w.mx, d);
+  }
+  {
+    const J1939Win &w = st.torqueWin;   // #57: no capture should put the -125 placeholder in a window
+    snprintf(d, sizeof(d), "n=%lu min %.0f", (unsigned long)w.n, (double)w.mn);
+    check("torque window min is not the -125 placeholder", w.n > 0 && w.mn > -125.0f, d);
   }
 
   printf("  -- DM1 per source address --\n");

@@ -335,19 +335,29 @@ inline void j1939OnFrame(J1939State &st, bool extended, uint32_t id, const uint8
   const uint8_t  sa  = j1939Sa(id);
 
   switch (pgn) {
-    case PGN_EEC1:
+    case PGN_EEC1: {
+      bool turning = false;
       if (len >= 5) {
         const uint16_t raw = j1939Le16(&d[3]);                    // bytes 4-5
         if (!j1939U16Bad(raw)) {
           j1939SigSet(st.rpm, raw * 0.125f, now);                 // 0.125 rpm/bit
           j1939WinAdd(st.rpmWin, raw * 0.125f);
+          turning = raw > 0;
         }
       }
-      if (len >= 3 && !j1939U8Bad(d[2])) {
+      // THE POWER-UP PLACEHOLDER (#57). The 5055E's FIRST EEC1 after power-up is
+      // F0 FF 00 00 00 FF FF FF: torque byte 0x00 (-125 %) with rpm 0, and every
+      // frame after it carries 0x7D (0 %) -- census candump-2026-09-22_175648.log
+      // t+0.00 s. Taken at face value it became torque_pct_min -125 in the first
+      // key-on window on the tractor. A raw 0 is kept only while the same frame
+      // shows the engine turning, where -125 % can be real (motoring); at 0 rpm it
+      // is the ECU saying nothing yet.
+      if (len >= 3 && !j1939U8Bad(d[2]) && (d[2] != 0 || turning)) {
         j1939SigSet(st.torquePct, (float)d[2] - 125.0f, now);    // SPN 513, 1 %/bit, -125
         j1939WinAdd(st.torqueWin, (float)d[2] - 125.0f);
       }
       break;
+    }
 
     case PGN_EEC2:
       // SPN 92 Engine Percent Load At Current Speed lives HERE, in EEC2 byte 3 --
