@@ -55,7 +55,7 @@ does nothing". Fixed in `sketches/can_mqtt/can_mqtt.ino`.
 | **3** | **22** | `01 FF F4 FE FF 00 FF FF` | **protect lamp ON** |
 
 They disagree: SA 3 raises the protect lamp while the other three report nothing. My
-skeleton kept one global DM1 store, so at 1 Hz it would have flapped between four ECUs
+skeleton kept one global DM1 store, so it would have flapped between four ECUs
 and reported whichever spoke last — and a retained MQTT topic would have frozen on an
 arbitrary one. Now tracked per source address, published to `plc4/jd5055e/dtc/<sa>`, one
 retained topic per ECU.
@@ -77,6 +77,10 @@ columns matter independently of the DTC list. The dashboard already shows both.
 ## Four bench questions answered early
 
 ### Engine hours is broadcast — nothing needs to be transmitted
+
+> **CORRECTED 2026-09-25 (#52): hours are NOT broadcast; they are request-answered.**
+> The conclusion (we need not transmit) holds, but for a different reason. See
+> *Correction, 2026-09-25* at the end of this file.
 
 This was the big open one, because the alternative was sending PGN requests onto a live
 tractor bus. PGN 65253 appears in **39 of 44 captures**, unprompted, from source 0.
@@ -164,3 +168,36 @@ The bench list in `REPORT.md` §8 is shortened, not retired:
 - **Bus load is theirs, not ours.** A different options list changes the frame rate.
 - **A 2021 machine may differ from a 2018-19 one** in PGN set and in which SPNs are
   populated. SPN 168 being dead on theirs is suggestive, not binding.
+
+## Correction, 2026-09-25 — hours and DM1 cadence (#52)
+
+**Engine hours are request-answered, not broadcast.** Section "Engine hours is broadcast"
+counted which captures CONTAIN PGN 65253 and read presence as "unprompted". It is not:
+
+| source | hours frames | requests for 65253 (PGN 59904, data `E5 FE 00`) | requesters |
+|---|---|---|---|
+| Cal Poly corpus, 44 captures | 291 | 291 | SA 6 → global (251), SA 23 → SA 0 (40) |
+| our census 2026-09-22 (`candump-2026-09-22_*.log`) | every one | one before each, ~5 ms earlier | SA 0x06 → global, SA 0x17 → SA 0x00 |
+
+In our census the pattern is 1 Hz for ~5 s after power-up, then a pair every 30.0 s.
+**The answer to #23 is unchanged:** we do not transmit, because other ECUs already ask
+and a listener receives the replies. What changes is freshness: hours are only as current
+as those requests. The firmware's staleness window for hours is therefore 90 s, not 5 s.
+
+**DM1 is not a 1 Hz broadcast on this model.** Corpus: 2 DM1 frames per ECU per capture,
+~5 s apart (median over 93 capture/ECU pairs). Our census: about 2 per ECU around
+key-on/start, and none in 75 s of key-on idle. The per-SA conclusion above stands.
+
+Reproduce (corpus cloned as in the header):
+
+    python3 - <<'PY'
+    import csv, glob
+    h = r = 0
+    for f in glob.glob('/tmp/CAN-data/*/logs/*.csv'):
+        for x in csv.DictReader(open(f)):
+            p, d = x['pgn'], x['data'].split()
+            h += p == '65253'
+            r += p == '59904' and d[:3] == ['E5', 'FE', '00']
+    print('hours', h, 'requests', r)
+    PY
+
