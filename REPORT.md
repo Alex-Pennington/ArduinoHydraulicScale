@@ -101,8 +101,10 @@ answered four of the bench questions in §8**. It is written up in full in
   fault state would have reported whichever spoke last.
 - **The not-available DTC record is not `FF` padding** — the 5055E sends `F4 FE FF 00`
   with a lit protect lamp, which my guard would have turned into a phantom DTC 524020.
-- **Engine hours is broadcast unprompted**, so nothing needs transmitting (§6, and it
-  retires most of issue #23).
+- **Engine hours need no transmission from us** — but NOT because they are broadcast.
+  *Corrected 2026-09-25 (#52):* every hours frame answers a PGN request from another ECU
+  (SA 6 to global, SA 23/0x17 to the engine). Other ECUs ask, so a listener gets the
+  answers (§6). Issue #23 stays retired.
 - **Battery voltage is SPN 158, not SPN 168** — 168 was not-available in all 1206 frames.
 
 Their machine is not our machine: different year, different options, captured 2018–19.
@@ -223,11 +225,11 @@ Multi-byte values are little-endian on the wire.
 | 65262 | ET1 | Engine coolant temperature | 110 | 1 | 1 °C/bit | −40 | 1 s |
 | 65262 | ET1 | Engine oil temperature | 175 | 3–4 | 0.03125 °C/bit | −273 | 1 s |
 | 65263 | EFL/P1 | Engine oil pressure | 100 | 4 | 4 kPa/bit | 0 | 500 ms |
-| 65253 | HOURS | Engine total hours of operation | 247 | 1–4 | 0.05 h/bit | 0 | **broadcast here** |
+| 65253 | HOURS | Engine total hours of operation | 247 | 1–4 | 0.05 h/bit | 0 | **on request, by SA 6/23; ~30 s pairs** |
 | 65266 | LFE | Engine fuel rate | 183 | 1–2 | 0.05 L/h per bit | 0 | 100 ms |
 | 65271 | VEP1 | Battery potential / power input 1 | 168 | 5–6 | 0.05 V/bit | 0 | *never populated* |
 | **65271** | **VEP1** | **Keyswitch battery potential — USE THIS ONE** | **158** | **7–8** | 0.05 V/bit | 0 | 1 s |
-| 65226 | DM1 | Active DTCs | — | 1–2 lamps, then 4/DTC | — | — | 1 s |
+| 65226 | DM1 | Active DTCs | — | 1–2 lamps, then 4/DTC | — | — | **~2 per ECU around key-on/start, not 1 s** |
 
 **Two traps in that table.**
 
@@ -236,12 +238,23 @@ percent load at current speed, is in **EEC2 (61443) byte 3**, offset 0. EEC1 byt
 *actual percent torque*, SPN 513, offset **−125**. Decoding one as the other yields a
 number that looks like a percentage and is wrong by 125.
 
-*Hours: no longer a worry.* J1939-71 lists PGN 65253 as on-request for most engines,
-which would have meant **transmitting** a request (PGN 59904) onto the tractor bus. The
-5055E does not need it: hours appears in **39 of 44** Cal Poly captures, unprompted, and
-advances across sessions (138.15 h → 156.35 h) — which also confirms the 0.05 h/bit
-scaling, since a wrong one would not advance plausibly. Confirm on our own machine, but
-plan for listening, not asking.
+*Hours: no longer a worry — but the reason given here first was wrong.* J1939-71 lists
+PGN 65253 as on-request for most engines, which would have meant **transmitting** a
+request (PGN 59904) onto the tractor bus. We do not have to: **other ECUs already ask.**
+
+*Corrected 2026-09-25 (#52).* This paragraph first said hours were broadcast unprompted,
+because they appear in 39 of 44 Cal Poly captures. Presence is not cause. In that corpus
+there are 291 hours frames and exactly 291 requests for 65253, from SA 6 (to global) and
+SA 23 (to the engine). In our own 2026-09-22 census, every `18FEE500` follows an
+`18EA..` request carrying `E5 FE 00` about 5 ms earlier: 1 Hz for ~5 s at power-up, then
+a pair every 30 s. The firmware reads the answers without transmitting, so hours are
+only as fresh as those ECUs make them (the firmware's staleness window is 90 s). The
+scaling evidence (138.15 h → 156.35 h, advancing across sessions) stands.
+
+*DM1 is not 1 Hz here either.* In the census each ECU sends DM1 about twice around
+key-on/start and not at all in 75 s of key-on idle. In the corpus it sends 2 per ECU per
+capture, ~5 s apart. A DTC topic's age measures the board's last publish, not the ECU's
+last word.
 
 *And a third trap the corpus caught: battery voltage.* SPN 168 is the standard's primary
 "battery potential" and it is **not-available in all 1206 VEP1 frames** on the 5055E —
@@ -314,7 +327,8 @@ Ordered so that each one can kill the next cheaply. The first two need no tracto
    250k before concluding anything.
 4. **Which PGNs actually appear, at what rate, and from which source addresses?**
    *Provisionally answered by the Cal Poly corpus* — every PGN we want is present, engine
-   data all from SA 0, DM1 from SA 3/6/23/71, hours broadcast unprompted. Still run
+   data all from SA 0, DM1 from SA 3/6/23/71, hours answered to other ECUs' requests
+   (corrected 2026-09-25, #52; first written as "broadcast unprompted"). Still run
    `can_sniff` to confirm it for our machine and year, but this is now a check rather
    than a discovery.
 5. **What is the real frame rate?** Decides whether hardware filtering is mandatory or

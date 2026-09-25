@@ -64,7 +64,7 @@ static const uint32_t PGN_EEC1  = 61444;  // engine speed, actual percent torque
 static const uint32_t PGN_EEC2  = 61443;  // engine percent load at current speed
 static const uint32_t PGN_ET1   = 65262;  // coolant temp, oil temp
 static const uint32_t PGN_EFLP1 = 65263;  // oil pressure
-static const uint32_t PGN_HOURS = 65253;  // total engine hours  -- MAY BE REQUEST-ONLY
+static const uint32_t PGN_HOURS = 65253;  // total engine hours -- answered to OTHER ECUs' requests (#52)
 static const uint32_t PGN_LFE   = 65266;  // fuel rate
 static const uint32_t PGN_VEP1  = 65271;  // battery potential
 static const uint32_t PGN_DM1   = 65226;  // active DTCs
@@ -133,7 +133,7 @@ static const size_t MAX_DTC = 12;
 // DM1 IS PER SOURCE ADDRESS, NOT PER MACHINE. In the Cal Poly 5055E corpus four
 // distinct ECUs publish DM1 -- source addresses 3, 6, 23 and 71 -- and they disagree:
 // SA 3 raises the protect lamp while the other three report no faults. A single global
-// DM1 store would flap between them at 1 Hz and report whichever ECU spoke last.
+// DM1 store would flap between them and report whichever ECU spoke last.
 static const size_t MAX_DM1_SRC = 6;
 
 struct Dm1Src {
@@ -322,12 +322,12 @@ static void onFrame(const CanMsg &msg, uint32_t now) {
       break;
 
     case PGN_HOURS: {
-      // J1939-71 lists this PGN as on-request for many engines, which would have
-      // meant TRANSMITTING a request onto the tractor bus to read hours. It does
-      // not apply here: the 5055E broadcasts it unprompted. It appears in 39 of
-      // the 44 Cal Poly captures, and it advances across them (138.15 h, then
-      // 147.55 h in the later session), which also confirms the 0.05 h/bit
-      // scaling. Nothing needs to be transmitted.
+      // J1939-71 lists this PGN as on-request for many engines, and on the 5055E
+      // it IS: every frame answers a request from SA 6 (global) or SA 23 (to the
+      // engine) -- 291 frames and 291 requests in the Cal Poly corpus, and the
+      // same in our 2026-09-22 census (corrected 2026-09-25, #52; this comment
+      // first said "broadcasts it unprompted"). Nothing needs to be transmitted:
+      // other ECUs ask, and this sketch only listens to the answers.
       if (msg.data_length >= 4) {
         const uint32_t raw = le32(&d[0]);                    // bytes 1-4
         if (!u32Bad(raw)) sigSet(sigHours, raw * 0.05f, now); // SPN 247, 0.05 h/bit
