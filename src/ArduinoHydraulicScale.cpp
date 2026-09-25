@@ -20,6 +20,7 @@
 #include "mcp3421.h"
 #include "lcd2004.h"
 #include "ina219.h"
+#include "j1939_can.h"   // issue #24: the tractor's J1939 bus, decoded in a timer ISR
 
 // ---------------------------------------------------------------------------
 // Console: the HC-05 on Serial1 (D0/D1) is the field interface, but the board
@@ -303,6 +304,18 @@ int overRangeMaxCounts = 0;
 unsigned long underRangeCount = 0;
 const unsigned long STATUS_MS = 60000;   // heartbeat; also published immediately on connect
 const unsigned long TELEMETRY_MS = 5000;
+// Engine data off the J1939 bus (issue #24). Its own cadence, not TELEMETRY_MS:
+// the scale's 5 s is a weighing cadence and engine numbers do not need it.
+const unsigned long ENGINE_MS = 15000;
+unsigned long lastEngineMs = 0;
+// DTC publishes are QoS 1 and each can spin up to MQTT_CONNECT_TIMEOUT_MS for its
+// PUBACK. Rate-limited whether they succeed or not -- a failed one used to be
+// retried on the very next pass, 2 s at a time, which is the stall this file
+// already refuses for publishStatus(). A failure backs off for longer.
+const unsigned long DTC_GAP_MS     = 2000;
+const unsigned long DTC_BACKOFF_MS = 30000;
+unsigned long nextDtcMs = 0;
+bool canUp = false;
 
 // --- RAM backlog queue -----------------------------------------------------
 // Ruled by Alex 2026-09-01: RAM only. A queued reading need not survive a power
@@ -536,6 +549,125 @@ static void queueFlush() {
     queueHead = (queueHead + 1) % QUEUE_DEPTH;
     queueCount--;
     WDT.refresh();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// J1939 engine data (issue #24). REPORT.md §7 is the contract:
+//
+//   plc4/jd5055e/engine    QoS 0, NOT retained, every ENGINE_MS -- the numbers
+//   plc4/jd5055e/dtc/<sa>  QoS 1, RETAINED, on change            -- fault state, PER ECU
+//
+// VALIDITY: absent keys are OMITTED. This is PLC1/PLC3's convention and
+// deliberately NOT the one the scale's telemetry uses: J1939 says "not available"
+// in the wire value itself, so an absent reading is genuinely absent rather than
+// suspect. The consumer handler must be written to the omission contract.
+//
+// The CAN counters are always present, so a consumer can tell a quiet bus (key
+// off: `frames` stops moving) from a board with no CAN at all (`can_up` false)
+// from frames being lost (`ring_full` climbing).
+// ---------------------------------------------------------------------------
+static size_t appendSig(char *buf, size_t cap, size_t n, const char *key,
+                        const J1939Sig &s, int decimals, uint32_t now,
+                        uint32_t staleMs = J1939_SIG_STALE_MS) {
+  if (!j1939SigFresh(s, now, staleMs) || n >= cap) return n;
+  int w = snprintf(buf + n, cap - n, "\"%s\":%.*f,", key, decimals, (double)s.v);
+  return (w > 0) ? n + (size_t)w : n;
+}
+
+// Append "<key>_min","<key>_max","<key>_avg" for one window, or nothing when the
+// window saw no valid sample -- the same omission contract as a stale signal.
+static size_t appendWin(char *buf, size_t cap, size_t n, const char *key,
+                        const J1939Win &w, int decimals) {
+  if (w.n == 0 || n >= cap) return n;
+  int k = snprintf(buf + n, cap - n, "\"%s_min\":%.*f,\"%s_max\":%.*f,\"%s_avg\":%.*f,",
+                   key, decimals, (double)w.mn, key, decimals, (double)w.mx,
+                   key, decimals, (double)(w.sum / (float)w.n));
+  return (k > 0) ? n + (size_t)k : n;
+}
+
+// Called every ENGINE_MS whether or not the broker is up: the min/max/mean
+// windows are taken and reset on the same 15 s grid either way, so a published
+// window never silently spans an outage. publishTo() refuses when offline.
+static void publishEngine() {
+  CanSigSnapshot c;
+  canSnapshotSigs(c);
+  CanWinSnapshot win;
+  canTakeWindows(win);
+  const uint32_t now = millis();   // read AFTER the snapshot, never the loop's older clock
+  if (netState != NET_ONLINE) return;
+  char p[704];
+  size_t n = 0;
+  n += snprintf(p + n, sizeof(p) - n, "{");
+  n = appendSig(p, sizeof(p), n, "rpm",        c.rpm,       0, now);
+  n = appendSig(p, sizeof(p), n, "load_pct",   c.loadPct,   0, now);
+  n = appendSig(p, sizeof(p), n, "torque_pct", c.torquePct, 0, now);
+  n = appendSig(p, sizeof(p), n, "coolant_c",  c.coolantC,  1, now);
+  n = appendSig(p, sizeof(p), n, "oil_temp_c", c.oilTempC,  1, now);
+  n = appendSig(p, sizeof(p), n, "oil_kpa",    c.oilKpa,    0, now);
+  n = appendSig(p, sizeof(p), n, "fuel_lph",   c.fuelLph,   2, now);
+  n = appendSig(p, sizeof(p), n, "batt_v",     c.battV,     2, now);
+  n = appendSig(p, sizeof(p), n, "keysw_v",    c.keyswV,    2, now);
+  n = appendSig(p, sizeof(p), n, "hours",      c.hours,     2, now, J1939_HOURS_STALE_MS);
+  n = appendSig(p, sizeof(p), n, "fuel_level_pct", c.fuelLevelPct, 1, now);
+  n = appendSig(p, sizeof(p), n, "hyd_oil_c",  c.hydOilC,   0, now);
+  n = appendWin(p, sizeof(p), n, "rpm",        win.rpm,     0);
+  n = appendWin(p, sizeof(p), n, "load_pct",   win.load,    0);
+  n = appendWin(p, sizeof(p), n, "torque_pct", win.torque,  0);
+  if (n >= sizeof(p)) return;
+  snprintf(p + n, sizeof(p) - n,
+           "\"frames\":%lu,\"unknown\":%lu,\"ring_full\":%lu,\"ring_high\":%lu,"
+           "\"can_err\":%lu,\"can_last\":%d,\"drains\":%lu,\"can_up\":%s,\"filt\":%s,\"id\":\"%s\"}",
+           (unsigned long)c.framesSeen, (unsigned long)c.framesUnknown,
+           (unsigned long)canRingFull, (unsigned long)canRingHigh,
+           (unsigned long)canErrEvents, (int)canLastErr, (unsigned long)canDrains,
+           canUp ? "true" : "false",
+           canFiltered ? "true" : "false", CLIENT_ID);
+  publishTo("engine", p);
+}
+
+// One message PER SOURCE ADDRESS, on its own retained topic: the retained message
+// is the current state, and four ECUs have four current states. At most ONE per
+// loop pass, because each is a QoS 1 publish that spins for its PUBACK.
+static void publishNextDtc() {
+  if (netState != NET_ONLINE) return;
+  if ((long)(millis() - nextDtcMs) < 0) return;
+  for (size_t i = 0; i < J1939_MAX_DM1_SRC; i++) {
+    J1939Dm1Src s;
+    if (!canDm1TakeDirty(i, s)) continue;
+
+    char leaf[16];
+    snprintf(leaf, sizeof(leaf), "dtc/%u", (unsigned)s.sa);
+    char topic[64];
+    if (!buildTopic(leaf, topic, sizeof(topic))) return;
+
+    char p[448];
+    size_t n = 0;
+    n += snprintf(p + n, sizeof(p) - n,
+                  "{\"sa\":%u,\"n\":%u,\"mil\":%u,\"rsl\":%u,\"awl\":%u,\"pl\":%u,\"dtc\":[",
+                  (unsigned)s.sa, (unsigned)s.count, (unsigned)s.lampMil,
+                  (unsigned)s.lampRed, (unsigned)s.lampAmber, (unsigned)s.lampProtect);
+    // `trunc` is true when the ECU sent more real codes than the board keeps
+    // (J1939_MAX_DTC) or than fit this buffer, so `n` alone never hides a loss.
+    bool trunc = s.trunc;
+    for (uint8_t k = 0; k < s.count; k++) {
+      if (n >= sizeof(p) - 64) { trunc = true; break; }
+      n += snprintf(p + n, sizeof(p) - n, "%s{\"spn\":%lu,\"fmi\":%u,\"oc\":%u}",
+                    k ? "," : "", (unsigned long)s.dtc[k].spn,
+                    (unsigned)s.dtc[k].fmi, (unsigned)s.dtc[k].oc);
+    }
+    snprintf(p + n, sizeof(p) - n, "],\"trunc\":%s,\"id\":\"%s\"}",
+             trunc ? "true" : "false", CLIENT_ID);
+
+    // Retained, QoS 1, STREAMED with its size -- the same form as publishStatus().
+    bool ok = false;
+    if (mqttClient.beginMessage(topic, (unsigned long)strlen(p), true, 1)) {
+      mqttClient.print(p);
+      ok = (mqttClient.endMessage() == 1);
+    }
+    if (ok) canDm1MarkPublished(i, s.fingerprint);
+    nextDtcMs = millis() + (ok ? DTC_GAP_MS : DTC_BACKOFF_MS);
+    return;
   }
 }
 
@@ -1260,6 +1392,7 @@ static void netPoll() {
 
   publishStatus(now);      // say we are here, and on what terms, before any data
   queueFlush();                                          // was C6: no reconnect path at all
+  canDm1ForceDirty();      // re-assert every ECU's retained fault state on this connection
 }
 
 // Probe every 7-bit address on Wire1 and report what answers. Bring-up only —
@@ -1444,6 +1577,15 @@ void setup() {
   Console.print("heartbeat wdt = ");
   Console.println(hb ? "on" : "UNAVAILABLE - resets during network calls");
 
+  // CAN AFTER the heartbeat timer, so the watchdog gets the first free timer and
+  // CAN can never be the reason it has none. Filter OFF at boot: it has never run
+  // on silicon (see J1939_FILTER_MASK); `canf` turns it on at the machine.
+  canUp = canBegin(false);
+  Console.print("can = ");
+  Console.print(canUp ? "up 250k D10/D13" : "BEGIN FAILED");
+  Console.print(", drain ");
+  Console.println(canTimerOn ? "timer 200 Hz" : "loop (NO TIMER - frames lost during network calls)");
+
   // Seeds the freshness clock so the first READING_STALE_MS after boot is not
   // reported stale before any sample cycle has completed.
   lastReadingMs = millis();
@@ -1581,6 +1723,7 @@ static void hmiPoll() {
 void loop() {
   unsigned long currentMillis = millis();
   loopHeartbeatMs = currentMillis;   // the ISR refreshes the watchdog only while this moves
+  canPollFromLoop();                 // a no-op unless the CAN drain timer was unavailable
 
   // --- power monitor: slow, optional, and never in the weighing path --------
   // Two I2C reads every INA_POLL_MS. It flips the mux to ch2 and the sampler
@@ -1732,6 +1875,7 @@ void loop() {
     // goes to /weight. The old firmware had these inverted.
     publishTo("telemetry", payload);
   }
+
 
   hmiPoll();
 
@@ -1893,6 +2037,54 @@ void loop() {
         Console.println(calFactor);
       }
     }
+    // `can` and `canf` MUST sit above the bare 'c' branch below, which would
+    // otherwise take them as a calibration factor and reject them.
+    //
+    // CONSOLE ONLY, ENFORCED HERE. They are not on the MQTT allowlist, but the
+    // allowlisted arg-taking verb `c` is concatenated with its arg before it
+    // reaches this chain, so {"verb":"c","arg":"anf"} arrives as "canf". An
+    // MQTT-originated command always has ackPending set by this point, so both
+    // refuse it -- and the ack says so instead of reporting "set".
+    else if ((inputString == "can" || inputString == "canf") && ackPending) {
+      verbRefused = true;
+      snprintf(verbRefusedReason, sizeof(verbRefusedReason), "CONSOLE ONLY");
+      Console.println("can/canf: console only, refused over MQTT");
+    }
+    else if (inputString == "can") {
+      CanSigSnapshot c;
+      canSnapshotSigs(c);
+      const uint32_t now = millis();
+      Console.print("can = ");      Console.println(canUp ? "up" : "DOWN");
+      Console.print("drain = ");    Console.println(canTimerOn ? "timer" : "loop");
+      Console.print("drains = ");   Console.println((unsigned long)canDrains);
+      Console.print("filter = ");   Console.print(canFiltered ? "on" : "off");
+      if (canWantFilter != canFiltered) Console.print(" (asked on, REOPEN FAILED, fell back)");
+      Console.println();
+      Console.print("frames = ");   Console.println((unsigned long)c.framesSeen);
+      Console.print("unknown = ");  Console.println((unsigned long)c.framesUnknown);
+      Console.print("ring_full = "); Console.println((unsigned long)canRingFull);
+      Console.print("ring_high = "); Console.println((unsigned long)canRingHigh);
+      Console.print("can_err = ");  Console.print((unsigned long)canErrEvents);
+      Console.print(" last ");      Console.println(canLastErr);
+      Console.print("rpm = ");      if (j1939SigFresh(c.rpm, now)) Console.println(c.rpm.v, 1); else Console.println("--");
+      Console.print("coolant_c = "); if (j1939SigFresh(c.coolantC, now)) Console.println(c.coolantC.v, 1); else Console.println("--");
+      Console.print("oil_kpa = ");  if (j1939SigFresh(c.oilKpa, now)) Console.println(c.oilKpa.v, 0); else Console.println("--");
+      Console.print("keysw_v = ");  if (j1939SigFresh(c.keyswV, now)) Console.println(c.keyswV.v, 2); else Console.println("--");
+      Console.print("fuel_level_pct = "); if (j1939SigFresh(c.fuelLevelPct, now)) Console.println(c.fuelLevelPct.v, 1); else Console.println("--");
+      Console.print("hyd_oil_c = "); if (j1939SigFresh(c.hydOilC, now)) Console.println(c.hydOilC.v, 0); else Console.println("--");
+      Console.print("hours = ");    if (j1939SigFresh(c.hours, now, J1939_HOURS_STALE_MS)) Console.println(c.hours.v, 2); else Console.println("--");
+    }
+    else if (inputString == "canf") {
+      // Toggle the hardware acceptance filter and reopen the controller. The
+      // evidence it works is `unknown` growing far slower while `rpm` et al.
+      // stay fresh; if engine values go to "--" with it on, turn it back off.
+      const bool asked = !canFiltered;
+      canUp = canSetFilter(asked);
+      Console.print("can filter = ");
+      Console.println(canFiltered ? "on" : "off");
+      if (asked && !canFiltered && canUp) Console.println("filtered reopen FAILED; back on unfiltered");
+      if (!canUp) Console.println("can REOPEN FAILED -- power-cycle the board");
+    }
     else if (inputString.charAt(0) == 'c') {
       // A7: main added this direct setter with no validation at all.
       inputString.remove(0, 1);
@@ -2050,6 +2242,16 @@ void loop() {
     cmdRemember(ackId, ackVerb, ok, detail);
     cmdAck(ackId, ackVerb, ok, detail, false, ok && strcmp(ackVerb, "+") == 0);
   }
+
+  // Engine data LAST in the pass, after any command has run and been acked. A
+  // DTC publish can spin for its PUBACK; sitting between cmdPoll() and the
+  // handler, that spin could age the reading and get a queued phone command
+  // refused as stale -- the hazard publishStatus() is already rate-limited for.
+  if (millis() - lastEngineMs >= ENGINE_MS) {
+    lastEngineMs = millis();
+    publishEngine();         // takes the windows on schedule even offline; publishes only online
+  }
+  publishNextDtc();          // faults go out on change, rate-limited
 }
 
 void printDebug()
