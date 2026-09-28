@@ -1,64 +1,61 @@
 # Known Defects — PLC #4 Tractor Scale
-## Defect Register
 
-PHOENIX NEST LLC · PLC #4
 **Document:** 05 — Known Defects
-**Firmware:** EEPROM signature PL4B
-**Controller:** Arduino Uno R4 WiFi
+**Firmware:** build `699e3c6c`
 
-What is known to be wrong with this machine, and what to do about each one until it is fixed. A
-register that cannot say what is open is not a register, so status is the subject here.
+What is known to be wrong with this machine, and what to do about each one until it is fixed.
 
 ## Open
 
-### D1 — A refused zero destroys the undo target
+### D4 — can_err can miss a driver error event
 
-Setting zero is refused when the loop is not healthy, but the value the undo would have restored
-is overwritten before the refusal. A later undo then returns nothing and reports success.
+The CAN driver reports an error event only when the event carries exactly one flag. An event with
+more than one flag set, such as a lost mailbox message together with an error, is not counted in
+`can_err`.
 
-**Do not rely on undo after a refused zero.** Set zero again deliberately, with the bucket empty
-at the boom mark, rather than undoing back to a previous one.
+**Do not read `can_err` 0 and `ring_full` 0 as proof that no frame was lost.** They prove only that
+the board's own receive ring never filled.
 
-Tracked as issue 3.
+Tracked as issue 53.
 
-### D2 — The live stream carries a weight during a fault
+### D5 — torque_pct can read -125 with the engine stopped
 
-Telemetry publishes a weight field on every cycle, including while the reading is held rather
-than current. The sensor state and the staleness flag beside it both say so, but the number is
-still on the wire.
+In build `699e3c6c` an engine torque byte of 0 decodes as -125 % and enters both `torque_pct` and
+the `torque_pct_min`/`_max`/`_avg` window, whatever the engine speed. A frame the ECU sends with a
+torque byte of 0 at 0 rpm, such as at power-up, therefore publishes `torque_pct` -125 and pulls
+`torque_pct_min` to -125 for that window.
 
-**A consumer must read the sensor state and the staleness flag, not the weight alone.** A weight
-accompanied by anything other than a healthy state and a false staleness flag is not a live
-reading. Recorded weights are unaffected: the machine refuses to record one while the reading
-cannot be trusted, so a stale weight never reaches the record.
+**Disregard a `torque_pct` or `torque_pct_min` of -125 in a window where `rpm` is 0 or absent.**
+
+Tracked as issue 57.
+
+## Closed in this build
+
+### D2 — Telemetry weight during a fault
+
+Telemetry `w` publishes null whenever `psi` does: when the loop is not measuring or the converter
+has stopped answering.
 
 Tracked as issue 5.
 
-## Closed by the current firmware
+### D3 — Supply rail as a gain term
 
-### D3 — The supply rail was a gain term on every reading
-
-The board's own converter measured against its supply rail, so every pressure reading scaled with
-a voltage that was never measured and that moves with load and with the source.
-
-Closed. The converter now carries its own voltage reference and the supply rail no longer enters
-the measurement.
+The converter carries its own voltage reference, so the board's supply rail does not enter the
+measurement.
 
 Tracked as issue 4.
 
 ## Standing hazards, not defects
 
-These are properties of the build. Nothing is broken and nothing is being fixed; they are here
-because each one has cost time at the machine.
+Properties of the build. Nothing is broken and nothing is being fixed.
 
 | Hazard | What to do |
 |---|---|
-| A burden of the wrong value reads plausibly and clips silently | Fit 68 Ω. Larger values clip below full scale and can exceed what the converter tolerates |
-| A bus scan finding nothing means the trunk or the multiplexer | The converter and the display fall silent together and neither is at fault |
-| The full-scale setting is not stored | Set it again after every reset, or the scale reads wrong with no sign on the display |
-| A held reading looks steadier than a live one | The filter freezes on a fault, so a stale number is rock-steady rather than drifting |
+| `+` records a negative weight when the tare is stale | Tare at the boom mark, bucket empty, before each weighing session |
+| The full-scale setting `sm` is not stored | Set it again after every reset, or leave it at the built-in 3000 psi |
+| The CAN hardware filter has not been proven on the board | If engine values stop arriving with `canf` on, turn it off again with `canf` |
 
 ## See also
 
-`02` §*Connections* for the burden and where it belongs in the loop.
+`06` §*The full-scale setting does not persist* for what a lost `sm` does to the reading.
 `03` §*Staleness is a separate question* for what a consumer must read.

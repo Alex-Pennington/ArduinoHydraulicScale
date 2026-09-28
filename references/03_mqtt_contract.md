@@ -1,28 +1,29 @@
 # MQTT Contract — PLC #4 Tractor Scale
-## Cabinet Reference Card
 
-PHOENIX NEST LLC · PLC #4
 **Document:** 03 — MQTT Contract
-**Firmware:** EEPROM signature PL4B
-**Controller:** Arduino Uno R4 WiFi
+**Firmware:** build `699e3c6c`
 
-Five topics under one root. A consumer that reads only the weight topic gets every deliberate
+Seven topics under one root. A consumer that reads only the weight topic gets every deliberate
 record; a consumer that reads only telemetry gets a live stream and no record of what the operator
-chose to keep.
+chose to keep. Engine data and fault codes come off the tractor's J1939 bus and never affect the
+weight.
 
 ## Topics
 
 | Topic | Direction | Retain | Quality | Published when |
 |---|---|---|---|---|
-| `plc4/jd5055e/weight` | Outbound | no | 0 | The operator records a weight, and again for each queued weight on reconnect |
-| `plc4/jd5055e/telemetry` | Outbound | no | 0 | On a repeating cycle while connected |
-| `plc4/jd5055e/status` | Outbound | yes | 1 | On a slower cycle, by the machine |
+| `plc4/jd5055e/weight` | Outbound | no | 0 | The operator records a weight; queued weights on reconnect and on each telemetry cycle while any remain |
+| `plc4/jd5055e/telemetry` | Outbound | no | 0 | Every 5 s while connected |
+| `plc4/jd5055e/status` | Outbound | yes | 1 | On connect, then every 60 s |
 | `plc4/jd5055e/status` | Outbound | yes | 0 | Once, by the broker, if the machine drops without disconnecting |
-| `plc4/jd5055e/cmd` | Inbound | no | 1 | Whenever the app or the console sends a command |
-| `plc4/jd5055e/ack` | Outbound | no | 0 | Once per received command, including a repeat |
+| `plc4/jd5055e/engine` | Outbound | no | 0 | Every 15 s while connected |
+| `plc4/jd5055e/dtc/<sa>` | Outbound | yes | 1 | When one engine control unit's fault state changes, and for every unit on reconnect |
+| `plc4/jd5055e/cmd` | Inbound | no | 1 | Whenever the app sends a command |
+| `plc4/jd5055e/ack` | Outbound | no | 0 | Once per command received with a usable `id`, including a repeat |
 
 The root is one constant and every topic is built from it. A topic that would not fit its buffer is
-refused rather than published to a truncated stub.
+refused rather than published to a truncated stub. Every outbound payload carries `id`, the
+machine's client identifier `plc4-jd5055e`.
 
 ## Weight
 
@@ -31,7 +32,13 @@ is what the machine kept.
 
 ```json
 {"w":1834,"age_ms":0,"backlog":false,"sensor":"ok","cal":"ok",
- "n":12,"total":19408,"id":"..."}
+ "n":12,"total":19408,"id":"plc4-jd5055e"}
+```
+
+A replayed weight, held on the machine and published later:
+
+```json
+{"w":1834,"age_ms":42235,"backlog":true,"sensor":"ok","cal":"ok","id":"plc4-jd5055e"}
 ```
 
 | Field | Meaning |
@@ -41,21 +48,25 @@ is what the machine kept.
 | `backlog` | True when this was held on the machine and published later |
 | `sensor` | Loop state at the moment of capture, not at the moment of publication |
 | `cal` | `ok`, or `DEFAULT` when the machine was uncalibrated at capture |
-| `n` | Entries in the tally after this one |
-| `total` | Running total of the tally after this one |
+| `n` | Entries in the tally after this one. Live records only |
+| `total` | Running total of the tally after this one. Live records only |
 
 > **The running total arrives with the record that moved it.** A consumer never has to add the
 > weights up itself, and never races a message it has not seen yet. The status topic carries the
 > same figure, but only once a minute.
 
-> **A replayed weight carries no total.** The figure would be today's, standing beside a weight
-> captured before the link dropped — a true number in a position that makes it read as the total
-> at the time of capture.
+> **A replayed weight carries no `n` and no `total`.** The figures would be today's, standing
+> beside a weight captured before the link dropped — a true number in a position that makes it
+> read as the total at the time of capture.
 
 > **Treat `backlog` and `age_ms` as part of the reading.** A buffered weight published bare is
 > worse than not buffering at all, because the consumer cannot tell it from a fresh one. A record
 > captured during a fault carries the fault state it was captured under, so a later publication
 > can never claim the sensor was healthy.
+
+The machine holds up to 200 weights in RAM while the broker is out of reach. A 201st drops the
+oldest and counts it in `dropped`. The queue does not survive a reset. On replay the weights go out
+back to back with no pacing, oldest first, and replay stops at the first failed publish.
 
 ## Telemetry
 
@@ -63,7 +74,7 @@ The live stream. Nothing here was chosen by the operator.
 
 ```json
 {"w":1834,"psi":2850,"mA":19.21,"counts":5231,"sensor":"ok",
- "stale":false,"psi_fault":null,"queued":0,"id":"..."}
+ "stale":false,"psi_fault":null,"queued":0,"id":"plc4-jd5055e"}
 ```
 
 | Field | Meaning |
@@ -94,21 +105,23 @@ the last one published.
 {"up":true,"cal":"ok","sensor":"ok","stale":false,"tare":412,"cf":0.51230,
  "n":12,"total":19408,"q":0,"dropped":0,"uptime_s":8130,"rssi":-58,"overrange":0,
  "overrange_max":0,"underrange":0,"i2c_err":0,"vbus":13.120,
- "shunt_mv":-12.710,"ina_err":0,"build":"d57002a1","reset":"...","id":"..."}
+ "shunt_mv":-12.710,"ina_err":0,"build":"699e3c6c","reset":"...","id":"plc4-jd5055e"}
 ```
 
 | Field | Meaning |
 |---|---|
 | `up` | True while running. The will publishes false |
 | `cal` | `ok`, or `DEFAULT` when no stored calibration was accepted |
-| `tare`, `cf` | The stored zero and the calibration factor |
+| `sensor`, `stale` | Loop state, and whether the reading is held rather than current |
+| `tare`, `cf` | The stored zero in converter counts, and the calibration factor |
 | `n`, `total` | Entries in the tally, and their running total |
-| `q`, `dropped` | Weights waiting to publish, weights lost |
+| `q`, `dropped` | Weights waiting to publish, weights lost from a full queue |
 | `uptime_s`, `rssi`, `reset` | Seconds running, radio strength, why the board last restarted |
 | `build` | The source commit this firmware was compiled from |
-| `overrange`, `overrange_max`, `underrange` | Counts of readings past each end of the band |
-| `i2c_err`, `ina_err` | Sensor-bus failures since power-on. Neither resets |
-| `vbus`, `shunt_mv` | Supply volts and shunt millivolts, or null when unread |
+| `overrange`, `overrange_max`, `underrange` | Readings at or past full scale, the highest such reading in counts, readings below the live zero |
+| `i2c_err` | Converter read failures since power-on. Never resets |
+| `vbus`, `shunt_mv` | The voltage monitor's bus volts and shunt millivolts, or null when unread |
+| `ina_err` | Voltage monitor read failures since power-on. Never resets |
 
 > **`build` identifies the source, not the deployment.** It names the commit the image was
 > compiled from, never the commit the repository stood at when the board was flashed. A trailing
@@ -116,14 +129,96 @@ the last one published.
 > not fully describe it. `UNKNOWN` means provenance was never captured — deliberately not shaped
 > like an identifier, so it cannot be mistaken for one.
 
+`reset` names the cause flags the processor recorded, then the raw registers: `WATCHDOG` after a
+watchdog reset, `software` after an upload. A power cycle and the reset button both read
+`none-flagged`, so the firmware cannot tell them apart.
+
 The last will is armed before the connection, so the broker publishes it if the machine drops
 without disconnecting cleanly. It lands on the same topic and is retained like the cyclic status,
 but at the lower quality of service: a subscriber sees both arrive on `status`, and the one that
 says the machine is down was sent by the broker rather than by the machine.
 
 ```json
-{"up":false,"id":"..."}
+{"up":false,"id":"plc4-jd5055e"}
 ```
+
+## Engine
+
+The tractor's engine values, read off the J1939 bus. Published every 15 s while connected.
+
+```json
+{"rpm":1402,"load_pct":31,"torque_pct":24,"coolant_c":82.0,"oil_temp_c":88.4,
+ "oil_kpa":320,"fuel_lph":6.35,"keysw_v":13.85,"hours":156.35,"fuel_level_pct":35.6,
+ "hyd_oil_c":41,"rpm_min":1398,"rpm_max":1410,"rpm_avg":1403,...,
+ "frames":6975,"unknown":4120,"ring_full":0,"ring_high":9,"can_err":0,"can_last":0,
+ "drains":3000,"can_up":true,"filt":false,"id":"plc4-jd5055e"}
+```
+
+| Key | Unit | Source on the bus |
+|---|---|---|
+| `rpm` | rpm | EEC1, PGN 61444 |
+| `torque_pct` | % actual engine torque | EEC1, SPN 513 |
+| `load_pct` | % load at current speed | EEC2, PGN 61443, SPN 92 |
+| `coolant_c` | °C | ET1, PGN 65262 |
+| `oil_temp_c` | °C | ET1, PGN 65262 |
+| `oil_kpa` | kPa | EFLP1, PGN 65263 |
+| `fuel_lph` | litres per hour | LFE, PGN 65266, SPN 183 |
+| `batt_v` | V | VEP1, PGN 65271, SPN 168 |
+| `keysw_v` | V, keyswitch battery potential | VEP1, PGN 65271, SPN 158 |
+| `hours` | engine hours | PGN 65253, SPN 247 |
+| `fuel_level_pct` | % | DD, PGN 65276, SPN 96 |
+| `hyd_oil_c` | °C, hydraulic oil | VF, PGN 65128, SPN 1638 |
+| `rpm_min`, `rpm_max`, `rpm_avg` | rpm | Every valid `rpm` sample since the last message |
+| `load_pct_min`, `_max`, `_avg` | % | Every valid `load_pct` sample since the last message |
+| `torque_pct_min`, `_max`, `_avg` | % | Every valid `torque_pct` sample since the last message |
+
+> **An absent key means no value, not zero.** A value is omitted when the bus has not carried it
+> in the last 5 s, and a window's three keys are omitted when the window saw no valid sample. The
+> J1939 not-available and error codes are never published as values. This is the opposite of
+> telemetry's null convention: write the consumer to the omission rule.
+
+`hours` is sent only in answer to another unit's request, so it stays in the message for 90 s
+after the last answer rather than 5 s. The board never requests it.
+
+The windows are taken every 15 s whether or not the broker is reachable, so a window never spans
+an outage; a window that falls in one is discarded.
+
+The CAN counters are always present:
+
+| Key | Meaning |
+|---|---|
+| `frames` | Frames taken off the receive ring. Stops moving when the bus is quiet, as with the key off |
+| `unknown` | Frames on groups this firmware does not decode |
+| `ring_full`, `ring_high` | Drains that found the 32-frame ring full, so frames were lost; the deepest the ring has been |
+| `can_err`, `can_last` | Driver error events, and the last error code |
+| `drains` | Times the drain has run. Climbing with `frames` at 0 means nothing is arriving at D13 |
+| `can_up` | False when the CAN controller did not open |
+| `filt` | True when the hardware acceptance filter is in force |
+
+## Fault codes
+
+Active diagnostic trouble codes, one retained topic per engine control unit, keyed by its J1939
+source address in decimal. The retained message is that unit's current fault state.
+
+```json
+{"sa":3,"n":0,"mil":0,"rsl":0,"awl":0,"pl":1,"dtc":[],"trunc":false,"id":"plc4-jd5055e"}
+```
+
+| Field | Meaning |
+|---|---|
+| `sa` | Source address of the unit reporting |
+| `n` | Codes the board kept for this unit |
+| `mil`, `rsl`, `awl`, `pl` | Malfunction, red stop, amber warning and protect lamp status, each 0 to 3 |
+| `dtc` | Each code's suspect parameter number, failure mode and occurrence count |
+| `trunc` | True when the unit sent more codes than the board keeps (12) or than fit the message |
+
+> **A lamp can be on with an empty `dtc` list.** A unit that raises a lamp without naming a code
+> sends a not-available record, and the board drops it rather than publishing a code that does not
+> exist. Read the lamp fields as well as the list.
+
+A message goes out when a unit's lamps or codes change, at most one per loop pass, 2 s apart, and
+30 s apart after a failed publish. On every reconnect each unit's state is published again. The
+board tracks up to six units; a seventh is ignored.
 
 ## Command
 
@@ -132,12 +227,12 @@ over MQTT instead of a wire, and is answered on `ack`.
 
 ```json
 {"id":"7f3a9c21","verb":"+"}
-{"id":"7f3a9c22","verb":"c","arg":"3000"}
+{"id":"7f3a9c22","verb":"sm","arg":"3000"}
 ```
 
 | Field | Meaning |
 |---|---|
-| `id` | Opaque token the sender generates. Echoed on `ack`, and the key the dedup ring matches a repeat against |
+| `id` | Opaque token the sender generates, up to 40 letters, digits and `- _ . : +`. Echoed on `ack` |
 | `verb` | The action to run, the same string the console accepts, run through the same handler |
 | `arg` | Optional. Carries the argument `c`, `w` and `sm` take |
 
@@ -146,17 +241,22 @@ over MQTT instead of a wire, and is answered on `ack`.
 | Allowed | `tare` `+` `-` `b` `kv` `c` `w` `sm` |
 | Refused, as a safety measure | `hang`. It deliberately stops the board to prove the watchdog; over the network that is a denial of service against a machine holding a load |
 | Refused, as redundant | `read`, `net`, `sum`. The app already has that data from `telemetry` and `status` |
+| Refused | Every other verb, including the console diagnostics `debug`, `i2c`, `pwr`, `can` and `canf` |
 
 > **Never retained.** A retained command would re-run on every reconnect, re-taring or clearing the
 > tally each time the board reassociated. A retained command is dropped, counted, and never
 > executed or acknowledged.
 
-> **A repeat `id` is acked but not re-executed.** The board keeps a ring of recent command ids and
-> matches a repeat against it.
+> **A repeat `id` is acked but not re-executed.** The board remembers the last eight command ids
+> and replays the stored verdict for a repeat.
+
+No ack is sent for a command with no usable `id`, a retained command, a command that arrived
+before a reconnect, or one that arrived while four were already waiting. Resend it with the same
+`id`.
 
 ## Acknowledgement
 
-Every command received gets exactly one reply, published on `ack`.
+Apart from the cases above, every command gets exactly one reply, published on `ack`.
 
 ```json
 {"id":"7f3a9c21","verb":"+","ok":true,"detail":"recorded","n":12,"total":19408}
@@ -167,20 +267,32 @@ Every command received gets exactly one reply, published on `ack`.
 | Field | Meaning |
 |---|---|
 | `id` | Echoes the command's `id` |
-| `verb` | Echoes the command's `verb` |
+| `verb` | Echoes the command's `verb`, or empty when the verb was unusable |
 | `ok` | True when the action ran |
-| `detail` | The firmware's own state string naming the result or the refusal, never an invented one |
-| `n`, `total` | Present on a successful `+`: the tally entry count and running total, matching `weight` |
+| `detail` | The result, or the reason for a refusal |
+| `n`, `total` | Present on a successful `+` that is not a repeat: the tally entry count and running total, matching `weight` |
 | `dup` | True when this ack replays a stored verdict rather than re-executing |
 
-> **A refusal detail is the firmware's own state string, never an invented one**, so the app and
-> the LCD can never disagree about why something was refused.
+| `detail` | When |
+|---|---|
+| `recorded`, `removed`, `tared`, `cleared`, `calibrated`, `set` | The action ran |
+| A sensor state, or `NO ADC` | `tare`, `+` or `kv` refused because the loop is not `ok` or the converter has stopped answering |
+| `TALLY FULL`, `TALLY EMPTY` | `+` with 50 entries held, `-` with none |
+| `at or below tare` | `kv` with no load above the tare |
+| `c REJECTED`, `w REJECTED`, `sm REJECTED` | The argument is missing, not a number, or out of range |
+| `CONSOLE ONLY` | A `c` whose argument would make it the console-only `can` or `canf` |
+| `NOT ALLOWED` | A verb outside the allowed list |
+| `BAD COMMAND` | No verb, or a verb with characters outside the allowed set |
+
+> **A refusal because of the loop names the state the console prints.** The app and the console
+> never disagree about which state stopped a tare, a record or a calibration. `NOT ALLOWED` and
+> `BAD COMMAND` exist only on `ack`.
 
 > **A duplicate replays the stored verdict.** A repeat of a refused command reports `ok:false`
 > again; it can never claim a success that never happened.
 
 > **QoS 0 is deliberate.** A QoS 1 ack spins waiting for a PUBACK, which would stall the weighing
-> loop and age the reading to stale. A lost ack is cheap: the dedup ring makes retrying safe.
+> loop and age the reading to stale. A lost ack is cheap: the repeat rule makes retrying safe.
 
 ## Sensor states
 
@@ -194,7 +306,7 @@ the split between acting and not acting.
 | `SATURATED` | yes | At or past full scale, still measuring |
 | `NO SENSOR` | no | Loop below the dead threshold — cut wire, no supply, transmitter removed |
 | `XMTR FAULT` | no | At or above the fault threshold |
-| `BAD STATE` | no | A corrupted record. Never produced by a live reading |
+| `BAD STATE` | no | A corrupted queued record. Never produced by a live reading |
 
 > **Do not discard the two over-range states.** Both carry a real reading, and throwing them away
 > loses the excursions this front end was fitted to capture — the circuit goes past full scale in
@@ -222,3 +334,4 @@ listening. Do not infer staleness from `i2c_err`, which counts from power-on and
 ## See also
 
 `01` §*Bus channels* for the converter and the bus whose failure sets `stale`.
+`01` §*CAN* for the bus the engine and fault-code topics are read from.
