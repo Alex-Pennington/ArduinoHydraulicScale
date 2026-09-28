@@ -13,7 +13,7 @@ read as the voltage across a burden resistor at the analog-to-digital converter.
 | Transmitter | Rosemount 1151, 0–3000 psi, two-wire 4-20 mA |
 | Loop supply | Dedicated 24 V, separate from the board supply |
 | Burden resistor | 68 Ω, 0.1 %, 25 ppm/°C or better |
-| Converter | MCP3421, 18-bit, used at 14 bit, own 2.048 V reference |
+| Converter | MCP3421A0, address `0x68`, 18-bit, used at 14 bit, own 2.048 V reference |
 
 The burden value is fixed by the converter's 2.048 V reference, not chosen for resolution. A
 150 Ω or 250 Ω burden is wrong for this converter: 150 Ω clips at 13.65 mA, below full scale.

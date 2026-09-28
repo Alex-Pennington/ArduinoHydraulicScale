@@ -37,7 +37,7 @@ No other header pin is used by the firmware.
 | 0 | `0x67` | MCP9600 thermocouple amplifier | no |
 | 1 | `0x2A` | NAU7802 load-cell amplifier | no |
 | 2 | `0x40` | INA219 voltage and current monitor | yes, diagnostics |
-| 3 | `0x68` | MCP3421 pressure-loop converter | yes, the measurement |
+| 3 | `0x68` | MCP3421A0 pressure-loop converter | yes, the measurement |
 | 7 | `0x27` | LCD2004A display, 20 by 4, PCF8574 backpack | yes |
 
 > **A scan that finds nothing means the trunk or the multiplexer, never a device behind it.**
