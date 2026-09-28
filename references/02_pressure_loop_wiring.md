@@ -45,9 +45,7 @@ burden sits in the return leg and the converter measures across it.
 > fitted in the supply leg instead puts the full 24 V on those inputs and destroys the converter
 > the moment the loop is energised.
 
-> **Bond the 24 V negative to board ground.** Without that bond the converter inputs float
-> against its own supply and drift outside the range it can read. A floating loop can produce a
-> plausible number before it produces an obviously wrong one.
+Bond the 24 V negative to board ground.
 
 ## What each current means
 

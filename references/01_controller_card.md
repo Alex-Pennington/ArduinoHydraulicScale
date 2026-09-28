@@ -35,9 +35,6 @@ No other header pin is used by the firmware.
 
 ## Bus channels
 
-Nothing answers at its own address until its channel is selected. The multiplexer is the only
-device on the trunk.
-
 | Channel | Address | Device | Used by the firmware |
 |---|---|---|---|
 | 0 | `0x67` | MCP9600 thermocouple amplifier | no |
@@ -81,10 +78,6 @@ A technician with a laptop and an operator with a handset see the same output.
 | HC-05 radio module | D0 | Board receives | 9600 baud |
 | HC-05 radio module | D1 | Board transmits | 9600 baud |
 | USB | — | Both directions | 115200 baud |
-
-> **The radio pair crosses.** The module's transmit pin lands on D0 and its receive pin on D1.
-> Wired straight through, the console is silent both ways with nothing else wrong and nothing to
-> see: the board keeps weighing, so the fault looks like a dead module rather than a swapped pair.
 
 ## Display
 
