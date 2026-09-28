@@ -4,7 +4,7 @@
 
 PHOENIX NEST LLC · PLC #4
 **Document:** 07 — Operating Card
-**Firmware:** EEPROM signature PL4B
+**Firmware:** build `699e3c6c`
 **Controller:** Arduino Uno R4 WiFi
 
 How the scale is operated: the weighing procedure, the verbs that drive it, and what the
@@ -21,18 +21,17 @@ can be reproduced.
 |---|---|---|
 | 1. Tare | `tare` | Boom at the mark, bucket empty |
 | 2. Span | `kv` | Boom at the mark, carrying the calibration load |
-| 3. Weigh | — | Boom at the mark |
+| 3. Weigh and record | `+` | Boom at the mark |
 
-The calibration load is 530, the figure the firmware calibrates against.
+The calibration load is 530 lb, the figure `kv` calibrates against.
 
-Boom position changes the unloaded pressure as well as the loaded pressure, because the boom's
-own weight acts through the same moment arm. A tare taken at one position and a weight read at
-another differ by the boom's contribution, and that difference enters every reading as a
-constant offset. Tare and span are established at one position or they disagree.
+Boom position changes the unloaded pressure as well as the loaded pressure. A tare taken at one
+position and a weight read at another differ by a constant offset that enters every reading.
 
-The tare is stored and restored at every power-up, so the board applies the last stored tare
-without announcing it. That is correct only while the position it was taken at is reproducible.
-Re-tare at the mark rather than trusting a tare of unknown origin.
+The tare is stored and applied at every power-up without being announced, and it goes stale as
+the circuit loses pressure while the machine stands. Tare at the mark before each weighing
+session. A negative weight with the bucket empty at the mark means the tare is stale; `+` records
+it anyway.
 
 ## Commands
 
@@ -43,29 +42,35 @@ Re-tare at the mark rather than trusting a tare of unknown origin.
 | `+` | Record the current weight to the tally and publish it | yes |
 | `-` | Remove the last recorded entry | yes |
 | `b` | Clear the tally, immediately and without confirmation | yes |
-| `c<value>` | Set the calibration factor directly. Stored. | yes |
-| `w<value>` | Set the smoothing factor, 0 to 1. Stored. | yes |
-| `sm<value>` | Set the transducer full-scale pressure in psi | yes |
+| `c<value>` | Set the calibration factor directly, above 0 and up to 1000. Stored. | yes |
+| `w<value>` | Set the smoothing factor, 0 up to but not including 1. Stored. | yes |
+| `sm<value>` | Set the transducer full-scale pressure in psi, 1 to 20000. Not stored. | yes |
 | `sum` | List the recorded entries and their total | console |
 | `read` | Print the current weight | console |
-| `net` | Print link, queue and command counters | console |
-| `i2c` | Scan the bus and name what answers | console |
+| `net` | Print link, queue, build and command counters | console |
+| `i2c` | Scan the bus trunk and every multiplexer channel, and name what answers | console |
 | `pwr` | Report the voltage and current monitor | console |
-| `debug` | Toggle verbose output. Off at every boot. | console |
+| `can` | Report the CAN link, its counters and the decoded engine values | console |
+| `canf` | Toggle the CAN hardware filter and reopen the controller. Off at every boot. | console |
+| `debug` | Toggle the diagnostic dump `read` prints. Off at every boot. | console |
 | `hang` | Stop the board deliberately, to prove the watchdog resets it | console |
 
 `hang` is refused from the app by design: stopping a machine that is holding a load, from a
-phone, is a denial of service rather than a diagnostic. `read`, `net`, `sum` and `debug` are
-refused from the app because the telemetry and status topics already carry what they report.
+phone, is a denial of service rather than a diagnostic. `read`, `net` and `sum` are refused
+because the telemetry and status topics already carry what they report. Every other console verb
+is refused from the app as well.
 
 For the message shapes these verbs travel in, see `03` §*Command* and `03` §*Acknowledgement*.
 
 ## When an action is refused
 
-`tare`, `+` and `kv` require the loop to be measuring within its band. The refusal names the
-state that caused it, and the app, the console and the display all name it the same way. A
-reading pinned at the end of its range is no basis for a new tare or span, so it is refused
-even though it is a real measurement — see `03` §*Sensor states* for that distinction.
+`tare`, `+` and `kv` require the loop to be measuring within its band and the converter to be
+answering. The refusal names the state that caused it, on the console and in the app alike. A
+reading pinned at the end of its range is no basis for a new tare or span, so it is refused even
+though it is a real measurement — see `03` §*Sensor states* for that distinction.
+
+`+` is also refused with the tally full, `-` with it empty, and `kv` when the load is not above
+the tare. `c`, `w` and `sm` refuse a missing, non-numeric or out-of-range value.
 
 A refused command is still answered. It comes back marked as refused, with the reason.
 
@@ -88,18 +93,22 @@ is true.
 
 Two of its messages look alike and lead to different first checks:
 
-- **No sensor** — the current loop itself is dead. Check the transmitter's wiring and the loop
+- **`NO SENSOR`** — the current loop itself is dead. Check the transmitter's wiring and the loop
   supply.
-- **No converter** — the board cannot reach the chip that reads that loop. Check the bus cable
-  first. It appears about two seconds after the board stops hearing from the converter; until
-  then the last good reading sits unmoving, which is what a loose connector looks like.
+- **`NO ADC`** — the board cannot reach the converter that reads that loop. Check the bus cable
+  first. It appears about two seconds after the board stops hearing from the converter;
+  until then the last good reading sits unmoving, which is what a loose connector looks like.
 
-Either blanks the weight, and `tare`, `+` and `kv` are refused while one shows.
+Either blanks the weight, and `tare`, `+` and `kv` are refused while one shows. So does
+`XMTR FAULT`, a loop current at or above the fault threshold.
 
-`CAL NOT SET!` stands until the scale is tared and calibrated. It follows any flash that moves
-the counts-per-psi relationship, and it is deliberate: a stored calibration from a different
-front end would restore cleanly and read wrong. Tare and calibrate at the mark before trusting
-the scale after such a flash.
+`CAL NOT SET!` shows when no valid stored calibration was found at power-up, and stands until
+`kv` succeeds. A flash that changes the calibration layout produces it on purpose: a stored
+calibration from a different front end would restore cleanly and read wrong. Tare and calibrate
+at the mark before trusting the scale.
+
+`I2C ERR` with a count means converter reads have failed since power-on. It shows only when
+nothing worse does, and clears at the next reset.
 
 ## The tally
 
@@ -109,27 +118,23 @@ it reads `TALLY FULL` and `+` stops recording. Use `sum`, then `b`, before recor
 ## Out of radio range
 
 The scale weighs normally with no network. Recorded weights are held and published when the
-broker is reachable again, and `net` reports how many are waiting. Published backlog is marked
-as such and carries its age, so it cannot be read as a live weight.
+broker is reachable again; row 3 shows how many are waiting, and `net` reports it. The board holds
+200; beyond that the oldest are dropped, and row 3 shows `DROPPED` with the count. Published
+backlog is marked as such and carries its age, so it cannot be read as a live weight.
 
 ## What survives a reset
 
 | | Survives |
 |---|---|
 | The tare | yes, stored |
-| The calibration | yes, stored |
+| The calibration factor and the smoothing factor | yes, stored |
 | The recorded tally | yes, stored as it is recorded |
 | Weights queued for upload | no |
 | The `sm` full-scale setting | no |
+| `debug` and the `canf` filter | no, both off |
 
 A reset costs the uploads that had not gone out, not the recorded numbers. `sum` is still
-right. If the queue matters, get back in range before keying off.
-
-## Mind the reset button
-
-**The reset button is easy to catch with a glove and it restarts the board.** The tally is kept,
-but anything queued for upload is lost and the scale takes a few seconds to come back and
-re-associate. If it keeps being caught, tape over it.
+right. If the queue matters, get back in range before powering down.
 
 ## See also
 
