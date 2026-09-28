@@ -92,5 +92,5 @@ service and recovery path.
 ## See also
 
 `02` §*Connections* for how the transmitter, the burden resistor and the supply join up.
-`07` §*Commands* for the console verbs, including `i2c`, `pwr`, `can` and `canf`.
-`07` §*What the display asks for* for the fault messages on row 4.
+`06` §*Commands* for the console verbs, including `i2c`, `pwr`, `can` and `canf`.
+`06` §*What the display asks for* for the fault messages on row 4.

@@ -67,8 +67,8 @@ documents:
   version: '2'
   odin_id: pending
   last_updated: '2026-09-28'
-- num: '07'
-  source: 07_operating_card.md
+- num: '06'
+  source: 06_operating_card.md
   title: Operating Card — PLC #4 Tractor Scale
   subtitle: The weighing procedure, the verbs that drive it, and what the machine refuses
   kind: Cabinet Reference Card

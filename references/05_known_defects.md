@@ -57,5 +57,5 @@ Properties of the build. Nothing is broken and nothing is being fixed.
 
 ## See also
 
-`07` §*The full-scale setting does not persist* for what a lost `sm` does to the reading.
+`06` §*The full-scale setting does not persist* for what a lost `sm` does to the reading.
 `03` §*Staleness is a separate question* for what a consumer must read.

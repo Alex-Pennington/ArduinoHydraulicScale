@@ -89,4 +89,4 @@ the tractor's J1939 bus, the wiring between them, and the messages the machine p
 `01` §*Bus channels* for the sensor bus and what sits on each channel.
 `03` §*Command* for how an operator action reaches the board.
 `02` §*Parts* for the transmitter, the loop supply and the burden resistor.
-`07` §*Weighing* for the weighing procedure at the boom mark.
+`06` §*Weighing* for the weighing procedure at the boom mark.

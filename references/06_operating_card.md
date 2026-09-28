@@ -1,6 +1,6 @@
 # Operating Card — PLC #4 Tractor Scale
 
-**Document:** 07 — Operating Card
+**Document:** 06 — Operating Card
 **Firmware:** build `699e3c6c`
 
 How the scale is operated: the weighing procedure, the verbs that drive it, and what the
