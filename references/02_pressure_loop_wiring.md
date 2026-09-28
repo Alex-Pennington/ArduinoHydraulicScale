@@ -3,7 +3,7 @@
 
 PHOENIX NEST LLC · PLC #4
 **Document:** 02 — Pressure Loop Wiring
-**Firmware:** EEPROM signature PL4B
+**Firmware:** build `699e3c6c`
 **Controller:** Arduino Uno R4 WiFi
 
 One two-wire pressure transmitter on the loader lift circuit, powered from its own 24 V supply,
@@ -17,7 +17,6 @@ read as the voltage across a burden resistor at the analog-to-digital converter.
 | Loop supply | Dedicated 24 V, separate from the board supply |
 | Burden resistor | 68 Ω, 0.1 %, 25 ppm/°C or better |
 | Converter | MCP3421, 18-bit, used at 14 bit, own 2.048 V reference |
-| Signal pair | Shielded, shield grounded at the enclosure end only |
 
 The burden value is fixed by the converter's reference, not chosen for resolution. Do not
 substitute a value from an earlier card.
@@ -75,11 +74,10 @@ becomes indistinguishable from full scale.
 
 ## Supply
 
-Give the loop its own 24 V supply. Sharing the board supply couples converter noise into the
-measurement and removes the isolation that lets the loop survive a cabinet fault.
+Give the loop its own 24 V supply, separate from the board supply.
 
-Compliance is not tight at 24 V. The burden drops 1.36 V at full scale, leaving well over what a
-Rosemount-class transmitter needs at its terminals.
+Compliance is not tight at 24 V. The burden drops 1.36 V at full scale, leaving about 22.6 V at
+the transmitter against the roughly 10.5 V it needs.
 
 ## See also
 
