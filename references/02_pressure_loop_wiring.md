@@ -1,12 +1,9 @@
 # Pressure Loop Wiring — PLC #4 Tractor Scale
-## Wiring Reference
 
-PHOENIX NEST LLC · PLC #4
 **Document:** 02 — Pressure Loop Wiring
 **Firmware:** build `699e3c6c`
-**Controller:** Arduino Uno R4 WiFi
 
-One two-wire pressure transmitter on the loader lift circuit, powered from its own 24 V supply,
+One two-wire pressure transmitter on the loader hydraulic circuit, powered from its own 24 V supply,
 read as the voltage across a burden resistor at the analog-to-digital converter.
 
 ## Parts
@@ -18,8 +15,9 @@ read as the voltage across a burden resistor at the analog-to-digital converter.
 | Burden resistor | 68 Ω, 0.1 %, 25 ppm/°C or better |
 | Converter | MCP3421, 18-bit, used at 14 bit, own 2.048 V reference |
 
-The burden value is fixed by the converter's reference, not chosen for resolution. Do not
-substitute a value from an earlier card.
+The burden value is fixed by the converter's 2.048 V reference, not chosen for resolution. A
+150 Ω or 250 Ω burden is wrong for this converter: 150 Ω clips at 13.65 mA, below full scale.
+Replace either with 68 Ω.
 
 ## Connections
 
@@ -54,7 +52,7 @@ Bond the 24 V negative to board ground.
 | Below 3.5 mA | Below 0.238 V | Dead loop — cut wire, no supply, transmitter removed |
 | 4.0 mA | 0.272 V | Live zero, 0 psi |
 | 20.0 mA | 1.360 V | Full scale, 3000 psi |
-| 21.0 mA and above | 1.428 V and above | Transmitter fault, by the NAMUR live-zero convention |
+| 21.0 mA and above | 1.428 V and above | Transmitter fault, by NAMUR NE43 |
 
 A dead loop reads as an affirmative fault, not as zero weight. That distinction is the reason the
 loop is a current loop and not a voltage output.
@@ -65,9 +63,9 @@ The converter reads 2.048 V at full scale. The table above uses 1.428 V at the t
 measuring band, leaving room above it for an over-current condition to be seen rather than
 clipped.
 
-A transmitter of this class has been metered at 29.7 mA driving hard over on this estate. Against
-68 Ω that is 2.02 V, still inside the converter's range, so a hard-over is reported as a fault
-rather than read as a weight. A larger burden pushes that case past the reference and the fault
+A transmitter of this class can drive 29.7 mA when it fails hard over. Against 68 Ω that is
+2.02 V, still inside the converter's range, so a hard-over is reported as a fault rather than read
+as a weight. A larger burden pushes that case past the reference and the fault
 becomes indistinguishable from full scale.
 
 ## Supply

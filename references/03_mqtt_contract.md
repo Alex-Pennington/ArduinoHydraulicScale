@@ -1,10 +1,7 @@
 # MQTT Contract — PLC #4 Tractor Scale
-## Cabinet Reference Card
 
-PHOENIX NEST LLC · PLC #4
 **Document:** 03 — MQTT Contract
 **Firmware:** build `699e3c6c`
-**Controller:** Arduino Uno R4 WiFi
 
 Seven topics under one root. A consumer that reads only the weight topic gets every deliberate
 record; a consumer that reads only telemetry gets a live stream and no record of what the operator

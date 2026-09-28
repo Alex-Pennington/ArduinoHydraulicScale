@@ -1,11 +1,7 @@
 # Operating Card — PLC #4 Tractor Scale
 
-## Operating Card
-
-PHOENIX NEST LLC · PLC #4
 **Document:** 07 — Operating Card
 **Firmware:** build `699e3c6c`
-**Controller:** Arduino Uno R4 WiFi
 
 How the scale is operated: the weighing procedure, the verbs that drive it, and what the
 machine does when it will not do as it is asked. Every operator action arrives over MQTT from

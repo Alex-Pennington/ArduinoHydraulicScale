@@ -1,10 +1,7 @@
 # Known Defects — PLC #4 Tractor Scale
-## Defect Register
 
-PHOENIX NEST LLC · PLC #4
 **Document:** 05 — Known Defects
 **Firmware:** build `699e3c6c`
-**Controller:** Arduino Uno R4 WiFi
 
 What is known to be wrong with this machine, and what to do about each one until it is fixed.
 
@@ -23,14 +20,14 @@ Tracked as issue 53.
 
 ## Closed in this build
 
-### D2 — The live stream carried a weight during a fault
+### D2 — Telemetry weight during a fault
 
 Telemetry `w` publishes null whenever `psi` does: when the loop is not measuring or the converter
 has stopped answering.
 
 Tracked as issue 5.
 
-### D3 — The supply rail was a gain term on every reading
+### D3 — Supply rail as a gain term
 
 The converter carries its own voltage reference, so the board's supply rail does not enter the
 measurement.

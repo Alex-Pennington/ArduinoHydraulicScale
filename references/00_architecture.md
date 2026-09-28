@@ -1,10 +1,7 @@
 # Architecture — PLC #4 Tractor Scale
-## Cabinet Reference Card
 
-PHOENIX NEST LLC · PLC #4
 **Document:** 00 — Architecture
 **Firmware:** build `699e3c6c`
-**Controller:** Arduino Uno R4 WiFi
 
 PLC #4 weighs what the loader is carrying by measuring pressure in its hydraulic circuit. It
 shows the weight to the operator at the machine and publishes it to the estate broker, with the
@@ -57,9 +54,8 @@ range and reports a confident, plausible, wrong weight.
 
 ## Boom position
 
-Weigh at one boom position and mark it. Boom position changes the circuit pressure with the
-bucket empty as well as loaded, so the same weight reads differently at different boom heights.
-Tare, calibrate and weigh at that same mark.
+Tare, calibrate and weigh at one marked boom position. The same weight reads differently at
+different boom heights.
 
 ## What reaches the broker
 
@@ -68,8 +64,8 @@ repeating cycle, plus a retained status message describing the machine as a whol
 values from the J1939 bus go out on their own slower cycle, and each engine control unit's
 active fault codes go out on change, retained.
 
-Recorded weights survive a loss of radio contact. They are held on the machine and published
-when contact returns, marked with their age so that a late arrival is never mistaken for a
+Recorded weights survive a loss of radio contact. Up to 200 are held on the machine until the
+next reset and published when contact returns, marked with their age so that a late arrival is never mistaken for a
 current reading.
 
 ## Wiring conventions
@@ -85,11 +81,12 @@ what is specific to that termination.
 
 ## Scope of this binder
 
-This binder describes the design of PLC #4: the controller, the pressure loop and the wiring
-between them. Dated audit and commissioning records are kept outside it.
+This binder describes the design of PLC #4: the controller, the pressure loop, the connection to
+the tractor's J1939 bus, the wiring between them, and the messages the machine publishes.
 
 ## See also
 
 `01` §*Bus channels* for the sensor bus and what sits on each channel.
 `03` §*Command* for how an operator action reaches the board.
 `02` §*Parts* for the transmitter, the loop supply and the burden resistor.
+`07` §*Weighing* for the weighing procedure at the boom mark.

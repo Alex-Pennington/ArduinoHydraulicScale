@@ -1,10 +1,7 @@
 # Controller Card — PLC #4 Tractor Scale
-## Cabinet Reference Card
 
-PHOENIX NEST LLC · PLC #4
 **Document:** 01 — Controller Card
 **Firmware:** build `699e3c6c`
-**Controller:** Arduino Uno R4 WiFi
 
 An Arduino Uno R4 WiFi carries the whole machine. Every sensor and the display reach it over one
 Qwiic bus through an eight-channel multiplexer. The tractor's J1939 bus reaches it through a CAN

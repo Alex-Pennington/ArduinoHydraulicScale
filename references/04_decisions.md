@@ -1,13 +1,9 @@
 # Decisions — PLC #4 Tractor Scale
-## Decision Record
 
-PHOENIX NEST LLC · PLC #4
 **Document:** 04 — Decisions
 **Firmware:** build `699e3c6c`
-**Controller:** Arduino Uno R4 WiFi
 
-What has been decided about this machine, and by whom. Rulings only. The arguments behind them
-are in the repository history and are not reproduced here.
+What has been decided about this machine, and by whom. Rulings only.
 
 ## Measurement
 
@@ -21,9 +17,6 @@ are in the repository history and are not reproduced here.
 | Burden placement | Across the converter's differential input, in the loop return leg | Alex |
 | Converter | Own voltage reference, not the board's supply rail | Alex |
 | Circuit pressure | Treated as exceeding 3000 psi in service | Alex |
-
-The burden was 150 Ω while the board's own input did the reading, and 250 Ω before that. Both
-were correct for the converter of their day and neither is correct now. Fit 68 Ω.
 
 ## Scaling
 
@@ -63,7 +56,6 @@ and are never reported as the same thing.
 | Tare | At the mark before each weighing session. `+` has no sign guard | Alex |
 | Calibration store | A stored calibration from a different front end is rejected, forcing a recalibration | Alex |
 | Filter on a fault | Frozen; the last reading is held, never smoothed toward the fault | Alex |
-| Commissioning | Alex tests. No session writes or revises a commissioning test | Alex |
 
 ## See also
 
