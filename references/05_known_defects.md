@@ -18,6 +18,17 @@ the board's own receive ring never filled.
 
 Tracked as issue 53.
 
+### D5 — torque_pct can read -125 with the engine stopped
+
+In build `699e3c6c` an engine torque byte of 0 decodes as -125 % and enters both `torque_pct` and
+the `torque_pct_min`/`_max`/`_avg` window, whatever the engine speed. A frame the ECU sends with a
+torque byte of 0 at 0 rpm, such as at power-up, therefore publishes `torque_pct` -125 and pulls
+`torque_pct_min` to -125 for that window.
+
+**Disregard a `torque_pct` or `torque_pct_min` of -125 in a window where `rpm` is 0 or absent.**
+
+Tracked as issue 57.
+
 ## Closed in this build
 
 ### D2 — Telemetry weight during a fault
