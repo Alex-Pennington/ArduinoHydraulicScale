@@ -1,6 +1,9 @@
-# Accepted residuals — BINDER-POLICY.md §6 and §6a.
+# Accepted residuals: the gate budgets and SHA-shaped data (RULES.md rule 36,
+# rule 39). Configuration in BINDER-POLICY.md, "Accepted residuals".
 #
 # A residual is accepted by being NAMED, never by being hidden. Each line below
 # records a gate hit that is data rather than the thing the rule exists to stop,
 # and says what the data is. Format: <card>|<substring of the gate's message>
+# No line here accepts a date (rule 17) or an identifier the firmware does not
+# define (rule 33); the gate ignores this file for both.
 #

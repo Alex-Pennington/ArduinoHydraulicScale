@@ -1,25 +1,27 @@
 #!/usr/bin/env bash
-# Enforces standards/BINDER-POLICY.md against a binder's references/*.md, and
-# enforces the §3 strikethrough ban across the repo's other governed markdown:
-# BINDER-POLICY.md, ROADMAP.md and design/*.md. Those are not cards, so the card
-# budgets (§6 bold, caps, shape) do not apply to them -- but §3 strikethrough is
-# a repo-wide ban, and a gate that is silent outside references/ reads as "clean"
-# when it means "not looked at".
+# Checks a binder's references/*.md against the estate binder rules: RULES.md in
+# Alex-Pennington/greybeard-binder-rules. Rule numbers below ("rule 35") are that
+# file's. This repo's gate configuration is in BINDER-POLICY.md.
+# Also sweeps BINDER-POLICY.md, ROADMAP.md and design/*.md for strikethrough
+# (rule 35). Those are not cards, so the card budgets do not apply to them.
+# RULES.md lists strikethrough outside cards under "Open: policy copies to
+# converge"; a gate that is silent outside references/ reads as "clean" when it
+# means "not looked at".
 # Exit 1 = the binder violates policy. Exit 0 = it does not.
 # Usage: check-binder-policy.sh <references-dir> [warning-band-ceiling]
 #   bold/1k is ENFORCED against the ceiling (default 22.3, the warning-card band top).
 #   BINDER_FIRMWARE_ROOTS overrides the congruence roots (see below).
 set -uo pipefail
 DIR="${1:?usage: check-binder-policy.sh <references-dir> [bold-ceiling]}"
-# §6 legends and §3 data residuals are ACCEPTED when listed. The listing is this
+# Budget and SHA-shaped-data residuals are ACCEPTED when listed. The listing is this
 # file, one "card|clause-substring|reason" per line, so an accepted residual is
 # machine-checkable and the gate's steady state is exit 0 -- a gate whose normal
 # state is failure cannot be used as a blocking hook.
 ACCEPT="$(dirname "$DIR")/.binder-policy-accepted"
 [ -f "$ACCEPT" ] || ACCEPT="$(cd "$(dirname "$DIR")" && pwd)/.binder-policy-accepted"
-CEIL="${2:-22.3}"   # §6: warning-card band top. Pass a card-specific counterpart to tighten.
+CEIL="${2:-22.3}"   # bold budget, BINDER-POLICY.md configuration. Pass a lower ceiling to tighten.
 # The repo root is the parent of <references-dir>. Both the congruence check
-# and the §3 non-card sweep below resolve their paths against it, so the script
+# and the non-card strikethrough sweep below resolve their paths against it, so the script
 # travels with the policy into any repo this governs.
 ROOT="$(cd "$(dirname "$DIR")" && pwd)"
 fail=0; cards=0
@@ -33,42 +35,29 @@ viol() {
   fi
   fail=1; printf '  FAIL %-34s %s\n' "$1" "$2"
 }
+# A violation no residual can accept: RULES.md allows no accepted residual for a
+# date (rule 17) or for an identifier the firmware does not define (rule 33).
+strict() { fail=1; printf '  FAIL %-34s %s\n' "$1" "$2"; }
 
 # joined-line bold count: wrapped spans are invisible to a per-line grep
 bold()  { tr '\n' ' ' < "$1" | grep -oE '\*\*[^*]+\*\*' | wc -l; }
 capsr() { grep -oE '\b[A-Z][A-Z][A-Z]+( [A-Z][A-Z]+)+\b' "$1" | wc -l; }
 words() { wc -w < "$1"; }
 
-# --- commit congruence ----------------------------------------------------
-# A card must not describe firmware behaviour the firmware does not have AT THIS
-# COMMIT. The binder states the rule itself, in 00_architecture.md: "Every claim
-# these cards make about firmware behaviour was read from the source for the
-# firmware version stamped at the head of this card." A card written ahead of
-# the code reads, at the cabinet, as a description of the machine in front of
-# you -- and describes one that does not exist yet.
+# --- commit congruence (rule 33) ------------------------------------------
+# A card names only identifiers the firmware defines at the card's commit.
 #
 # The corpus is the WORKING TREE, not a git ref. The gate runs on what is about
 # to be committed, which is the commit the cards ship with.
 #
-# FIRMWARE ROOTS ARE PER-REPO; these are PLC #1's. The splitter keeps firmware
-# under src/firmware/opta-cpp/splitter_plc/ and the saw under
-# firmware/saw_actuator/ -- set BINDER_FIRMWARE_ROOTS (space-separated, relative
-# to the repo root) to carry this check there. Roots that do not exist are
-# skipped; if none exist the check says NOT CHECKED out loud rather than passing
-# silently, because a gate that is silent reads as "clean" when it means "not
-# looked at".
+# FIRMWARE ROOTS ARE PER-REPO; these are this repo's (BINDER-POLICY.md, "The
+# congruence corpus"). BINDER_FIRMWARE_ROOTS (space-separated, relative to the
+# repo root or absolute) overrides them. Roots that do not exist are skipped; if
+# none exist the check says NOT CHECKED out loud rather than passing silently,
+# because a gate that is silent reads as "clean" when it means "not looked at".
 FWROOTS="${BINDER_FIRMWARE_ROOTS:-src include}"
 
-# A card may legitimately name a symbol in order to say it is NOT there --
-# 16_esr_system.md on ESR_CONTACT_FORM, 17_esr_build_spec.md on
-# SAW_SPEED_OUTPUT_AUTHORITY. For those citations absence IS congruence, and
-# flagging one would tell the reader to add the symbol, inverting the card.
-# The phrases below are about EXISTENCE only. "must not be set true" is
-# deliberately absent: that negates a value, not the symbol, and must still be
-# checked.
-NEGATION='must not be re-?introduced|does not exist|do(es)? not appear anywhere|no longer exists?|no longer present|not present in|absent from|has been removed|was removed|never existed|not defined anywhere'
-
-fwsyms=""; fwroots_found=0; cited_total=0; bydesign=0
+fwsyms=""; fwroots_found=0; cited_total=0
 # A root is taken relative to the repo root unless it is absolute. Absolute roots
 # let the firmware corpus be pointed at a tree extracted from another commit,
 # which is how this check is tested against a past state of the source.
@@ -84,11 +73,10 @@ if [ "$fwroots_found" -gt 0 ]; then
     | xargs -0 grep -hoE '\b[A-Z][A-Z0-9_]{2,}\b' | sort -u > "$fwsyms"
 fi
 
-# --- §9 dates -------------------------------------------------------------
-# A card carries no dates; the update stamp is the only exception, and in this
-# binder that stamp is a manifest field (last_updated) rather than card prose,
-# so nothing in references/*.md is exempt by shape except a header stamp line
-# written exactly "**Updated:** YYYY-MM-DD".
+# --- dates (rule 17) -------------------------------------------------------
+# The only date a card may carry is the day it was last updated, and in a card
+# that is the header stamp line written exactly "**Updated:** YYYY-MM-DD"
+# (rule 51). Nothing else in references/*.md is exempt by shape.
 #
 # The pattern is deliberately narrow, because this estate writes a great deal
 # of text that LOOKS like a date and is not. Each shape below was run against
@@ -128,34 +116,17 @@ cardids() { grep -ohE '\b[A-Z][A-Z0-9]+(_[A-Z0-9]+)+\b' "$1" | sort -u; }
 # in the binder, and a gate whose normal state is failure is not a control --
 # people pass it a skip flag and it becomes decoration. A family whose members
 # all exist describes behaviour that exists.
+# RULES.md grants no exemption for a card that names an identifier in order to
+# deny it exists, so a name the firmware does not carry fails wherever it sits.
 congruence() {
-  local f="$1" b="$2" id occ tot neg ln
+  local f="$1" b="$2" id ln
   [ -s "$fwsyms" ] || return 0
   while read -r id; do
     [ -n "$id" ] || continue
     cited_total=$((cited_total+1))
-    occ="$(grep -nE "\b${id}\b" "$f")"
-    tot=$(printf '%s\n' "$occ" | grep -c .)
-    neg=$(printf '%s\n' "$occ" | grep -icE "$NEGATION")
-    ln=$(printf '%s\n' "$occ" | head -1 | cut -d: -f1)
-    # PRESENCE FIRST, THEN THE EXEMPTION. A symbol the firmware defines is
-    # congruent whatever the card says about it, so it must never reach the
-    # negation branch. Tested the other way round, a card that mentions a real
-    # symbol in a sentence carrying a negation phrase — "was removed", "not
-    # present in" — is reported as absent by design about a symbol that plainly
-    # exists. Measured on the splitter: CYCLE_TIEDOWN_MS is in config.h and
-    # cycle.cpp, and its only card line reads "the CYCLE tie-down time was not
-    # carried over". Pass/fail was right and the printed reason was false, which
-    # is still a gate that lies.
     grep -qF -- "$id" "$fwsyms" && continue
-    if [ "$tot" -gt 0 ] && [ "$neg" -eq "$tot" ]; then
-      # Named in order to be denied, and genuinely absent. Absence confirms the
-      # card; print it so the exemption is visible on every run rather than silent.
-      bydesign=$((bydesign+1))
-      printf '  ok   %-34s line %s: %s absent by design (congruence)\n' "$b" "$ln" "$id"
-      continue
-    fi
-    viol "$b" "line $ln: $id — no such symbol in the firmware at this commit (congruence). Cite a symbol the firmware defines, or remove the claim from the card."
+    ln=$(grep -nE "\b${id}\b" "$f" | head -1 | cut -d: -f1)
+    strict "$b" "line $ln: $id — no such symbol in the firmware at this commit (rule 33). Cite a symbol the firmware defines, or remove it from the card."
   done < <(cardids "$f")
 }
 
@@ -164,47 +135,54 @@ for f in "$DIR"/*.md; do
   [ -e "$f" ] || { say "no cards found"; exit 1; }
   b=$(basename "$f"); cards=$((cards+1)); w=$(words "$f"); [ "$w" -gt 0 ] || continue
 
-  # §3 banned constructs. Each is counted, not judged.
-  n=$(grep -c '~~' "$f");                                        [ "$n" -gt 0 ] && viol "$b" "inline strikethrough on $n lines (§3)"
-  n=$(grep -cE '^\*\*Revised:\*\*|^\*\*Revised:' "$f");          [ "$n" -gt 1 ] && viol "$b" "$n stacked Revised: headers (§3)"
+  # Banned constructs. Each is counted, not judged.
+  n=$(grep -c '~~' "$f");                                        [ "$n" -gt 0 ] && viol "$b" "inline strikethrough on $n lines (rule 35)"
+  # rule 52 admits no front-matter key but Document, Firmware and Updated, so a
+  # single Revised: line is as much a violation as a stack of them (rule 18).
+  n=$(grep -cE '^\*\*Revised:' "$f");                             [ "$n" -gt 0 ] && viol "$b" "$n Revised: header line(s) (rules 18, 52)"
   # a real short SHA essentially always contains an a-f; requiring one stops this
   # matching decimal strings such as a numeric password or a part number.
   # backticked AND bare. \b bounds stop it matching inside a longer hex string.
   # a real SHA has BOTH a hex letter and a digit; that excludes decimal strings
   # (a numeric password) AND hex-lookalike words such as "defaced" or "deadbeef".
-  # §3 bans a SHA in PROSE. So define prose: not inside a fenced code block, not
-  # inside a URL, and not a segment of a UUID. Each exclusion below cost a false
-  # positive on a real card before it was added.
-  n=$(awk '/^```/{fence=!fence; next} !fence' "$f" \
+  # rule 36 bans a SHA in PROSE. So define prose: not inside a fenced code block,
+  # not the **Firmware:** stamp line (rule 83: a commit there is the binding),
+  # not inside a URL, and not a segment of a UUID. Each exclusion below cost a
+  # false positive on a real card before it was added.
+  n=$(awk '/^```/{fence=!fence; next} !fence && !/^\*\*Firmware:\*\*/' "$f" \
       | sed -E 's/`[^`]*`//g' \
       | sed -E 's#https?://[^ )`]*##g' \
       | sed -E 's/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}//g' \
       | grep -oE '\b[0-9a-f]{7,40}\b' | grep -E '[a-f]' | grep -cE '[0-9]')
-  [ "$n" -gt 0 ] && viol "$b" "commit SHA in prose, $n occurrence(s) (§3)"
-  n=$(grep -ciE 'NOT RE-VERIFIED|not checked against|this cell was not checked|unverified by' "$f")
-                                                                 [ "$n" -gt 0 ] && viol "$b" "$n unresolved hedge(s) (§3)"
+  [ "$n" -gt 0 ] && viol "$b" "commit SHA in prose, $n occurrence(s) (rule 36)"
+  # rule 28 names UNVERIFIED, "never measured" and "assumed, not measured".
+  n=$(grep -ciE 'NOT RE-VERIFIED|not checked against|this cell was not checked|unverified|never measured|assumed, not measured' "$f")
+                                                                 [ "$n" -gt 0 ] && viol "$b" "$n unresolved hedge(s) (rule 28)"
   n=$(grep -ciE 'this session|\bI (checked|verified|ran|found|wrote|did not)\b' "$f")
-                                                                 [ "$n" -gt 0 ] && viol "$b" "$n session-voice instance(s) (§3)"
-  n=$(grep -coE '\.claude/' "$f");                               [ "$n" -gt 0 ] && viol "$b" "$n citation(s) into agent scratch (§3)"
+                                                                 [ "$n" -gt 0 ] && viol "$b" "$n session-voice instance(s) (rule 34)"
+  # rule 8: a card verifies only from firmware, filed documents and design
+  # records. Agent scratch is none of them.
+  n=$(grep -coE '\.claude/' "$f");                               [ "$n" -gt 0 ] && viol "$b" "$n citation(s) into agent scratch (rule 8)"
 
-  # §9 dates. Counted per line, with the lines named: a date is fixed by reading
-  # the sentence it sits in, so the reader needs to be sent there.
+  # Dates (rule 17). Counted per line, with the lines named: a date is fixed by
+  # reading the sentence it sits in, so the reader needs to be sent there.
   dh=$(grep -nE "$DATES" "$f" | grep -vE "$STAMP")
   n=$(printf '%s' "$dh" | grep -c .)
-  [ "$n" -gt 0 ] && viol "$b" "$n date(s) in prose, only the update stamp is exempt (§9) — line(s) $(printf '%s\n' "$dh" | cut -d: -f1 | tr '\n' ',' | sed 's/,$//')"
+  [ "$n" -gt 0 ] && strict "$b" "$n date(s) in prose, only the update stamp is exempt (rule 17) — line(s) $(printf '%s\n' "$dh" | cut -d: -f1 | tr '\n' ',' | sed 's/,$//')"
 
-  # §6 measurable budgets
+  # Measurable budgets. RULES.md sets none; the thresholds are this repo's
+  # gate configuration (BINDER-POLICY.md).
   bd=$(bold "$f"); cr=$(capsr "$f")
   bk=$(awk -v b="$bd" -v w="$w" 'BEGIN{printf "%.1f", w?b*1000/w:0}')
   ck=$(awk -v c="$cr" -v w="$w" 'BEGIN{printf "%.1f", w?c*1000/w:0}')
-  awk -v c="$ck" 'BEGIN{exit !(c>4.0)}' && viol "$b" "caps-runs ${ck}/1k exceeds 4.0 (§6)"
-  awk -v x="$bk" -v c="$CEIL" 'BEGIN{exit !(x>c)}' && viol "$b" "bold ${bk}/1k exceeds ${CEIL} (§6)"
+  awk -v c="$ck" 'BEGIN{exit !(c>4.0)}' && viol "$b" "caps-runs ${ck}/1k exceeds 4.0 (gate budget)"
+  awk -v x="$bk" -v c="$CEIL" 'BEGIN{exit !(x>c)}' && viol "$b" "bold ${bk}/1k exceeds ${CEIL} (gate budget)"
 
   # unbalanced ** prints as literal asterisks on a laminated card
   tot=$(tr '\n' ' ' < "$f" | grep -o '\*\*' | wc -l)
-  [ $((tot % 2)) -ne 0 ] && viol "$b" "unbalanced ** ($tot markers) — prints literally (§6)"
+  [ $((tot % 2)) -ne 0 ] && viol "$b" "unbalanced ** ($tot markers) — prints literally (gate check)"
 
-  # commit congruence
+  # commit congruence (rule 33)
   congruence "$f" "$b"
 
   printf '  %-34s %6s words  bold %5s/1k  caps %4s/1k\n' "$b" "$w" "$bk" "$ck"
@@ -212,35 +190,34 @@ done
 
 say "=== $cards card(s) checked, $accepted accepted residual(s)"
 if [ "$fwroots_found" -gt 0 ]; then
-  say "=== congruence: $cited_total identifier(s) cited, checked against [$FWROOTS] in $ROOT; $bydesign absent by design"
+  say "=== congruence: $cited_total identifier(s) cited, checked against [$FWROOTS] in $ROOT"
 else
   say "=== congruence: NOT CHECKED — no firmware root found under $ROOT (looked for: $FWROOTS). Set BINDER_FIRMWARE_ROOTS."
 fi
 
-# §3 strikethrough outside the cards. Paths are relative to $ROOT, set at the top.
+# Strikethrough outside the cards (rule 35). Paths are relative to $ROOT, set at
+# the top. RULES.md lists this sweep under "Open: policy copies to converge".
 #
-# There is deliberately NO accept path here. BINDER-POLICY.md is the document that
-# bans strikethrough and it carried two struck lines of its own; ruled 2026-09-12
-# that it gets no exemption for quoting what it forbids. A file that needs to name
-# the construct names it in words.
+# There is deliberately NO accept path here. A file that needs to name the
+# construct names it in words.
 NONCARD=( "BINDER-POLICY.md" "ROADMAP.md" "design/*.md" )
 swept=0
-say "=== §3 strikethrough sweep outside the cards: $ROOT"
+say "=== strikethrough sweep outside the cards (rule 35): $ROOT"
 for g in "${NONCARD[@]}"; do
   for f in $ROOT/$g; do
     [ -e "$f" ] || continue
     swept=$((swept+1)); rel="${f#$ROOT/}"
     n=$(grep -c '~~' "$f")
     if [ "$n" -gt 0 ]; then
-      fail=1; printf '  FAIL %-34s inline strikethrough on %s line(s) (§3)\n' "$rel" "$n"
+      fail=1; printf '  FAIL %-34s inline strikethrough on %s line(s) (rule 35)\n' "$rel" "$n"
     else
       printf '  %-34s clean\n' "$rel"
     fi
   done
 done
-say "=== $swept non-card file(s) swept for §3 strikethrough"
+say "=== $swept non-card file(s) swept for strikethrough"
 if [ "$fail" -ne 0 ]; then
-  say "BINDER POLICY VIOLATED — see standards/BINDER-POLICY.md"
+  say "BINDER POLICY VIOLATED — see RULES.md in Alex-Pennington/greybeard-binder-rules"
   exit 1
 fi
 say "binder policy: PASS"
