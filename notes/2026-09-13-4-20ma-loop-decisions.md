@@ -141,7 +141,7 @@ would add another 18 psi, hence <=25 ppm/degC.
 
 ## 3. The 2828 psi figure, and why it is not the answer
 
-`notes/JD_520M_SpecSheet.pdf` gives **Rated Pressure 2828.0 psi**, Pump Capacity 11.0 gpm.
+`docs/vendor/john-deere/JD_520M_SpecSheet.pdf` gives **Rated Pressure 2828.0 psi**, Pump Capacity 11.0 gpm.
 
 **That figure is not this tractor's.** The sheet's Tractor block reads
 `Model - 5085E, 5090E, 5100E FT4`. Pump capacity and rated pressure are properties of the
