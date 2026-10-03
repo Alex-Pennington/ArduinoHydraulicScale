@@ -65,10 +65,17 @@ was committed.
 
 | Device | Cited at | What was tried | What would settle it |
 |---|---|---|---|
-| NXP TJA1051, **Rev. 9** (28 Nov 2017) | `notes/2026-09-20-can-level-interface-plan.md:110` | `nxp.com` (404 "Page not available" from Saga, two URL forms and `nxp.com.cn`), Mouser (JavaScript stub), SparkFun (404), LCSC (HTML page, not the PDF). Only Rev. 7 was obtainable (filed above) | A copy downloaded from `https://www.nxp.com/docs/en/data-sheet/TJA1051.pdf` from another network |
-| NXP TJA1050, product specification 2003 Oct 22 | `notes/2026-09-20-can-level-interface-plan.md:159` | `nxp.com` (404 as above), Mouser (stub), SparkFun and Waveshare (404). Elecrow mirror was the 1999 *preliminary* spec, so it was rejected. An ic72.com mirror would not extract text, so its part number could not be confirmed | A copy from `https://www.nxp.com/docs/en/data-sheet/TJA1050.pdf` from another network |
 | Jhoinrch RH-02 USB-CAN adapter (bench node) | `findings/2026-09-20-two-node-bench.md:19`; `notes/2026-09-22-tatonka-field-session.md:16` | Web search. The maker publishes only an HTML product page (`jhoinrch.net`) and Amazon listings, and no PDF datasheet was found | Nothing further. The maker does not appear to publish one |
 | Waveshare SN65HVD230 CAN Board, user manual or wiki | as the schematic, above | Only the schematic was filed. The Waveshare "Datasheets" PDF is a copy of TI's SLOS346 at an older revision (G) than the one filed above, so it adds nothing | Not needed |
+
+## Not needed
+
+The node uses the SN65HVD230 (`docs/vendor/texas-instruments/SN65HVD230_SLOS346O.pdf` and the Waveshare board schematic). The TJA parts appear only as options in a planning note. Ruled by Alex, 2026-10-03.
+
+| Device | Cited at |
+|---|---|
+| NXP TJA1051, **Rev. 9** (28 Nov 2017) | `notes/2026-09-20-can-level-interface-plan.md:110` |
+| NXP TJA1050, product specification 2003 Oct 22 | `notes/2026-09-20-can-level-interface-plan.md:159` |
 
 ## Named only generically (no maker or model in the repo)
 
