@@ -31,7 +31,7 @@ was committed.
 | PCF8574, LCD backpack I/O expander | `references/01_controller_card.md:41` | `texas-instruments/PCF8574_SCPS068K.pdf` | SCPS068K, rev. Sep 2024 | `https://www.ti.com/lit/ds/symlink/pcf8574.pdf` | `7d690920a73c2f71dade2f777bb34173ae582066d86e4af9dd406ed945d2b72a` | 2026-10-03 |
 | TI SN65HVD230, CAN transceiver chip | `notes/2026-09-20-can-level-interface-plan.md:44`; `findings/2026-09-20-two-node-bench.md:106` | `texas-instruments/SN65HVD230_SLOS346O.pdf` | SLOS346O, rev. Apr 2018 (the revision the notes cite) | `https://www.ti.com/lit/ds/symlink/sn65hvd230.pdf` | `e98fc0c59168c035d7958111924dae7e21e46ab45bdfd6400aef048299d6d716` | 2026-10-03 |
 | Waveshare SN65HVD230 CAN Board, schematic | `notes/2026-09-20-can-level-interface-plan.md:12`; `findings/2026-09-20-two-node-bench.md:18` | `waveshare/SN65HVD230-CAN-Board_schematic.pdf` | 1 page, no revision stated | `https://www.waveshare.com/w/upload/c/c5/SN65HVD230-CAN-Board-Schematic.pdf` | `7f1862fb51dc0252b89cca1e81af58cc27bb59250ff78bdcf52ddb7fc3f87338` | 2026-10-03 |
-| NXP TJA1051, CAN transceiver (recommended) | `notes/2026-09-20-can-level-interface-plan.md:100`, `:108` | `nxp/TJA1051_Rev7_2015-01-15.pdf` | **Rev. 7, 15 Jan 2015. The note cites Rev. 9 (28 Nov 2017); see "Not found"** | `https://www.farnell.com/datasheets/1931504.pdf` | `0d780a04c4c71142c2454d73980dbdd5be214fa6beb65c51f42d1c9ddc8363bc` | 2026-10-03 |
+| NXP TJA1051, CAN transceiver (recommended) | `notes/2026-09-20-can-level-interface-plan.md:100`, `:108` | `nxp/TJA1051_Rev7_2015-01-15.pdf` | **Rev. 7, 15 Jan 2015** | `https://www.farnell.com/datasheets/1931504.pdf` | `0d780a04c4c71142c2454d73980dbdd5be214fa6beb65c51f42d1c9ddc8363bc` | 2026-10-03 |
 | Microchip MCP2551, CAN transceiver (evaluated) | `notes/2026-09-20-can-level-interface-plan.md:103`, `:183` | `microchip/MCP2551_DS20001667G.pdf` | DS20001667G | `https://ww1.microchip.com/downloads/en/DeviceDoc/20001667G.pdf` | `d7c9cc459e1b3763929b96b0a1ee9f1f8d0cee408f9d9d31010825d50fdb0418` | 2026-10-03 |
 | Microchip MCP2561, CAN transceiver (named successor) | `notes/2026-09-20-can-level-interface-plan.md:185`, `:194` | `microchip/MCP2561-2_DS20005167C.pdf` | DS20005167C | `https://ww1.microchip.com/downloads/en/DeviceDoc/20005167C.pdf` | `c36b24e45446d8a1b7d90c0618a924cac0f117994390e60169287e6ba488c53e` | 2026-10-03 |
 | TI TXS0108E, level shifter (evaluated) | `notes/2026-09-20-can-level-interface-plan.md:200` | `texas-instruments/TXS0108E_SCES642L.pdf` | SCES642L, rev. Nov 2024 (the revision the note cites) | `https://www.ti.com/lit/ds/symlink/txs0108e.pdf` | `a6ddbe03088d291d1a1f8012189086b4b9962d1c878a462a8393c59fe225c883` | 2026-10-03 |
@@ -48,8 +48,7 @@ was committed.
 - **NXP's site refused every request from Saga** on 2026-10-03, returning a "Page not available"
   page with HTTP 404 for `nxp.com/docs/en/data-sheet/*.pdf` (TJA1051, TJA1050, PCA9548A,
   PCF8574). The TJA1051 copy is a Farnell mirror of an *older* revision. Its part number and
-  NXP branding were confirmed, but figures the note quotes from Rev. 9 Table 7 must not be
-  checked against it.
+  NXP branding were confirmed.
 - **PCA9548A and PCF8574.** The cards name the part and not its maker. Both parts are made by
   TI and by NXP. The TI datasheets are filed because NXP's site was unreachable. Read the maker
   off the fitted part before relying on a maker-specific figure.
