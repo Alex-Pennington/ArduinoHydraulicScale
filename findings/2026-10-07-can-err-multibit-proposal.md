@@ -1,6 +1,7 @@
 # `can_err` misses multi-flag CAN error events: proposal for issue #53
 
-**2026-10-07. PROPOSAL ONLY. Nothing here is in the firmware, and nothing has been flashed.**
+**2026-10-07. Alex approved route C for build only, in the question dialog ("Approve, build
+only"). Implemented at `434c2f38` on `docs/proposal-53-can-err-mask`. Not flashed** (see §6).
 Read from source and from the shipped FSP binary; the CAN behaviour itself is not measured on
 silicon. The test and the compiles below ran on Saga. Revised the same day after an adversarial
 review; each review point is answered in §5.
@@ -117,7 +118,7 @@ I verified each anchor above against the source myself and compiled the integrat
 
 ### The exact change (route C)
 
-**1. New file `include/can_event_mask.h`** (on this branch; no firmware file includes it yet):
+**1. New file `include/can_event_mask.h`**, included by `include/j1939_can.h`:
 
 - `canEventIsError(event)`: true for any bit other than RX_COMPLETE and TX_COMPLETE.
 - `canMergeError(...)`: what one drain reports. The hook's word wins, and the library's own flag
@@ -207,7 +208,7 @@ is the existing behaviour, left as it is.
 
 ## 3. Evidence
 
-Host test, `test/test_can_event_mask.cpp`, marked PROPOSED in its header. It runs the **real**
+Host test, `test/test_can_event_mask.cpp`. It runs the **real**
 `canEventIsError()` and `canMergeError()` from `include/can_event_mask.h`:
 
 ```
@@ -301,6 +302,40 @@ tractor's own bus. If the path needs to be seen working, the two-node bench rig
 5. **Minor points.** The extra R7FA6M5 files, licence headers and modification notice apply to
    route B only (§2). The `can_last` bit-set change is noted in §2. The consumer claim is
    recorded as the reviewer's; I have not verified it.
+
+## 6. Implementation
+
+Implemented at `434c2f38`, exactly as the diff in §2. The commit touches `include/j1939_can.h`,
+`src/ArduinoHydraulicScale.cpp` (the two console lines), `include/can_event_mask.h` (comment
+only) and `test/test_can_event_mask.cpp` (comment only). **Built, not flashed.**
+
+`tools/build-check.sh`, run from the worktree, image stamped `434c2f38`, not dirty:
+
+| Build | Flash | RAM |
+|---|---|---|
+| main `501b7dc8` | 104,120 | 17,784 |
+| `434c2f38` | 104,328 (+208) | 17,792 (+8) |
+
+Both were built by `build-check.sh` through the same scratch path, `/tmp/plc4-build-check`. Main
+came from a `git archive` export, stamped with its own SHA so the provenance strings are the same
+length. The `/tmp` builds in §3 used other scratch paths and read about 40 bytes lower. That
+offset is inferred to be the build path embedded in the image, since the sketch files were
+identical (`diff -rq`); it was not traced further.
+
+Host suite on `434c2f38`, all rc=0:
+
+- `test_can_event_mask`: 23 ok, 0 FAIL.
+- `test_loop_scaling`: 35 ok, 0 FAIL.
+- `test_j1939_replay` on the 2026-09-22 census log: 21 ok, 0 FAIL.
+- **Mutation check:** the real header with `canEventIsError()` forced false gives
+  `FAIL: 8 failure(s)`, exit 1.
+
+**Still owed before the change describes the machine:**
+
+- A flash, which is Alex's.
+- The checks in §4.
+- The binder follow-ups: `references/03_mqtt_contract.md:193` (`can_last` becomes a bit set) and
+  `references/05_known_defects.md` D4.
 
 ## References
 
