@@ -35,6 +35,30 @@ inventory moves.
 - **Reader power: the existing beefy off-board 5 V supply** (Alex). Its spare capacity for
   the reader's ~1 A is his statement, not measured.
 
+## Tallies (Alex, 2026-10-07)
+
+Every inventory button carries the same metadata as a record: the phone's GPS and time, and
+the tag where there is one.
+
+- **The tally is a record of a truck being loaded or of a day's output**, not a scratch list.
+- **Buttons:** start tally, `+` (record into it), `-` (void the last record), and **end
+  tally**, which replaces `b` (clear).
+- **Attribution is set at start:** a *daily log* or an *outgoing delivery*. A delivery also
+  carries the **customer / order**, picked in the app when it opens.
+- **A daily log and a delivery can be open at once.** On each `+` the **operator chooses**
+  which open tally the record goes to, so each record belongs to exactly one tally.
+- **The tally lives in the app and consumer, not on the board.** The app opens a tally with
+  an ID and sends it with each record command; the board stamps it on the record and
+  publishes. The board's 50-entry tally and its cap go away.
+- **An undo is published.** Every record gets an ID; `-` publishes a void naming it, and the
+  consumer reverses that move. Ending a tally is published too. (Today `-` and `b` change the
+  board's tally and publish nothing: `src/ArduinoHydraulicScale.cpp:2002-2009`, and the `-`
+  handler has no publish either.)
+- **LCD shows the weight only.** The tally count leaves the display; the phone shows it.
+- **The Bluetooth console is mothballed** so nobody spends time maintaining it; it is not
+  used. Every inventory move comes through the app. (Inference: the USB console stays, as the
+  flashing and service path on farm1.)
+
 ## Out of scope for this discussion (Alex)
 
 - Bag material and where the tag sits on the bag.
@@ -69,4 +93,10 @@ and for how much time the operator-pick step costs per day.
 - The weight record gains the tag, GPS and time. The phone time also fixes "when" for
   replayed records, which today carry only `age_ms`.
 - A tag read has to fit inside, or be split across, the 500 ms main loop.
+- Tallies: the record command carries a tally ID; the weight record carries a record ID and
+  the tally ID; a void message and a tally-end message are new. The board's `rT[]` tally,
+  `b`, `sum`, and the `n`/`total` fields on `weight` and `ack` would be retired or reworked;
+  the consumer reads `n`/`total` today, so that is a contract change on both sides.
+- Retiring the HC-05 console frees D0/D1, the board's only hardware UART. The RFID reader
+  could take it directly, and the SC16IS750 bridge would not be needed.
 - All of this is a gated firmware change; nothing here is approved.
