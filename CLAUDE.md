@@ -46,8 +46,9 @@ confirm it names the UNO R4 WiFi. The firmware publishes the commit it was built
 
 That changes what a wrong claim costs. It is no longer a sentence in a file — it is a
 machine in a field producing a weight somebody acts on. Say which claims are read from
-source and which are measured, and measure where you can: the broker is reachable from
-Saga and the board answers.
+source and which are measured, and measure where you can: the board answers on the
+broker. Do not assume Saga reaches the broker directly. If a subscribe from Saga times
+out, run it on a host that does, and say which host you read through.
 
 ## When you do not know
 
