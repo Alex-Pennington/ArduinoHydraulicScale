@@ -1,4 +1,5 @@
-// RFID record / tally contract logic -- PROPOSAL, NOT APPROVED, NOT WIRED IN.
+// RFID record / tally contract logic -- spec approved for consumer hand-off;
+// board firmware gated, NOT approved, NOT WIRED IN.
 //
 // The pure decision and serialisation logic behind
 // notes/2026-10-07-rfid-record-contract.md. Nothing in src/ includes this file,
@@ -53,8 +54,8 @@ constexpr size_t CMD_BUF     = 256;  // command capture; today CmdCapture.body[1
 constexpr size_t ACK_BUF     = 576;  // ack payload; today 192 (src/ArduinoHydraulicScale.cpp:912)
 constexpr size_t EVENT_BUF   = 352;  // weight-topic payload; today 160 (src/ArduinoHydraulicScale.cpp:440)
 // Backlog depth. Records are taken only within WiFi range (Alex, 2026-10-07),
-// so this is a short reconnect buffer, not an out-of-range store. See the note's
-// "Backlog, RAM and delivery" section for the sums.
+// so this is a short buffer for publishes that fail while the link drops, not an
+// out-of-range store. See the note's "Backlog and RAM" section for the sums.
 constexpr int    QUEUE_DEPTH = 16;
 
 // Ack details. All fit the 20-character detail the ack path holds today
@@ -542,10 +543,6 @@ struct Event {
   Kind     kind          = Kind::Record;
   uint8_t  sensor        = 0;       // the firmware's LoopState at capture; records only
   bool     calDefault    = false;   // records only
-  // Set when a publish attempt went unacknowledged, so this event is being held
-  // and retried. It is what `backlog` means on the wire now that every event
-  // goes through the queue: true = not delivered on the first attempt.
-  bool     retried       = false;
   int32_t  w             = 0;       // records only
   uint32_t capturedAtMs  = 0;
   char     rec[ID_MAX + 1]       = "";   // record, void
@@ -591,7 +588,8 @@ inline Event endEvent(const EndCmd &c, uint32_t nowMs) {
   return e;
 }
 
-// `backlog` is e.retried in the proposed firmware: see Event::retried.
+// `backlog` means what it means today: true when the event was held on the
+// machine and published later by the flush, false when published live.
 // sensorName is the caller's name for e.sensor (loopStateName() in the
 // firmware); it is read only for records. Returns the length, or -1 if the
 // payload does not fit `cap` or a field is unusable.
@@ -692,21 +690,17 @@ inline Ack refusalAck(const char *id, const char *verb, const Decision &d) {
 // ---------------------------------------------------------------------------
 // Backlog: one FIFO for records, voids and tally ends
 // ---------------------------------------------------------------------------
-// EVERY accepted event goes through this queue; nothing is published from the
-// verb handler. The flush sends the oldest event at QoS 1, at most one per loop
-// pass, at the END of the pass after the ack -- the pattern publishNextDtc()
-// already uses for its QoS 1 publishes (src/ArduinoHydraulicScale.cpp:632-670, placed at src/ArduinoHydraulicScale.cpp:2247-2254).
-// An event leaves the queue only when its PUBACK has arrived, which with
-// ArduinoMqttClient 0.1.8 is endMessage() returning 1 at QoS 1
-// (MqttClient.cpp:222-257). One path, one order: a void can never overtake its
-// record, and a lost publish is retried rather than forgotten.
+// The weight topic stays at QoS 0, as today (src/ArduinoHydraulicScale.cpp:407).
+// Delivery to the consumer is confirmed end to end by the consumer and the app,
+// not by the board (Alex, 2026-10-07: "Consumer confirms, app resends").
+//
+// The flush keeps today's rules (queueFlush(), src/ArduinoHydraulicScale.cpp:534-554):
+// oldest first, removed once publishTo() returns true, stop at the first failure.
 //
 // FULL IS A REFUSAL, NOT A DROP. Today's queue drops the oldest weight when full
-// (src/ArduinoHydraulicScale.cpp:515-520), which suited recording out of range with nobody told. Records
-// are now taken only in range, every event is answered by an ack to an operator
-// standing there, and dropping the oldest could silently lose a void or a tally
-// end. So a full queue refuses the new event with QUEUE FULL, and nothing that
-// was accepted is ever discarded.
+// (src/ArduinoHydraulicScale.cpp:515-520). Records are now taken only in range
+// and every event is answered by an ack to an operator standing there, so a full
+// queue refuses the new event with QUEUE FULL and nothing accepted is discarded.
 template <int N>
 struct EventQueue {
   Event         buf[N];
@@ -725,22 +719,12 @@ struct EventQueue {
   void pop() { if (count) { head = (head + 1) % N; count--; } }
 };
 
-// One flush step. `publish` sends the event and returns true ONLY when the
-// broker has acknowledged it (QoS 1 PUBACK). The event is removed only then; a
-// failed or unacknowledged publish leaves it at the front for the next attempt,
-// so the order is kept and nothing is skipped. Returns true when one went out.
-//
-// A PUBACK lost after the broker took the message means the next attempt
-// delivers it twice. The consumer must treat a repeat `rec` (record or void) or
-// a repeat tally end as the same event; see the note's consumer impact.
-template <int N, class Publish>
-bool flushOne(EventQueue<N> &q, Publish publish) {
-  const Event *e = q.front();
-  if (!e) return false;
-  if (!publish(*e)) { q.buf[q.head].retried = true; return false; }
-  q.pop();
-  return true;
-}
+// THE ORDERING RULE. An event may be published live only when nothing is
+// waiting; otherwise it joins the back of the queue and the flush sends it in
+// turn. Today's `+` publishes live whenever the board is online, even with a
+// backlog (src/ArduinoHydraulicScale.cpp:1919-1924) -- harmless for weights,
+// wrong once a void can overtake the record it cancels.
+inline bool mustQueue(bool online, int queued) { return !online || queued > 0; }
 
 }  // namespace rfid
 

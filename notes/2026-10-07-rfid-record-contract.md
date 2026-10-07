@@ -1,9 +1,9 @@
 # RFID record and tally — MQTT contract proposal (2026-10-07)
 
-**NOT APPROVED.** This is a proposal. Nothing in it is in the firmware, and nothing changes on the
-tractor until Alex approves a specific firmware change. The binder card
-`references/03_mqtt_contract.md` follows once a change is approved and flashed. Until then it
-describes the running firmware, not this note.
+**Approved by Alex 2026-10-07 for consumer hand-off. Board firmware is gated, not approved.**
+Nothing in this note is in the firmware, and nothing changes on the tractor until Alex approves a
+specific firmware change. The binder card `references/03_mqtt_contract.md` follows once a change
+is approved and flashed. Until then the card describes the running firmware, not this note.
 
 The design this specifies is settled in `notes/rfid-inventory-discussion.md`. Nothing recorded
 there as decided is reopened here. The pure logic behind this contract is in
@@ -25,6 +25,14 @@ Ruled in the coordinator's dialog and relayed to this worker by Ymir. These are 
   range there is no recording, and that is accepted.
 - **No GPS fix: the record is accepted with no position.** This was this note's proposal, and he
   ruled it.
+- **Lost voids and tally ends: "Consumer confirms, app resends".** He chose this over two
+  alternatives: QoS 1 with a short wait on the board, and QoS 1 for voids and tally ends only.
+  The option was put to him as: *"No waiting on the board. The consumer confirms each record and
+  end and the app re-sends what goes unconfirmed. Work for the consumer coordinator, not the
+  board."* That is the coordinator's option text, not his sentence. The weight topic stays at
+  QoS 0. See *Confirmation*.
+- **Hand-off: "Approve and hand off".** The spec, with that fix, is approved for handing to the
+  consumer coordinator.
 
 ## Messages at a glance
 
@@ -37,10 +45,12 @@ Ruled in the coordinator's dialog and relayed to this worker by Ymir. These are 
 | Record event | `plc4/jd5055e/weight` | board → consumer | Changed: `kind`, `rec`, `tally`, `tag`, `t_ms`, `lat`, `lon`, `acc`. `n` and `total` are dropped |
 | Void event | `plc4/jd5055e/weight` | board → consumer | New |
 | Tally-end event | `plc4/jd5055e/weight` | board → consumer | New |
+| Confirmation | `plc4/jd5055e/confirm` | consumer → app | New. **Consumer and app own it; the board takes no part** |
 
-Retain and the dedup rules stay as `03` states them today. Commands go in at QoS 1 and are never
-retained. Acks go out at QoS 0. **The weight topic changes from QoS 0 to QoS 1**, not retained.
-An event leaves the board's queue only when the broker has acknowledged it; see *Delivery*.
+QoS, retain and the dedup rules stay as `03` states them today. Commands go in at QoS 1 and are
+never retained. Acks go out at QoS 0. The weight topic stays at QoS 0 and is not retained
+(`src:407`). End-to-end delivery is confirmed by the consumer and the app, on a new topic that the
+board neither publishes nor subscribes to; see *Confirmation*.
 
 ## Commands on `plc4/jd5055e/cmd`
 
@@ -188,7 +198,7 @@ point of the discussion's "one complete record" decision.
 | `tag` | new | The one EPC recorded, upper-case hex |
 | `t_ms` | new | Phone time from the command |
 | `lat`, `lon`, `acc` | new | Phone fix from the command, or all three `null` when the phone sent none |
-| `age_ms`, `backlog` | kept (`src:451-454`) | `age_ms`: milliseconds from capture to this publish attempt, as today. `backlog`: true when an earlier attempt to publish this event went unacknowledged, so it was held and retried. Every event now passes through the queue, so "came from the queue" no longer separates anything. `t_ms` now answers "when" |
+| `age_ms`, `backlog` | kept (`src:451-454`) | Same meaning as today: `backlog` is true when the event was held on the machine and published later, and `age_ms` is the time between capture and publication. `t_ms` now answers "when" |
 | `sensor`, `cal` | kept (`src:451-454`, at-capture rule `src:524-530`) | Loop state and calibration at capture |
 | `id` | kept | `plc4-jd5055e` |
 | `n`, `total` | **removed** | See *What retires* |
@@ -229,8 +239,9 @@ Why:
    second record carries the **same** `rec`, so the consumer can see the duplicate and drop it.
    Under a board-side `boot:seq` scheme the duplicate would get a fresh ID and count twice without
    anyone seeing it.
-4. **The backlog needs nothing extra.** The ID is stored in the queue entry with the rest of the
-   event. A retry after a lost PUBACK carries the same `rec`, so a double delivery is visible too.
+4. **The backlog and the confirmation need nothing extra.** The ID is stored in the queue entry
+   with the rest of the event. A confirmation names the same `rec` the app already holds, and a
+   resent void carries it too, so a double delivery is visible.
 
 The alternative was a persisted boot counter plus a RAM sequence. It was rejected for reasons 1–3.
 A RAM-only sequence with no persistence collides across a reboot; `test_rfid_record.cpp` shows
@@ -240,7 +251,7 @@ What the app must do: generate a globally unique `id` for every record command, 
 every retry. `rfid::recordIdFor()` only checks and copies the ID; the board does not check
 uniqueness beyond the eight-deep ring.
 
-## Backlog, RAM and delivery
+## Backlog and RAM
 
 ### Today
 
@@ -250,40 +261,38 @@ oldest first and stops at the first failed publish (`src:534-554`). It runs on r
 (`src:1394`) and on every telemetry cycle while anything is queued (`src:1824`). `+` publishes
 live whenever the board is online, even with records still waiting (`src:1919-1924`).
 
-### Range-only makes the queue a short reconnect buffer
+### Range-only makes the queue a short buffer
 
 Commands reach the board only through the broker. A command captured on a connection that has
 since dropped is thrown away (`src:1119-1123`). So the board can accept a record, void or tally
 end only while it is connected, which is the range-only rule Alex ruled. **The queue cannot grow
-while the board is out of reach.** It grows only while commands arrive but publishes go
-unacknowledged, or for the event or two in flight when the link drops. The USB console cannot
-record in this design, because it has no tally.
+while the board is out of reach.** It holds only the events whose publish failed as the link
+dropped, plus anything queued behind them. The USB console cannot record in this design, because
+it has no tally.
 
 ### Proposed queue
 
 - **One FIFO for all three kinds** (`rfid::EventQueue`, entry `rfid::Event`). A void must never
   publish before the record it cancels, and a tally end must never publish before that tally's
   last record.
-- **Every accepted event is queued; nothing publishes from the verb handler.** The flush sends the
-  oldest event, at most one per loop pass, at the end of the pass after the ack
-  (`rfid::flushOne`). That removes today's live-publish path, which can let a void overtake its
-  record (`src:1919-1924`).
+- **The ordering rule** (`rfid::mustQueue`): an event is published live only when the board is
+  online and the queue is empty. Otherwise it goes to the back of the queue. That closes today's
+  live-publish-past-a-backlog path (`src:1919-1924`), which would let a void overtake its record.
+  The flush keeps today's rules and call sites (`src:534-554`, `src:1394`, `src:1824`).
 - **Depth 16** (`rfid::QUEUE_DEPTH`). A full queue **refuses** the new event with `QUEUE FULL`
   instead of dropping the oldest. Drop-oldest suited recording out of range with nobody told.
   Now every event is answered by an ack to an operator standing at the machine, and dropping the
   oldest could silently lose a void or a tally end. `status.dropped` stays in the payload, and
   this firmware never increments it.
-- At-capture `sensor`/`cal` (`src:524-530`) and `age_ms` stay. `backlog` is redefined; see the
-  record field table.
+- At-capture `sensor`/`cal` (`src:524-530`), `age_ms` and `backlog` stay as they are today.
 - **Why 16:** at 2,448 B it costs what today's 200 × 12 B queue costs (2,400 B), so the depth is
   not traded against RAM. It holds four full capture rings' worth of accepted events (the ring
-  is four deep, `src:952-958`). Since the queue cannot grow out of range, 16 covers any stretch
-  of acknowledgements failing in range during which an operator is still pressing record. If it
-  ever fills, the operator is told and nothing accepted is lost.
+  is four deep, `src:952-958`), which is more than can be in flight when a link drops. If it ever
+  fills, the operator is told and nothing accepted is lost.
 
 The queue is RAM only, as Alex ruled for today's queue (`src:320-322`). A reset with events
-queued still loses them, so the consumer must still tolerate a void with no record (item 7
-below).
+queued loses them, and a QoS 0 publish can be lost on the wire after `publishTo()` reports
+success (`src:902-905`). Both cases are what the confirmation leg catches.
 
 ### RAM
 
@@ -307,16 +316,22 @@ That puts static RAM near 17,888 B and leaves about 14,880 B for stack and heap.
 arithmetic, not a build. Any RAM the reader's driver adds is not determinable until the driver is
 chosen. A build of the wired change answers it.
 
-| Stack buffers (locals, not globals) | Today | Proposed | Worst case measured by the test |
+| Stack buffers (locals) | Today | Proposed | Worst case measured by the test |
 |---|---|---|---|
 | Ack payload (`src:912`) | 192 | 576 (`rfid::ACK_BUF`) | 559, eight 128-bit EPCs and a 40-char id |
 | Weight-topic payload (`src:440`) | 160 | 352 (`rfid::EVENT_BUF`) | 339 |
 | `rfid::Decision`, record path only | — | 336 | |
 
-The handler, the ack block and the flush run one after another in `loop()`, not inside each
-other. So the peak stack grows by the largest of these, not their sum: under 1 KB, plus however
-the driver buffers one raw read. Today's peak stack is not measured. That margin is the reason
-for the 14.9 KB figure above, not a substitute for measuring it.
+**On a tag refusal the `Decision` and the ack buffer are live together**, because the ack's tag
+list (`Ack.tags`) points into the `Decision`. That is 336 + 576 = **912 B** at once, which is the
+peak, plus however the driver buffers one raw read. The weight payload is used separately, in the
+handler or the flush. Today's peak stack is not measured, and the margin above is not a
+substitute for measuring it.
+
+Inference: today the ack is written at the end of `loop()` (`src:2218-2244`), after the handler
+has returned. If the wired change keeps that structure, the `Decision` cannot live on the
+handler's stack. It moves to static RAM, which adds 336 B to the net above (+432 in all). Writing
+the refusal ack from the handler would avoid that. That choice is for the firmware change.
 
 **Binary EPCs and IDs: not worth it at this depth.** Packing the EPC into 16 bytes and the
 record and tally IDs into 16 bytes each saves about 80 B per entry, so about 1.3 KB across 16
@@ -325,56 +340,94 @@ have to be UUIDs where today any `id`-charset token up to 40 characters is allow
 pack and unpack code on both the publish and the dup-replay paths. Revisit it only if the depth
 must grow past about 64 entries (64 × 152 B = 9.7 KB, inference).
 
-### Delivery: QoS 1, removed from the queue only on PUBACK
+## Confirmation — PROPOSAL FOR THE CONSUMER COORDINATOR
 
-**The problem.** The weight topic publishes at QoS 0 today. `publishTo()` calls the sized
-`beginMessage(topic, size)` with the library's default QoS 0 (`src:407`), and at QoS 0
-`endMessage()` returns 1 without any acknowledgement (`MqttClient.cpp:222`, `:259`). The
-firmware notes that this success means only that the bytes reached the radio coprocessor
-(`src:902-905`). A void or tally end lost on the wire leaves no trace. A lost void overcounts a
-delivery, and a lost tally end leaves a truckload open.
+**The consumer and the app own this leg. The board takes no part:** it neither publishes nor
+subscribes to the confirmation topic, and it subscribes only to `cmd` (`src:1387-1388`). Alex
+ruled this design (*Ruled* above). What follows is the board side's proposal for the consumer
+coordinator to adopt or change.
 
-**What the library supports.** ArduinoMqttClient 0.1.8 publishes at QoS 1 when `beginMessage`
-is given `qos = 1` (`MqttClient.cpp:174`). `endMessage()` then spins on `poll()` until the
-PUBACK for its packet id arrives (`MqttClient.cpp:244-254`, matched at `:500-507`). It returns 1
-on a PUBACK and 0 on timeout or disconnect. The timeout is `setConnectionTimeout()`, which this
-firmware sets to `MQTT_CONNECT_TIMEOUT_MS` = 2,000 ms (`src:200`, `src:1552`). The library
-tracks one outstanding packet id and has no non-blocking PUBACK API. The session is clean
-(`src:1370`), so neither side resends anything after a reconnect.
+### Why it exists
 
-**The fix: the smallest one that holds.**
+The weight topic is QoS 0 (`src:407`). At QoS 0 `endMessage()` returns 1 with no
+acknowledgement (`MqttClient.cpp:222`, `:259`), and the firmware notes that this success means
+only that the bytes reached the radio coprocessor (`src:902-905`). A void or tally end lost on
+the wire leaves no trace. A lost void overcounts a delivery, and a lost tally end leaves a
+truckload open. The same is true of a record and of anything queued in RAM when the board resets.
 
-1. Publish weight-topic events at QoS 1, not retained. Records go at QoS 1 too: a lost record
-   undercounts just as a lost void overcounts, and one path is smaller than two.
-2. Remove an event from the queue only when `endMessage()` returns 1, which means the PUBACK
-   arrived. On 0 the event stays at the front, marked `retried`, and is sent again. Nothing
-   behind it moves first (`rfid::flushOne`).
-3. Use the pattern this board already runs: `publishNextDtc()` publishes at QoS 1, one per pass,
-   marks published only on `endMessage() == 1`, and backs off after a failure (`src:632-670`).
-   It sits at the end of `loop()`, after the ack, because a PUBACK spin there cannot age the
-   reading under a command waiting to run (`src:2247-2250`). The event flush goes in the same
-   place.
-4. After an unacknowledged attempt, wait one telemetry period (5 s) before the next. Retry at
-   once on reconnect, as today (`src:1394`). This bounds what a broker that has stopped
-   acknowledging costs the loop.
+The board's QoS 1 machinery cannot be leaned on instead. `publishStatus()` discards
+`endMessage()`'s result (`src:512`). `publishNextDtc()` reads it (`src:664-669`), but nothing in
+this repo records whether those publishes are actually acknowledged. **Nothing here shows that
+this broker returns PUBACKs to this board.**
 
-**What this holds against, and what it does not:**
+### Topic and payload
 
-- It holds on this broker: it already acknowledges QoS 1 from this board for `status` and the
-  DTC topics (`src:510`, `src:664-669`). A delivered PUBACK proves the broker has the event.
-- **A PUBACK lost after the broker took the message means a second delivery.** The consumer must
-  treat a repeat `rec`, or a repeat tally end, as the same event. The record-ID scheme makes that
-  possible.
-- **The cost is a wait on every event.** On the healthy path the wait is one LAN round trip; its
-  length on this network is not measured. On a lost PUBACK it is up to 2 s, which equals
-  `READING_STALE_MS` (`src:144`). **Alex moved the acks from QoS 1 to QoS 0 for exactly this reason**
-  (`src:892-897`): a held reading refuses the next command `NO ADC`. So putting the weight topic
-  at QoS 1 needs his approval made knowing this. Placing the flush after the
-  ack, one event per pass with backoff, keeps that hazard to the one pass that failed. `status`
-  and DTC publishes already carry the same risk.
-- **The broker-to-consumer leg is the consumer's.** The board's PUBACK says nothing about the
-  subscriber. The consumer must subscribe at QoS 1, and must use a persistent session if events
-  published while it is down are to be held for it (consumer impact, item 11).
+`plc4/jd5055e/confirm`, published by the consumer at QoS 1, not retained. The app subscribes.
+
+```json
+{"kind":"record","rec":"3f2a9c21-…","by":"<consumer client id>"}
+{"kind":"void","rec":"3f2a9c21-…","by":"<consumer client id>"}
+{"kind":"tally_end","tally":"T-day-1007","by":"<consumer client id>"}
+```
+
+| Field | Meaning |
+|---|---|
+| `kind` | The kind of the event being confirmed, as on `weight` |
+| `rec` | For `record` and `void`: the record ID |
+| `tally` | For `tally_end`: the tally ID |
+| `by` | The consumer's client id. It is not `id`, so the payload cannot be confused with a board message, which uses `id` for `plc4-jd5055e` |
+
+The topic sits under the machine's root because it is about this machine's events. Under the
+reportedly ACL-free broker (`BRIEF.md`), topic discipline is the only separation, and the board
+never subscribes outside `cmd`.
+
+### Rules for the consumer
+
+1. Confirm only after the move is stored durably. A confirmation is a promise that the event
+   counts.
+2. **Confirm every receipt, duplicates included.** If the first confirmation was lost, only a
+   confirmation of the resend closes the loop. A duplicate is confirmed and dropped, never
+   applied twice.
+3. A void whose `rec` the consumer has never seen is kept or flagged (consumer impact, item 7).
+   It is still confirmed, because the app must stop resending it.
+
+### Rules for the app
+
+**Voids and tally ends are resent until confirmed.**
+
+- After an accepted void (`voided`) or tally end (`ended`), wait **10 s** for its confirmation.
+  That is two telemetry periods (`TELEMETRY_MS` = 5,000, `src:306`). An event queued on the board
+  goes out at the latest on the next telemetry-cycle flush (`src:1824`), and the consumer needs
+  time to store it. The 10 s is a starting value for the consumer coordinator to tune.
+- If no confirmation comes, resend, again every 10 s while the board answers. Show the event as
+  unconfirmed from the first timeout.
+- **A resend must carry a NEW command `id`.** This is the trap. The board's dedup ring replays the
+  stored verdict for a repeated `id` and does not run the verb again (`src:1147-1152`). A resend
+  under the old `id` would come back `voided` and publish nothing.
+- **A resend repeats the original `rec` or `tally`, `t_ms` and GPS unchanged.** `t_ms` is when the
+  operator pressed the button, not when the app retried. The board then publishes an event
+  identical to the first, apart from `age_ms` and `backlog`, and the consumer matches it as a
+  duplicate.
+- A resend refused `QUEUE FULL`, or one with no ack at all, is simply retried on the next interval
+  with yet another new `id`.
+
+**Records are not resent.** A resent `+` would read the scale again: a second weighing, not a
+resend. The consumer still confirms records, and the app uses that to show each record as
+confirmed or unconfirmed. For a record still unconfirmed after the same 10 s, the app marks it
+unconfirmed and leaves the operator to act. The operator can wait, since a backlog flush may
+still deliver it, or void it and weigh again. If the record did arrive, the void cancels it. If
+it never arrived, the consumer receives a void for an unknown `rec`, keeps it and confirms it
+(rule 3 above).
+
+### What the board already does for this
+
+Nothing new is needed on the board. A void or tally end is published each time it is accepted
+under a new `id`. The board keeps no record of which `rec` it has voided or which tally it has
+ended, because the tally lives in the app and consumer. `test_rfid_record.cpp` models the board's
+command path to show this. A repeat under the same `id` is a dedup replay and publishes nothing.
+A repeat under a new `id` publishes again, with the same payload. Two resends while the board is
+offline both queue and flush in order with `backlog: true`. A model of the consumer's rules then
+counts a record once after a duplicate record, a duplicate void and a duplicate tally end.
 
 ## What retires
 
@@ -390,7 +443,7 @@ tracks one outstanding packet id and has no non-blocking PUBACK API. The session
 | `n`, `total` on `ack` | `src:920-926`, `src:2244` | **Consumer contract change, owned by the consumer coordinator** (the app reads acks) |
 | `n`, `total` on `status` | `src:496`, `src:502` | Inference: retires with the tally it reports. Same owner |
 | Drop-oldest on a full queue | `src:515-520` | Replaced by `QUEUE FULL` refusal |
-| Live publish from the `+` handler, and QoS 0 on `weight` | `src:1919-1924`, `src:407` | All events through the queue, QoS 1. **The QoS change is a consumer contract change, owned by the consumer coordinator** |
+| Live publish past a waiting backlog | `src:1919-1924` | Live only when the queue is empty (`rfid::mustQueue`) |
 | The Bluetooth console (HC-05 on `Serial1`) | `src:26-44`, `src:1460`, `src:2302-2307` | Mothballed (discussion). The reader takes D0/D1. Inference from the discussion: the USB console stays as the service path, without `+`, `-`, `b` or `sum` |
 
 `tare`, `kv`, `c`, `w` and `sm` do not change.
@@ -405,11 +458,10 @@ names `/opt/plc1-monitoring` as where it lives. It belongs to the consumer coord
 2. **Stop reading `n` and `total`** on `weight`, `ack` and `status`. Compute tally totals from
    records minus voids.
 3. Key each record by `rec`, and make the insert idempotent. A second record with a `rec`
-   already seen is either an app resend after a board reboot, or a QoS 1 redelivery after a lost
-   PUBACK. Drop it and log it. Voids are idempotent on `rec` and tally ends on `tally` in the
-   same way.
-4. Take "when" from `t_ms`, which is phone time. `backlog: true` now means the board's first
-   attempt to publish the event went unacknowledged.
+   already seen is an app resend after a board reboot. Drop it and log it. Voids are idempotent
+   on `rec`, and tally ends on `tally`, because the app resends both until they are confirmed.
+4. Take "when" from `t_ms`, which is phone time. `age_ms` and `backlog` mean what they mean
+   today.
 5. Take "where" from `lat`/`lon`/`acc`, which may all be `null`. The yard zone is derived from
    these downstream (discussion, *Decided*).
 6. Record the move against `tag`, the one EPC.
@@ -425,16 +477,15 @@ names `/opt/plc1-monitoring` as where it lives. It belongs to the consumer coord
    tally ID on records and publishes `tally_end`.
 10. The backlog depth changes from 200 to 16, and full now refuses instead of dropping. Update the
     consumer's documented bound (`src:334-342`).
-11. **Subscribe to `plc4/jd5055e/weight` at QoS 1**, so the broker-to-consumer leg matches the
-    board's. If events published while the consumer is down must be held for it, use a
-    persistent session with a fixed client id. What the broker holds for an offline subscriber
-    depends on its configuration, which this repo cannot see.
+11. **Build the confirmation leg** (see *Confirmation*): publish confirmations on
+    `plc4/jd5055e/confirm`, and have the app resend unconfirmed voids and tally ends under a new
+    command `id`, and flag unconfirmed records. The consumer and the app own all of it.
 
 ## Open questions only Alex can answer
 
-None remain in this note. The three earlier questions are answered: two by his rulings above, and
-the tally-start question is now consumer item 9. The proposal as a whole still waits for his
-approval as a firmware change.
+None remain in this note. The earlier questions are answered: by his rulings above, and by
+moving tally start to consumer item 9. The spec is approved for consumer hand-off. The board
+firmware change still needs his separate approval.
 
 ## Implementation notes for the gated firmware change (not done)
 
@@ -444,8 +495,8 @@ approval as a firmware change.
   `acc` are JSON numbers; `rfid::numberToken` reads them.
 - The verb allowlist (`src:769-773`) gains `end` and loses `b`.
 - The dup-replay path (`src:1147-1152`) adds `rec` when the stored verb is `+` and `ok`.
-- Replace `queuePush`/`queueFlush`, the live publish in `+` (`src:1919-1924`), and the flush
-  calls at `src:1394` and `src:1824` with the single QoS 1 flush at the end of `loop()`, placed
-  next to `publishNextDtc()`. See *Delivery*.
+- Replace `WeightRecord` and `queuePush` with `rfid::Event` and `rfid::EventQueue`, refusing when
+  full. Gate the live publishes for `+`, `-` and `end` on `rfid::mustQueue`. `queueFlush` keeps
+  its rules and its call sites. The weight topic stays at QoS 0.
 - No signing, nonces, keys or replay defence (Alex, 2026-10-07: "this is a firewood buisiness not
   norad").

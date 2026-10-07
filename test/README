@@ -17,7 +17,7 @@ The files here are host checks built with plain g++, not PlatformIO tests.
 Each carries its own build line in its header comment; run from the repo root.
 
   test_rfid_record.cpp   RFID record / tally contract logic, include/rfid_record.h.
-                         A PROPOSAL (notes/2026-10-07-rfid-record-contract.md);
+                         Board side gated (notes/2026-10-07-rfid-record-contract.md);
                          nothing in src/ includes the header.
 
     g++ -std=c++17 -Wall -Wextra -Iinclude test/test_rfid_record.cpp -o /tmp/r

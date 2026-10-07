@@ -1,7 +1,7 @@
 // Host check of the RFID record / tally contract logic in include/rfid_record.h.
 //
 // Built with g++ ON THE HOST, like test_loop_scaling.cpp. The header is a
-// PROPOSAL (notes/2026-10-07-rfid-record-contract.md) and nothing in src/
+// gated board proposal (notes/2026-10-07-rfid-record-contract.md); nothing in src/
 // includes it; this proves its logic, not anything about a reader, a tag or a
 // tractor.
 //
@@ -526,6 +526,10 @@ int main() {
            QUEUE_DEPTH, sizeof(EventQueue<QUEUE_DEPTH>));
     printf("  info  200 entries (today's depth), for comparison        %zu bytes\n", 200 * sizeof(Event));
     printf("  info  sizeof(Decision), on the stack in the record path  %zu bytes\n", sizeof(Decision));
+    // Ack.tags points INTO the Decision, so on a refusal both are live while
+    // the ack is written: the stack cost is the sum, not the larger of the two.
+    printf("  info  Decision + ACK_BUF, live together on a refusal     %zu bytes\n",
+           sizeof(Decision) + ACK_BUF);
     // Today's 200 x 12-byte WeightRecord (src:328-343) is 2400 bytes. The new
     // queue must not cost materially more than the one it replaces.
     check("queue at QUEUE_DEPTH costs no more than today's 2400 + 64",
@@ -533,41 +537,22 @@ int main() {
   }
 
   // -------------------------------------------------------------------------
-  printf("backlog: order, PUBACK-gated flush, refuse when full\n");
+  printf("backlog: order, refuse when full\n");
   {
+    check("online, empty queue: publish live", !mustQueue(true, 0));
+    check("online, queue waiting: queue behind it", mustQueue(true, 1));
+    check("offline: queue", mustQueue(false, 0));
+
     EventQueue<4> q;
     VoidCmd vc;  parseVoid("{\"rec\":\"3f2a9c21\",\"t_ms\":2}", &vc);
     EndCmd ec;   parseEnd("{\"tally\":\"T-day-1007\",\"t_ms\":3}", &ec);
     q.push(rec);
     q.push(voidEvent(vc, 1));
     q.push(endEvent(ec, 2));
-
-    // The broker does not acknowledge: nothing leaves, nothing is skipped.
-    Kind sent[8];
-    int nsent = 0;
-    bool brokerAcks = false;
-    auto publish = [&](const Event &e) {
-      sent[nsent++] = e.kind;          // attempted on the wire
-      return brokerAcks;               // true only on PUBACK
-    };
-    check("no PUBACK: flushOne reports nothing sent", !flushOne(q, publish));
-    check("no PUBACK: second try", !flushOne(q, publish));
-    check_int("  queue still holds all three", q.count, 3);
-    check("  and the record is still first", q.front()->kind == Kind::Record);
-    check("  and is marked retried, so it publishes backlog:true", q.front()->retried);
-    check("  the void behind it is not", !q.buf[(q.head + 1) % 4].retried);
-    check("  both attempts were the record, never the void", nsent == 2 &&
-          sent[0] == Kind::Record && sent[1] == Kind::Record);
-
-    brokerAcks = true;
-    nsent = 0;
-    while (flushOne(q, publish)) {}
-    check_int("PUBACK: all three flushed", nsent, 3);
-    check("  order 1: record", sent[0] == Kind::Record);
-    check("  order 2: void", sent[1] == Kind::Void);
-    check("  order 3: tally end", sent[2] == Kind::TallyEnd);
-    check("  queue empty", q.front() == nullptr && q.count == 0);
-    check("flush of an empty queue sends nothing", !flushOne(q, publish));
+    check("flush order 1: record", q.front() && q.front()->kind == Kind::Record);   q.pop();
+    check("flush order 2: void", q.front() && q.front()->kind == Kind::Void);       q.pop();
+    check("flush order 3: tally end", q.front() && q.front()->kind == Kind::TallyEnd); q.pop();
+    check("empty after flush", q.front() == nullptr && q.count == 0);
 
     EventQueue<2> f;
     check("push 1 accepted", f.push(rec));
@@ -577,9 +562,8 @@ int main() {
     check_int("  refusal counted", (long)f.refused, 1);
     check("  nothing accepted was dropped: record still first", f.front()->kind == Kind::Record);
     check_int("  count unchanged", f.count, 2);
-    check_str("QUEUE FULL fits the 20-char detail", strlen(D_QUEUE_FULL) <= 20 ? "yes" : "no", "yes");
+    check("QUEUE FULL fits the 20-char detail", strlen(D_QUEUE_FULL) <= 20);
 
-    // Wrap-around keeps order.
     EventQueue<3> w;
     w.push(rec); w.push(voidEvent(vc, 1));
     w.pop();
@@ -588,6 +572,118 @@ int main() {
     check("wrap: order kept 2", w.front()->kind == Kind::TallyEnd); w.pop();
     check("wrap: order kept 3", w.front()->kind == Kind::Record);   w.pop();
     check("wrap: empty", w.count == 0);
+  }
+
+  // -------------------------------------------------------------------------
+  // The app's resend of an unconfirmed void or tally end. A model of the
+  // board's command path: the eight-deep dedup ring (src:742-751), which
+  // replays a stored verdict for a repeated id WITHOUT re-running the verb
+  // (src:1147-1152), then the parse, then live publish or queue.
+  printf("app resend of an unconfirmed void or tally end\n");
+  {
+    struct ResendBoard {
+      char ring[8][ID_MAX + 1];
+      int  ringCount = 0, ringNext = 0;
+      bool online = true;
+      EventQueue<QUEUE_DEPTH> q;
+      char wire[8][EVENT_BUF];
+      int  nWire = 0;
+      bool seen(const char *id) const {
+        for (int i = 0; i < ringCount; i++) if (!strcmp(ring[i], id)) return true;
+        return false;
+      }
+      void publish(const Event &e, bool backlog) {
+        if (nWire < 8) writeEvent(wire[nWire++], EVENT_BUF, e, 0, backlog, "ok", "plc4-jd5055e");
+      }
+      // Returns the ack detail, or "dup" for a replayed verdict.
+      const char *command(const char *id, const char *verb, const char *body) {
+        if (seen(id)) return "dup";
+        snprintf(ring[ringNext], sizeof(ring[ringNext]), "%s", id);
+        ringNext = (ringNext + 1) % 8;
+        if (ringCount < 8) ringCount++;
+        Event e;
+        if (!strcmp(verb, "-")) {
+          VoidCmd c;
+          if (const char *why = parseVoid(body, &c)) return why;
+          e = voidEvent(c, 0);
+        } else {
+          EndCmd c;
+          if (const char *why = parseEnd(body, &c)) return why;
+          e = endEvent(c, 0);
+        }
+        if (mustQueue(online, q.count)) { if (!q.push(e)) return D_QUEUE_FULL; }
+        else publish(e, false);
+        return strcmp(verb, "-") ? D_ENDED : D_VOIDED;
+      }
+      void flush() {
+        while (online && q.front()) { publish(*q.front(), true); q.pop(); }
+      }
+    } b;
+
+    // The app resends with the SAME rec / tally, t_ms and GPS, and a NEW id.
+    const char *vbody = "{\"rec\":\"3f2a9c21\",\"t_ms\":1791398460000}";
+    check_str("void, first send", b.command("v-1", "-", vbody), D_VOIDED);
+    check_int("  published once", b.nWire, 1);
+    check_str("resend with the SAME id: dedup replay", b.command("v-1", "-", vbody), "dup");
+    check_int("  and NOT published again (the trap)", b.nWire, 1);
+    check_str("resend with a NEW id", b.command("v-2", "-", vbody), D_VOIDED);
+    check_int("  published again", b.nWire, 2);
+    check_str("  identical payload, so the consumer can match it", b.wire[1], b.wire[0]);
+
+    const char *ebody = "{\"tally\":\"T-day-1007\",\"t_ms\":1791420000000}";
+    check_str("tally end, first send", b.command("e-1", "end", ebody), D_ENDED);
+    check_str("resend with the SAME id: dedup replay", b.command("e-1", "end", ebody), "dup");
+    check_int("  not published again", b.nWire, 3);
+    check_str("resend with a NEW id", b.command("e-2", "end", ebody), D_ENDED);
+    check_int("  published again", b.nWire, 4);
+    check_str("  identical payload", b.wire[3], b.wire[2]);
+
+    // Offline: the original and the resend both queue, and flush in order.
+    b.online = false;
+    check_str("void while offline: queued", b.command("v-3", "-", vbody), D_VOIDED);
+    check_str("resend while still offline: queued too", b.command("v-4", "-", vbody), D_VOIDED);
+    check_int("  two in the queue", b.q.count, 2);
+    check_int("  nothing on the wire yet", b.nWire, 4);
+    b.online = true;
+    b.flush();
+    check_int("reconnect: both flushed", b.nWire, 6);
+    check("  marked backlog:true, as today", strstr(b.wire[5], "\"backlog\":true") != nullptr);
+  }
+
+  // A model of the consumer's rule, to show the duplicates above do no harm:
+  // records keyed by rec, voids idempotent on rec, tally ends on tally.
+  printf("consumer drops duplicates\n");
+  {
+    struct Consumer {
+      char recs[8][ID_MAX + 1]; long w[8]; bool voided[8]; int n = 0;
+      char ended[4][ID_MAX + 1]; int nEnded = 0;
+      int dupDropped = 0;
+      int find(const char *r) const { for (int i = 0; i < n; i++) if (!strcmp(recs[i], r)) return i; return -1; }
+      void record(const char *r, long wt) {
+        if (find(r) >= 0) { dupDropped++; return; }
+        snprintf(recs[n], sizeof(recs[n]), "%s", r); w[n] = wt; voided[n] = false; n++;
+      }
+      void voidRec(const char *r) {
+        const int i = find(r);
+        if (i < 0 || voided[i]) { dupDropped++; return; }
+        voided[i] = true;
+      }
+      void end(const char *t) {
+        for (int i = 0; i < nEnded; i++) if (!strcmp(ended[i], t)) { dupDropped++; return; }
+        snprintf(ended[nEnded], sizeof(ended[nEnded]), "%s", t); nEnded++;
+      }
+      long total() const { long t = 0; for (int i = 0; i < n; i++) if (!voided[i]) t += w[i]; return t; }
+    } c;
+    c.record("r-1", 1834);
+    c.record("r-2", 1790);
+    c.record("r-1", 1834);           // resend after a board reboot
+    c.voidRec("r-2");
+    c.voidRec("r-2");                // the app's resend of an unconfirmed void
+    c.end("T-day-1007");
+    c.end("T-day-1007");             // the app's resend of an unconfirmed end
+    check_int("total counts r-1 once and r-2 not at all", c.total(), 1834);
+    check_int("three duplicates dropped", c.dupDropped, 3);
+    check_int("tally ended once", c.nEnded, 1);
   }
 
   printf("\n%s: %d failure(s)\n", failures ? "FAIL" : "PASS", failures);
