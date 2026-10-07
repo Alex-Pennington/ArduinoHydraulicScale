@@ -9,3 +9,20 @@ in the development cycle.
 
 More information about PlatformIO Unit Testing:
 - https://docs.platformio.org/en/latest/advanced/unit-testing/index.html
+
+Host tests
+----------
+
+The files here are host checks built with plain g++, not PlatformIO tests.
+Each carries its own build line in its header comment; run from the repo root.
+
+  test_rfid_record.cpp   RFID record / tally contract logic, include/rfid_record.h.
+                         Board side gated (notes/2026-10-07-rfid-record-contract.md);
+                         nothing in src/ includes the header.
+
+    g++ -std=c++17 -Wall -Wextra -Iinclude test/test_rfid_record.cpp -o /tmp/r
+    /tmp/r
+
+  It prints one line per check and ends "PASS: 0 failure(s)"; the exit status
+  is the failure count. The "info" lines are measured payload, command and
+  backlog-entry sizes, checked against the proposed UNO R4 WiFi buffer sizes.
