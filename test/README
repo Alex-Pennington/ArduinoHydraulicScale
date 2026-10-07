@@ -25,4 +25,4 @@ Each carries its own build line in its header comment; run from the repo root.
 
   It prints one line per check and ends "PASS: 0 failure(s)"; the exit status
   is the failure count. The "info" lines are measured payload, command and
-  backlog-entry sizes, for sizing buffers on whatever platform is chosen.
+  backlog-entry sizes, checked against the proposed UNO R4 WiFi buffer sizes.

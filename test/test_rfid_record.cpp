@@ -481,7 +481,7 @@ int main() {
   }
 
   // -------------------------------------------------------------------------
-  printf("worst-case sizes (for buffer sizing on whatever platform is chosen)\n");
+  printf("worst-case sizes against the proposed UNO R4 WiFi buffers\n");
   {
     const char *id40 = "0123456789012345678901234567890123456789";
     RecordCmd w;
@@ -492,7 +492,7 @@ int main() {
     Event e = recordEvent(id40, w, t, -2147483647 - 1, 0, true, 0);
     int n = writeEvent(buf, sizeof(buf), e, 4294967295u, true, "XMTR FAULT", "plc4-jd5055e");
     printf("  info  worst-case record payload                         %d bytes\n", n);
-    check("worst-case record fits 384", n > 0 && n < 384);
+    check("worst-case record fits EVENT_BUF", n > 0 && (size_t)n < EVENT_BUF);
 
     char cmd[512];
     int cl = snprintf(cmd, sizeof(cmd),
@@ -504,6 +504,7 @@ int main() {
           cl > 191);   // CmdCapture.body[192], src/ArduinoHydraulicScale.cpp:953
     RecordCmd parsed;
     check("  and parses", parseRecord(cmd, &parsed) == nullptr);
+    check("worst-case record command fits CMD_BUF", (size_t)cl < CMD_BUF);
 
     TagRead s[ACK_TAGS_MAX];
     for (int i = 0; i < ACK_TAGS_MAX; i++) {
@@ -515,41 +516,78 @@ int main() {
     char big[1024];
     int an = writeAck(big, sizeof(big), refusalAck(id40, "+", d));
     printf("  info  worst-case multi-tag ack                          %d bytes\n", an);
-    check("worst-case ack fits 640", an > 0 && an < 640);
+    check("worst-case ack fits ACK_BUF", an > 0 && (size_t)an < ACK_BUF);
     // Today's ack buffer is 192 (src/ArduinoHydraulicScale.cpp:912): too small
     // for any multi-tag refusal, so the firmware change must grow it.
     check("worst-case ack exceeds today's 192-byte ack buffer", an > 191);
 
     printf("  info  sizeof(Event), one backlog entry                   %zu bytes\n", sizeof(Event));
-    printf("  info  200 entries (today's QUEUE_DEPTH)                  %zu bytes\n", 200 * sizeof(Event));
-    printf("  info  32 entries                                         %zu bytes\n", 32 * sizeof(Event));
+    printf("  info  sizeof(EventQueue<QUEUE_DEPTH=%d>)                 %zu bytes\n",
+           QUEUE_DEPTH, sizeof(EventQueue<QUEUE_DEPTH>));
+    printf("  info  200 entries (today's depth), for comparison        %zu bytes\n", 200 * sizeof(Event));
+    printf("  info  sizeof(Decision), on the stack in the record path  %zu bytes\n", sizeof(Decision));
+    // Today's 200 x 12-byte WeightRecord (src:328-343) is 2400 bytes. The new
+    // queue must not cost materially more than the one it replaces.
+    check("queue at QUEUE_DEPTH costs no more than today's 2400 + 64",
+          sizeof(EventQueue<QUEUE_DEPTH>) <= 2400 + 64);
   }
 
   // -------------------------------------------------------------------------
-  printf("backlog ordering\n");
+  printf("backlog: order, PUBACK-gated flush, refuse when full\n");
   {
-    check("online, empty queue: publish live", !mustQueue(true, 0));
-    check("online, queue waiting: queue behind it", mustQueue(true, 1));
-    check("offline: queue", mustQueue(false, 0));
-
     EventQueue<4> q;
     VoidCmd vc;  parseVoid("{\"rec\":\"3f2a9c21\",\"t_ms\":2}", &vc);
     EndCmd ec;   parseEnd("{\"tally\":\"T-day-1007\",\"t_ms\":3}", &ec);
     q.push(rec);
     q.push(voidEvent(vc, 1));
     q.push(endEvent(ec, 2));
-    check("flush order 1: record", q.front() && q.front()->kind == Kind::Record);
-    q.pop();
-    check("flush order 2: void", q.front() && q.front()->kind == Kind::Void);
-    q.pop();
-    check("flush order 3: tally end", q.front() && q.front()->kind == Kind::TallyEnd);
-    q.pop();
-    check("empty after flush", q.front() == nullptr && q.count == 0);
+
+    // The broker does not acknowledge: nothing leaves, nothing is skipped.
+    Kind sent[8];
+    int nsent = 0;
+    bool brokerAcks = false;
+    auto publish = [&](const Event &e) {
+      sent[nsent++] = e.kind;          // attempted on the wire
+      return brokerAcks;               // true only on PUBACK
+    };
+    check("no PUBACK: flushOne reports nothing sent", !flushOne(q, publish));
+    check("no PUBACK: second try", !flushOne(q, publish));
+    check_int("  queue still holds all three", q.count, 3);
+    check("  and the record is still first", q.front()->kind == Kind::Record);
+    check("  and is marked retried, so it publishes backlog:true", q.front()->retried);
+    check("  the void behind it is not", !q.buf[(q.head + 1) % 4].retried);
+    check("  both attempts were the record, never the void", nsent == 2 &&
+          sent[0] == Kind::Record && sent[1] == Kind::Record);
+
+    brokerAcks = true;
+    nsent = 0;
+    while (flushOne(q, publish)) {}
+    check_int("PUBACK: all three flushed", nsent, 3);
+    check("  order 1: record", sent[0] == Kind::Record);
+    check("  order 2: void", sent[1] == Kind::Void);
+    check("  order 3: tally end", sent[2] == Kind::TallyEnd);
+    check("  queue empty", q.front() == nullptr && q.count == 0);
+    check("flush of an empty queue sends nothing", !flushOne(q, publish));
 
     EventQueue<2> f;
-    f.push(rec); f.push(voidEvent(vc, 1)); f.push(endEvent(ec, 2));
-    check_int("full queue drops the oldest and counts it", (long)f.dropped, 1);
-    check("  the oldest was the record", f.front()->kind == Kind::Void);
+    check("push 1 accepted", f.push(rec));
+    check("push 2 accepted", f.push(voidEvent(vc, 1)));
+    check("full: push 3 refused", !f.push(endEvent(ec, 2)));
+    check("  full() reports it", f.full());
+    check_int("  refusal counted", (long)f.refused, 1);
+    check("  nothing accepted was dropped: record still first", f.front()->kind == Kind::Record);
+    check_int("  count unchanged", f.count, 2);
+    check_str("QUEUE FULL fits the 20-char detail", strlen(D_QUEUE_FULL) <= 20 ? "yes" : "no", "yes");
+
+    // Wrap-around keeps order.
+    EventQueue<3> w;
+    w.push(rec); w.push(voidEvent(vc, 1));
+    w.pop();
+    w.push(endEvent(ec, 2)); w.push(rec);
+    check("wrap: order kept 1", w.front()->kind == Kind::Void);     w.pop();
+    check("wrap: order kept 2", w.front()->kind == Kind::TallyEnd); w.pop();
+    check("wrap: order kept 3", w.front()->kind == Kind::Record);   w.pop();
+    check("wrap: empty", w.count == 0);
   }
 
   printf("\n%s: %d failure(s)\n", failures ? "FAIL" : "PASS", failures);
