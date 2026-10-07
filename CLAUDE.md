@@ -37,11 +37,12 @@ Firmware changes are gated. The baseline has defects — they are written up in
 `findings/`, not fixed. Nothing in the `.ino` changes without Alex approving that
 specific change. Auditing, documenting and proposing are open; editing is not.
 
-**A board is tethered and it is in service.** PLC #4 is on the tractor with its loop live
-and its calibration stored, and its USB console is on `farm1`. Flashing is done from here:
-build on Saga, copy the image to `farm1`, upload with `arduino-cli` there. The firmware
-publishes the commit it was built from as `build` on the status topic, so what is running
-can be asked rather than assumed.
+**A board is in service.** PLC #4 is on the tractor with its loop live and its calibration
+stored. Flashing needs its USB on a host this session can reach. Build on Saga, copy the
+image to that host, and upload with `arduino-cli` there. Which host it is plugged into
+changes, so do not assume one: before any upload, read `/dev/serial/by-id` on the host and
+confirm it names the UNO R4 WiFi. The firmware publishes the commit it was built from as
+`build` on the status topic, so what is running can be asked rather than assumed.
 
 That changes what a wrong claim costs. It is no longer a sentence in a file — it is a
 machine in a field producing a weight somebody acts on. Say which claims are read from
