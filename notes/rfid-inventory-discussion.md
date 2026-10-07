@@ -82,7 +82,9 @@ and for how much time the operator-pick step costs per day.
 
 - SparkFun M7E Hecto UHF reader — UART only, up to ~1 A at 5 V, onboard antenna ~1-2 ft,
   so an external antenna is likely needed.
-- NXP SC16IS750 UART-to-I2C bridge on mux ch5, to reach the reader without a UART.
+- ~~NXP SC16IS750 UART-to-I2C bridge on mux ch5.~~ Dropped (Alex, 2026-10-07): the HC-05 comes
+  off and the reader takes D0/D1 directly. Not yet checked: that the reader's UART logic level
+  matches the R4's D0/D1. Read both datasheets before wiring.
 - ~~SparkFun SAM-M10Q GPS on Qwiic (0x42), mux ch4.~~ Dropped: the phone supplies GPS and time.
 
 ## What this means for the board (inference, read against the repo)
@@ -97,6 +99,6 @@ and for how much time the operator-pick step costs per day.
   the tally ID; a void message and a tally-end message are new. The board's `rT[]` tally,
   `b`, `sum`, and the `n`/`total` fields on `weight` and `ack` would be retired or reworked;
   the consumer reads `n`/`total` today, so that is a contract change on both sides.
-- Retiring the HC-05 console frees D0/D1, the board's only hardware UART. The RFID reader
-  could take it directly, and the SC16IS750 bridge would not be needed.
+- The reader goes on D0/D1 (`Serial1`) in place of the HC-05 (Alex, 2026-10-07). Mux ch4-6
+  all stay free.
 - All of this is a gated firmware change; nothing here is approved.
