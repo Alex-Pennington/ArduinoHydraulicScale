@@ -41,6 +41,7 @@ was committed.
 | Rosemount 1151 pressure transmitter, product data sheet | `references/02_pressure_loop_wiring.md:13`; `references/04_decisions.md:13` | `emerson-rosemount/Rosemount-1151_PDS_00813-0100-4360_RevJB.pdf` | 00813-0100-4360 Rev JB | `https://www.emerson.com/documents/automation/product-data-sheet-rosemount-1151-pressure-transmitter-en-73232.pdf` | `d22761ac8d4723c30f9b079c1811c6a9261c04aa6e22e2775e7f240579d6a4eb` | 2026-10-03 |
 | Rosemount 1151 pressure transmitter, reference manual | `references/02_pressure_loop_wiring.md:13` | `emerson-rosemount/Rosemount-1151_RefManual_00809-0100-4360_RevBA.pdf` | 00809-0100-4360 Rev BA | `https://www.emerson.com/is/content/emerson/en/measurement-instrumentation/technical/products/pressure/documents/doc-rosemount-1151-00809-0100-4360.pdf` | `2c437f3fe5c6d57eed3a3e739680023be1c3b6fe1062772a41fc2efea9edf5c0` | 2026-10-03 |
 | John Deere 5055E tractor, equipment and price page | `references/00_architecture.md:14`; `notes/2026-09-01-transducer-failure-and-selection.md:7` | `john-deere/JD_5055E_equipment-price-page_2015-05-11.pdf` | dated 2015-05-11 in the URL; Final Tier 4 model | `https://www.deere.com/assets/pdfs/region-4/industries/government-and-military-sales/contracts/price-pages/commercial/C20_A2_GreaterThan_or_Equalto40HP_LessThan75HP_20150511.pdf` | `4a8912f273553f8f963bf9414ef513ea0f3eefbe99b6e9332197712d6bb2813a` | 2026-10-03 |
+| SparkFun Simultaneous RFID Reader – M7E Hecto (WRL-24738), schematic. CC BY-SA 4.0 | `findings/2026-10-07-rfid-hardware-recommendation.md:158`, `:162`, `:476` | `sparkfun/SparkFun_Simultaneous_RFID_Reader_M7E_schematic.pdf` | v10, dated 4/4/2024 | `https://cdn.sparkfun.com/assets/9/4/b/c/6/SparkFun_Simultaneous_RFID_Reader_M7E.pdf` | `5cf7c235bdb30b5c1a16dd8adbafd01af0a77211edaf6dcb492fd5e0920603af` | 2026-10-07 |
 | John Deere 520M loader, spec sheet | `references/00_architecture.md:15`; `notes/2026-09-13-4-20ma-loop-decisions.md:144` | `john-deere/JD_520M_SpecSheet.pdf` | not stated | **NOT DETERMINABLE.** Alex supplied it during the 4-20 mA work (commit `34d0a25`); no URL was recorded | `6b0504ab2371a104bcb548902eec1945a9909c3f299fc581f5d3032f9d97ab34` | 2026-09-14 (committed) |
 
 **On the sources.**
@@ -57,6 +58,9 @@ was committed.
   machine is not recorded in the repo, so treat its figures (for example "Implement Pump
   11.4 GPM") as that model's, not as confirmed for this tractor.
 - **The 520M sheet describes a 5085E/5090E/5100E chassis, not a 5055E.** See commit `34d0a25`.
+- **RFID hardware finding.** Only the SparkFun M7E Hecto schematic is filed from that finding,
+  because it states CC BY-SA 4.0 on its face. The other documents it cites are cited by URL in
+  its References section and not filed. Their redistribution terms were not checked.
 
 ---
 
