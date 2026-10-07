@@ -3,7 +3,6 @@ binder:
   subtitle: Hydraulic loader scale on the John Deere 5055E — pressure loop, controller,
     J1939 reader and wiring
   compass_priority: pending
-  printed_date: '2026-09-17'
   short_tag: PLC 4
   machine: plc4
 documents:
