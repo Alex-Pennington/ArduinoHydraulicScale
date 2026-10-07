@@ -29,6 +29,7 @@
 #include <Arduino_CAN.h>
 #include "FspTimer.h"
 #include "j1939_decode.h"
+#include "can_event_mask.h"
 
 static const uint32_t CAN_BITRATE  = 250000UL;   // measured: 2026-09-22 census, 250k, error counters 0
 static const float    CAN_DRAIN_HZ = 200.0f;
@@ -49,6 +50,38 @@ static volatile uint32_t canDrains     = 0;
 static bool              canTimerOn    = false;
 static FspTimer          canTimer;
 
+// ISSUE #53. Arduino_CAN's callback tests each event for ONE exact value, but the
+// FSP error ISR passes a register byte that can carry several flags at once, so
+// most error events were never reported (findings/2026-10-07-can-err-multibit-
+// proposal.md). The hook below sits between the FSP and that callback: it records
+// any word canEventIsError() calls an error, then forwards EVERY event unchanged,
+// so the receive path is exactly the library's.
+static volatile bool     canHooked     = false;  // the hook is installed on the open controller
+static volatile bool     canHookErr    = false;  // the hook saw an error word since the last drain
+static volatile uint32_t canHookLast   = 0;      // that word, every flag kept
+
+static void canEventHook(can_callback_args_t *a) {
+  const uint32_t ev = (uint32_t)a->event;
+  if (canEventIsError(ev)) { canHookLast = ev; canHookErr = true; }
+  CAN.onCanCallback(a);
+}
+
+// IRQManager links the CAN0 error event into an ICU slot and stores the driver's
+// control block as that slot's ISR context (IRQManager.cpp:879-882). Find the slot,
+// take the block, and point its callback at the hook. R_CAN_Open() resets the
+// callback, so this must run after EVERY CAN.begin(). If it cannot find the slot,
+// it returns false and the drain falls back to the library's own error flag,
+// which is today's behaviour.
+static bool canInstallHook() {
+  for (uint32_t i = 0; i < BSP_ICU_VECTOR_MAX_ENTRIES; i++) {
+    if ((R_ICU->IELSR[i] & R_ICU_IELSR_IELS_Msk) == (uint32_t)ELC_EVENT_CAN0_ERROR) {
+      can_ctrl_t *c = (can_ctrl_t *)R_FSP_IsrContextGet((IRQn_Type)i);
+      return c && R_CAN_CallbackSet(c, canEventHook, &CAN, nullptr) == FSP_SUCCESS;
+    }
+  }
+  return false;
+}
+
 static void canDrainISR(timer_callback_args_t *) {
   if (!canActive) return;
   canDrains++;
@@ -56,8 +89,12 @@ static void canDrainISR(timer_callback_args_t *) {
   if (n > canRingHigh) canRingHigh = n;
   if (n >= CanMsgRingbuffer::RING_BUFFER_SIZE) canRingFull++;
 
-  int err = 0;
-  if (CAN.isError(err)) { canErrEvents++; canLastErr = err; CAN.clearError(); }
+  int libCode = 0, err = 0;
+  const bool libErr = CAN.isError(libCode);
+  if (canMergeError(libErr, libCode, canHookErr, canHookLast, err)) {
+    canHookErr = false;
+    canErrEvents++; canLastErr = err; CAN.clearError();
+  }
 
   const uint32_t now = millis();
   // Bounded, so a pathological flood can never pin the CPU inside this ISR: the
@@ -83,6 +120,7 @@ static bool canOpen(bool filtered) {
   }
   const bool ok = CAN.begin(CAN_BITRATE);
   canFiltered = ok && filtered;
+  canHooked = ok && canInstallHook();
   return ok;
 }
 

@@ -2065,7 +2065,8 @@ void loop() {
       Console.print("ring_full = "); Console.println((unsigned long)canRingFull);
       Console.print("ring_high = "); Console.println((unsigned long)canRingHigh);
       Console.print("can_err = ");  Console.print((unsigned long)canErrEvents);
-      Console.print(" last ");      Console.println(canLastErr);
+      Console.print(" last ");      Console.print(canLastErr);
+      Console.println(canHooked ? " hook on" : " hook OFF");
       Console.print("rpm = ");      if (j1939SigFresh(c.rpm, now)) Console.println(c.rpm.v, 1); else Console.println("--");
       Console.print("coolant_c = "); if (j1939SigFresh(c.coolantC, now)) Console.println(c.coolantC.v, 1); else Console.println("--");
       Console.print("oil_kpa = ");  if (j1939SigFresh(c.oilKpa, now)) Console.println(c.oilKpa.v, 0); else Console.println("--");

@@ -1,7 +1,7 @@
-// PROPOSED -- issue #53. Host check of the CAN error-event classification.
+// Issue #53. Host check of the CAN error-event classification.
 //
 // Built with g++ ON THE HOST, like test_loop_scaling.cpp. It runs the two pure
-// functions the proposed firmware would call, from include/can_event_mask.h:
+// functions the firmware calls (include/j1939_can.h), from include/can_event_mask.h:
 //
 //   canEventIsError()  -- what the callback hook calls an error
 //   canMergeError()    -- what one drain reports, from the library's flag and the hook's

@@ -1,6 +1,6 @@
 #pragma once
-// PROPOSED -- issue #53. Not included by the firmware until Alex approves the change
-// in findings/2026-10-07-can-err-multibit-proposal.md.
+// Issue #53. Used by include/j1939_can.h; see
+// findings/2026-10-07-can-err-multibit-proposal.md.
 //
 // Which CAN driver event words are errors. Pure, no Arduino dependency, so the host
 // test (test/test_can_event_mask.cpp) runs THIS function rather than a copy of it.
