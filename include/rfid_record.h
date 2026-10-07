@@ -33,7 +33,10 @@ namespace rfid {
 // ---------------------------------------------------------------------------
 // The id cap is the command id cap today: CmdVerdict.id is char[41]
 // (src/ArduinoHydraulicScale.cpp:743). Record and tally IDs reuse it so one
-// validator covers all three.
+// validator covers all three. Record and tally IDs must be app-generated UUIDs,
+// unique for all time (the note's "Record ID" and "Tallies" sections). A
+// 36-character UUID fits this cap. The board checks only shape and length; it
+// cannot check uniqueness.
 constexpr size_t ID_MAX       = 40;
 // EPC length in hex characters. Gen2 EPC lengths are whole 16-bit words, so a
 // valid EPC is a multiple of 4 hex characters. 32 covers a 128-bit EPC; the
@@ -236,7 +239,10 @@ inline bool parseAccM(const char *s, uint16_t *out) {
   return true;
 }
 
-// Phone time: UTC milliseconds since the Unix epoch, as an integer.
+// Phone time: UTC milliseconds since the Unix epoch, as an integer -- the
+// phone's clock at the moment of the press. Refused if not a positive integer
+// of at most 15 digits. There is NO plausibility window: the board has no clock
+// of its own to compare against, so a wrong phone clock passes.
 inline bool parseEpochMs(const char *s, int64_t *out) {
   if (!s || !*s) return false;
   int64_t v = 0;
@@ -302,8 +308,9 @@ struct RecordCmd {
 };
 
 struct VoidCmd {
-  char    rec[ID_MAX + 1] = "";
-  int64_t tMs             = 0;
+  char    rec[ID_MAX + 1]   = "";
+  char    tally[ID_MAX + 1] = "";   // the tally the voided record went to
+  int64_t tMs               = 0;
   Fix     fix;
 };
 
@@ -313,6 +320,8 @@ struct EndCmd {
   Fix     fix;
 };
 
+// Shape and length only: the app must send a UUID, and nothing here can tell a
+// reused tally ID from a fresh one.
 inline const char *readTally(const char *body, char *out, size_t cap) {
   const Field f = stringField(body, "tally", out, cap);
   if (f == Field::Absent) return D_NO_TALLY;
@@ -335,6 +344,7 @@ inline const char *parseVoid(const char *body, VoidCmd *c) {
   const Field r = stringField(body, "rec", c->rec, sizeof(c->rec));
   if (r == Field::Absent) return D_NO_REC;
   if (r == Field::Bad || !idValid(c->rec)) return D_BAD_REC;
+  if (const char *why = readTally(body, c->tally, sizeof(c->tally))) return why;
   return readTimeAndFix(body, &c->tMs, &c->fix);
 }
 
@@ -546,7 +556,7 @@ struct Event {
   int32_t  w             = 0;       // records only
   uint32_t capturedAtMs  = 0;
   char     rec[ID_MAX + 1]       = "";   // record, void
-  char     tally[ID_MAX + 1]     = "";   // record, tally_end
+  char     tally[ID_MAX + 1]     = "";   // record, void, tally_end
   char     epc[EPC_HEX_MAX + 1]  = "";   // record
   int64_t  tMs           = 0;
   Fix      fix;
@@ -573,6 +583,7 @@ inline Event voidEvent(const VoidCmd &c, uint32_t nowMs) {
   e.kind = Kind::Void;
   e.capturedAtMs = nowMs;
   memcpy(e.rec, c.rec, sizeof(e.rec));
+  memcpy(e.tally, c.tally, sizeof(e.tally));
   e.tMs = c.tMs;
   e.fix = c.fix;
   return e;
@@ -602,10 +613,9 @@ inline int writeEvent(char *buf, size_t cap, const Event &e, uint32_t ageMs, boo
     if (!idValid(e.rec)) return -1;
     w.key("rec"); w.str(e.rec);
   }
-  if (e.kind == Kind::Record || e.kind == Kind::TallyEnd) {
-    if (!idValid(e.tally)) return -1;
-    w.key("tally"); w.str(e.tally);
-  }
+  // Every kind names its tally.
+  if (!idValid(e.tally)) return -1;
+  w.key("tally"); w.str(e.tally);
   if (e.kind == Kind::Record) {
     if (!epcValid(e.epc)) return -1;
     w.key("w");   w.i64(e.w);

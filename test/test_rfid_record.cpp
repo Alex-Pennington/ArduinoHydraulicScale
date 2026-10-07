@@ -46,6 +46,9 @@ static const char *A = "E28011700000020F1A2B3C01";
 static const char *B = "E28011700000020F1A2B3C02";
 static const char *C = "E28011700000020F1A2B3C03";
 
+// A tally ID as the contract requires it: an app-generated UUID.
+static const char *TALLY = "c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3";
+
 // A cut-down model of the board's command path, enough to show what the record
 // ID scheme does across a reboot. The dedup ring is RAM, eight deep, as today
 // (src/ArduinoHydraulicScale.cpp:742-751).
@@ -74,6 +77,8 @@ int main() {
   // -------------------------------------------------------------------------
   printf("validators\n");
   check("id: uuid accepted", idValid("3f2a9c21-7b4e-4c1d-9a0e-5d6f7a8b9c0d"));
+  check_int("id: a UUID is 36 chars, inside the cap", (long)strlen(TALLY), 36);
+  check("  and ID_MAX holds it", strlen(TALLY) <= ID_MAX);
   check("id: empty refused", !idValid(""));
   check("id: 40 chars accepted", idValid("0123456789012345678901234567890123456789"));
   check("id: 41 chars refused", !idValid("01234567890123456789012345678901234567890"));
@@ -211,10 +216,10 @@ int main() {
   {
     RecordCmd c;
     const char *why = parseRecord(
-        "{\"id\":\"r1\",\"verb\":\"+\",\"tally\":\"T-day-1007\",\"t_ms\":1791398400123,"
+        "{\"id\":\"r1\",\"verb\":\"+\",\"tally\":\"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3\",\"t_ms\":1791398400123,"
         "\"lat\":44.1234567,\"lon\":-72.7654321,\"acc\":4.2}", &c);
     check("full command accepted", why == nullptr);
-    check_str("  tally", c.tally, "T-day-1007");
+    check_str("  tally", c.tally, "c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3");
     check_int("  t_ms low part", (long)(c.tMs % 1000000), 400123);
     check_int("  lat7", c.fix.lat7, 441234567);
     check_int("  lon7", c.fix.lon7, -727654321);
@@ -278,11 +283,16 @@ int main() {
   printf("void and tally-end commands\n");
   {
     VoidCmd v;
-    check("void with rec and time", parseVoid("{\"rec\":\"r1\",\"t_ms\":7}", &v) == nullptr);
+    check("void with rec, tally and time",
+          parseVoid("{\"rec\":\"r1\",\"tally\":\"T1\",\"t_ms\":7}", &v) == nullptr);
     check_str("  rec", v.rec, "r1");
-    check_str("- no record id", parseVoid("{\"t_ms\":7}", &v), D_NO_REC);
-    check_str("- bad record id", parseVoid("{\"rec\":\"r 1\",\"t_ms\":7}", &v), D_BAD_REC);
-    check_str("- no time", parseVoid("{\"rec\":\"r1\"}", &v), D_NO_TIME);
+    check_str("  tally", v.tally, "T1");
+    check_str("- no record id", parseVoid("{\"tally\":\"T1\",\"t_ms\":7}", &v), D_NO_REC);
+    check_str("- bad record id", parseVoid("{\"rec\":\"r 1\",\"tally\":\"T1\",\"t_ms\":7}", &v), D_BAD_REC);
+    check_str("- no tally", parseVoid("{\"rec\":\"r1\",\"t_ms\":7}", &v), D_NO_TALLY);
+    check_str("- bad tally", parseVoid("{\"rec\":\"r1\",\"tally\":\"a b\",\"t_ms\":7}", &v), D_BAD_TALLY);
+    check_str("- record id checked before tally", parseVoid("{\"t_ms\":7}", &v), D_NO_REC);
+    check_str("- no time", parseVoid("{\"rec\":\"r1\",\"tally\":\"T1\"}", &v), D_NO_TIME);
     EndCmd e;
     check("end with tally and time", parseEnd("{\"tally\":\"T1\",\"t_ms\":7}", &e) == nullptr);
     check_str("end no tally", parseEnd("{\"t_ms\":7}", &e), D_NO_TALLY);
@@ -313,15 +323,31 @@ int main() {
     char rec1[ID_MAX + 1], rec2[ID_MAX + 1], rec3[ID_MAX + 1];
     char ram1[16], ram2[16], ram3[16];
     check("first record executes", b.record("app-0001", rec1, sizeof(rec1), ram1));
-    check("resend before reboot is deduplicated", !b.record("app-0001", rec2, sizeof(rec2), ram2));
+    check("redelivery before reboot is deduplicated", !b.record("app-0001", rec2, sizeof(rec2), ram2));
     b.reboot();
     check("next record after reboot executes", b.record("app-0002", rec2, sizeof(rec2), ram2));
     check("record IDs differ across the reboot", strcmp(rec1, rec2) != 0);
     // The rejected scheme: a RAM sequence restarts at 1 and reuses an ID.
     check("rejected RAM-sequence scheme collides across the reboot", strcmp(ram1, ram2) == 0);
-    // A resend after the reboot re-executes (the dedup ring is RAM), but under
-    // this scheme it carries the SAME record ID, so the consumer can drop it.
-    check("resend after reboot re-executes", b.record("app-0001", rec3, sizeof(rec3), ram3));
+    // The ring is eight deep (src:742-751, src:877-885): eight newer command ids
+    // push an id out, and a redelivery after that also runs again.
+    {
+      Board e;
+      char r[ID_MAX + 1], m[16];
+      e.record("app-0100", r, sizeof(r), m);
+      for (int i = 0; i < 7; i++) {
+        char id[16]; snprintf(id, sizeof(id), "app-01%02d", i + 1);
+        e.record(id, r, sizeof(r), m);
+      }
+      check("redelivery with seven newer ids: still deduplicated", !e.record("app-0100", r, sizeof(r), m));
+      e.record("app-0108", r, sizeof(r), m);
+      check("redelivery after eight newer ids: runs again", e.record("app-0100", r, sizeof(r), m));
+    }
+    // The app never resends a record. A QoS 1 redelivery of the same command
+    // can still reach the board. Once a reboot has cleared the RAM ring it runs
+    // again, and under this scheme it carries the SAME record ID, so the
+    // consumer sees the duplicate and keeps the first.
+    check("redelivery after reboot re-executes", b.record("app-0001", rec3, sizeof(rec3), ram3));
     check_str("  with the original record ID", rec3, rec1);
     char small[4];
     check("record ID longer than the buffer refused", !recordIdFor("app-0001", small, sizeof(small)));
@@ -331,7 +357,7 @@ int main() {
   // -------------------------------------------------------------------------
   printf("payload shape\n");
   RecordCmd rc;
-  parseRecord("{\"tally\":\"T-day-1007\",\"t_ms\":1791398400123,"
+  parseRecord("{\"tally\":\"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3\",\"t_ms\":1791398400123,"
               "\"lat\":44.1234567,\"lon\":-72.7654321,\"acc\":5}", &rc);
   const Event rec = recordEvent("3f2a9c21", rc, tag(A, -52), 1834, 0, false, 1000);
   char buf[512];
@@ -339,7 +365,7 @@ int main() {
     int n = writeEvent(buf, sizeof(buf), rec, 0, false, "ok", "plc4-jd5055e");
     check_str("live record",
               buf,
-              "{\"kind\":\"record\",\"rec\":\"3f2a9c21\",\"tally\":\"T-day-1007\",\"w\":1834,"
+              "{\"kind\":\"record\",\"rec\":\"3f2a9c21\",\"tally\":\"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3\",\"w\":1834,"
               "\"tag\":\"E28011700000020F1A2B3C01\",\"t_ms\":1791398400123,\"lat\":44.1234567,"
               "\"lon\":-72.7654321,\"acc\":5,\"age_ms\":0,\"backlog\":false,\"sensor\":\"ok\","
               "\"cal\":\"ok\",\"id\":\"plc4-jd5055e\"}");
@@ -352,39 +378,41 @@ int main() {
     writeEvent(buf, sizeof(buf), e, 42235, true, "ok", "plc4-jd5055e");
     check_str("backlog record, no fix, negative weight, DEFAULT cal",
               buf,
-              "{\"kind\":\"record\",\"rec\":\"3f2a9c22\",\"tally\":\"T-day-1007\",\"w\":-5,"
+              "{\"kind\":\"record\",\"rec\":\"3f2a9c22\",\"tally\":\"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3\",\"w\":-5,"
               "\"tag\":\"E28011700000020F1A2B3C01\",\"t_ms\":1791398400123,\"lat\":null,"
               "\"lon\":null,\"acc\":null,\"age_ms\":42235,\"backlog\":true,\"sensor\":\"ok\","
               "\"cal\":\"DEFAULT\",\"id\":\"plc4-jd5055e\"}");
   }
   {
     VoidCmd vc;
-    parseVoid("{\"rec\":\"3f2a9c21\",\"t_ms\":1791398460000,\"lat\":-0.0000001,\"lon\":0,\"acc\":3}", &vc);
+    parseVoid("{\"rec\":\"3f2a9c21\",\"tally\":\"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3\","
+              "\"t_ms\":1791398460000,\"lat\":-0.0000001,\"lon\":0,\"acc\":3}", &vc);
     writeEvent(buf, sizeof(buf), voidEvent(vc, 2000), 0, false, "ok", "plc4-jd5055e");
     check_str("void",
               buf,
-              "{\"kind\":\"void\",\"rec\":\"3f2a9c21\",\"t_ms\":1791398460000,\"lat\":-0.0000001,"
+              "{\"kind\":\"void\",\"rec\":\"3f2a9c21\",\"tally\":\"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3\","
+              "\"t_ms\":1791398460000,\"lat\":-0.0000001,"
               "\"lon\":0.0000000,\"acc\":3,\"age_ms\":0,\"backlog\":false,\"id\":\"plc4-jd5055e\"}");
   }
   {
     EndCmd ec;
-    parseEnd("{\"tally\":\"T-day-1007\",\"t_ms\":1791420000000}", &ec);
+    parseEnd("{\"tally\":\"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3\",\"t_ms\":1791420000000}", &ec);
     writeEvent(buf, sizeof(buf), endEvent(ec, 3000), 0, false, "ok", "plc4-jd5055e");
     check_str("tally end",
               buf,
-              "{\"kind\":\"tally_end\",\"tally\":\"T-day-1007\",\"t_ms\":1791420000000,"
+              "{\"kind\":\"tally_end\",\"tally\":\"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3\",\"t_ms\":1791420000000,"
               "\"lat\":null,\"lon\":null,\"acc\":null,\"age_ms\":0,\"backlog\":false,"
               "\"id\":\"plc4-jd5055e\"}");
   }
   {
     Ack a;
     a.id = "3f2a9c21"; a.verb = "+"; a.ok = true; a.detail = D_RECORDED;
-    a.rec = "3f2a9c21"; a.tally = "T-day-1007"; a.tag = A; a.hasW = true; a.w = 1834;
+    a.rec = "3f2a9c21"; a.tally = "c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3"; a.tag = A; a.hasW = true; a.w = 1834;
     writeAck(buf, sizeof(buf), a);
     check_str("ack: recorded",
               buf,
               "{\"id\":\"3f2a9c21\",\"verb\":\"+\",\"ok\":true,\"detail\":\"recorded\","
-              "\"rec\":\"3f2a9c21\",\"tally\":\"T-day-1007\",\"tag\":\"E28011700000020F1A2B3C01\","
+              "\"rec\":\"3f2a9c21\",\"tally\":\"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3\",\"tag\":\"E28011700000020F1A2B3C01\","
               "\"w\":1834}");
   }
   {
@@ -435,10 +463,10 @@ int main() {
     check_str("ack: voided",
               buf, "{\"id\":\"v-0001\",\"verb\":\"-\",\"ok\":true,\"detail\":\"voided\",\"rec\":\"3f2a9c21\"}");
     Ack e;
-    e.id = "e-0001"; e.verb = "end"; e.ok = true; e.detail = D_ENDED; e.tally = "T-day-1007";
+    e.id = "e-0001"; e.verb = "end"; e.ok = true; e.detail = D_ENDED; e.tally = "c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3";
     writeAck(buf, sizeof(buf), e);
     check_str("ack: ended",
-              buf, "{\"id\":\"e-0001\",\"verb\":\"end\",\"ok\":true,\"detail\":\"ended\",\"tally\":\"T-day-1007\"}");
+              buf, "{\"id\":\"e-0001\",\"verb\":\"end\",\"ok\":true,\"detail\":\"ended\",\"tally\":\"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3\"}");
   }
   {
     // More tags than the ack lists: capped at ACK_TAGS_MAX, tags_seen tells the truth.
@@ -506,6 +534,20 @@ int main() {
     check("  and parses", parseRecord(cmd, &parsed) == nullptr);
     check("worst-case record command fits CMD_BUF", (size_t)cl < CMD_BUF);
 
+    // A void now names its tally as well as its record: two 40-char IDs.
+    int vl = snprintf(cmd, sizeof(cmd),
+        "{\"id\":\"%s\",\"verb\":\"-\",\"rec\":\"%s\",\"tally\":\"%s\",\"t_ms\":999999999999999,"
+        "\"lat\":-90.0000000,\"lon\":-180.0000000,\"acc\":65535}",
+        id40, id40, id40);
+    printf("  info  worst-case void command                           %d bytes\n", vl);
+    VoidCmd pv;
+    check("  and parses", parseVoid(cmd, &pv) == nullptr);
+    check("worst-case void command fits CMD_BUF", (size_t)vl < CMD_BUF);
+    int ve = writeEvent(buf, sizeof(buf), voidEvent(pv, 0), 4294967295u, true, "ok", "plc4-jd5055e");
+    printf("  info  worst-case void event                             %d bytes\n", ve);
+    check("worst-case void event fits EVENT_BUF", ve > 0 && (size_t)ve < EVENT_BUF);
+    check("  and is no larger than the worst-case record", ve <= n);
+
     TagRead s[ACK_TAGS_MAX];
     for (int i = 0; i < ACK_TAGS_MAX; i++) {
       char ep[EPC_HEX_MAX + 1];
@@ -544,8 +586,8 @@ int main() {
     check("offline: queue", mustQueue(false, 0));
 
     EventQueue<4> q;
-    VoidCmd vc;  parseVoid("{\"rec\":\"3f2a9c21\",\"t_ms\":2}", &vc);
-    EndCmd ec;   parseEnd("{\"tally\":\"T-day-1007\",\"t_ms\":3}", &ec);
+    VoidCmd vc;  parseVoid("{\"rec\":\"3f2a9c21\",\"tally\":\"T1\",\"t_ms\":2}", &vc);
+    EndCmd ec;   parseEnd("{\"tally\":\"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3\",\"t_ms\":3}", &ec);
     q.push(rec);
     q.push(voidEvent(vc, 1));
     q.push(endEvent(ec, 2));
@@ -621,7 +663,8 @@ int main() {
     } b;
 
     // The app resends with the SAME rec / tally, t_ms and GPS, and a NEW id.
-    const char *vbody = "{\"rec\":\"3f2a9c21\",\"t_ms\":1791398460000}";
+    const char *vbody =
+        "{\"rec\":\"3f2a9c21\",\"tally\":\"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3\",\"t_ms\":1791398460000}";
     check_str("void, first send", b.command("v-1", "-", vbody), D_VOIDED);
     check_int("  published once", b.nWire, 1);
     check_str("resend with the SAME id: dedup replay", b.command("v-1", "-", vbody), "dup");
@@ -630,7 +673,7 @@ int main() {
     check_int("  published again", b.nWire, 2);
     check_str("  identical payload, so the consumer can match it", b.wire[1], b.wire[0]);
 
-    const char *ebody = "{\"tally\":\"T-day-1007\",\"t_ms\":1791420000000}";
+    const char *ebody = "{\"tally\":\"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3\",\"t_ms\":1791420000000}";
     check_str("tally end, first send", b.command("e-1", "end", ebody), D_ENDED);
     check_str("resend with the SAME id: dedup replay", b.command("e-1", "end", ebody), "dup");
     check_int("  not published again", b.nWire, 3);
@@ -650,40 +693,105 @@ int main() {
     check("  marked backlog:true, as today", strstr(b.wire[5], "\"backlog\":true") != nullptr);
   }
 
-  // A model of the consumer's rule, to show the duplicates above do no harm:
-  // records keyed by rec, voids idempotent on rec, tally ends on tally.
-  printf("consumer drops duplicates\n");
+  // A model of the consumer's rules (the note's "Rules for the consumer" and
+  // "Consumer impact"): every receipt is confirmed, duplicates included; records
+  // are keyed by rec and the FIRST is kept; voids are idempotent on rec and a
+  // void for an unknown rec is KEPT, flagged as an orphan, and confirmed; tally
+  // ends are idempotent on tally; a record or void arriving after its tally_end
+  // still applies and is flagged.
+  printf("consumer model: duplicates, orphan voids, late arrivals\n");
   {
     struct Consumer {
-      char recs[8][ID_MAX + 1]; long w[8]; bool voided[8]; int n = 0;
+      struct Rec  { char rec[ID_MAX + 1]; char tally[ID_MAX + 1]; long w; char tag[EPC_HEX_MAX + 1]; };
+      struct Void { char rec[ID_MAX + 1]; char tally[ID_MAX + 1]; bool orphan; };
+      Rec  recs[8];  int nRecs = 0;
+      Void voids[8]; int nVoids = 0;
       char ended[4][ID_MAX + 1]; int nEnded = 0;
-      int dupDropped = 0;
-      int find(const char *r) const { for (int i = 0; i < n; i++) if (!strcmp(recs[i], r)) return i; return -1; }
-      void record(const char *r, long wt) {
-        if (find(r) >= 0) { dupDropped++; return; }
-        snprintf(recs[n], sizeof(recs[n]), "%s", r); w[n] = wt; voided[n] = false; n++;
+      int confirmed = 0, dupDropped = 0, orphans = 0, late = 0;
+      int findRec(const char *r) const { for (int i = 0; i < nRecs; i++) if (!strcmp(recs[i].rec, r)) return i; return -1; }
+      int findVoid(const char *r) const { for (int i = 0; i < nVoids; i++) if (!strcmp(voids[i].rec, r)) return i; return -1; }
+      bool isEnded(const char *t) const { for (int i = 0; i < nEnded; i++) if (!strcmp(ended[i], t)) return true; return false; }
+      void record(const char *r, const char *t, long wt, const char *tg) {
+        confirmed++;
+        if (findRec(r) >= 0) { dupDropped++; return; }        // keep the first
+        if (isEnded(t)) late++;                               // still applies
+        Rec &e = recs[nRecs++];
+        snprintf(e.rec, sizeof(e.rec), "%s", r);
+        snprintf(e.tally, sizeof(e.tally), "%s", t);
+        snprintf(e.tag, sizeof(e.tag), "%s", tg);
+        e.w = wt;
       }
-      void voidRec(const char *r) {
-        const int i = find(r);
-        if (i < 0 || voided[i]) { dupDropped++; return; }
-        voided[i] = true;
+      void voidRec(const char *r, const char *t) {
+        confirmed++;                                          // orphan or not
+        if (findVoid(r) >= 0) { dupDropped++; return; }
+        if (isEnded(t)) late++;
+        Void &v = voids[nVoids++];
+        snprintf(v.rec, sizeof(v.rec), "%s", r);
+        snprintf(v.tally, sizeof(v.tally), "%s", t);
+        v.orphan = findRec(r) < 0;
+        if (v.orphan) orphans++;
       }
       void end(const char *t) {
-        for (int i = 0; i < nEnded; i++) if (!strcmp(ended[i], t)) { dupDropped++; return; }
+        confirmed++;
+        if (isEnded(t)) { dupDropped++; return; }
         snprintf(ended[nEnded], sizeof(ended[nEnded]), "%s", t); nEnded++;
       }
-      long total() const { long t = 0; for (int i = 0; i < n; i++) if (!voided[i]) t += w[i]; return t; }
-    } c;
-    c.record("r-1", 1834);
-    c.record("r-2", 1790);
-    c.record("r-1", 1834);           // resend after a board reboot
-    c.voidRec("r-2");
-    c.voidRec("r-2");                // the app's resend of an unconfirmed void
-    c.end("T-day-1007");
-    c.end("T-day-1007");             // the app's resend of an unconfirmed end
-    check_int("total counts r-1 once and r-2 not at all", c.total(), 1834);
-    check_int("three duplicates dropped", c.dupDropped, 3);
-    check_int("tally ended once", c.nEnded, 1);
+      long total(const char *t) const {
+        long sum = 0;
+        for (int i = 0; i < nRecs; i++)
+          if (!strcmp(recs[i].tally, t) && findVoid(recs[i].rec) < 0) sum += recs[i].w;
+        return sum;
+      }
+    };
+
+    const char *T  = TALLY;                                      // a delivery
+    const char *T2 = "5e9a7c13-0b2d-4e6f-9a18-c4d3b2a1f0e9";    // a daily log, open at once
+    {
+      Consumer c;
+      c.record("r-1", T, 1834, A);
+      c.record("r-2", T, 1790, B);
+      // A QoS 1 redelivery of r-1's command, run again after a board reboot:
+      // same rec, a fresh reading and a different tag in view.
+      c.record("r-1", T, 1851, C);
+      c.voidRec("r-2", T);
+      c.voidRec("r-2", T);             // the app's resend of an unconfirmed void
+      c.end(T);
+      c.end(T);                        // the app's resend of an unconfirmed end
+      check_int("total counts r-1 once and r-2 not at all", c.total(T), 1834);
+      check_str("  the first r-1 is kept: its tag", c.recs[c.findRec("r-1")].tag, A);
+      check_int("  and its weight", c.recs[c.findRec("r-1")].w, 1834);
+      check_int("three duplicates dropped", c.dupDropped, 3);
+      check_int("every receipt confirmed, duplicates included", c.confirmed, 7);
+      check_int("tally ended once", c.nEnded, 1);
+      check_int("nothing flagged late", c.late, 0);
+    }
+    {
+      // The record never arrived (lost on QoS 0, or in RAM at a reset); the
+      // operator voided it from the unconfirmed mark.
+      Consumer c;
+      c.record("r-1", T, 1834, A);
+      c.voidRec("r-9", T);
+      check_int("void for an unknown rec is kept", c.nVoids, 1);
+      check("  flagged as an orphan", c.voids[0].orphan);
+      check_int("  counted as an orphan", c.orphans, 1);
+      check_int("  and confirmed, so the app stops resending", c.confirmed, 2);
+      check_int("  the tally total is unchanged", c.total(T), 1834);
+      c.voidRec("r-9", T);             // the app's resend, sent before the confirm arrived
+      check_int("resent orphan void: dropped as a duplicate", c.dupDropped, 1);
+      check_int("  still confirmed", c.confirmed, 3);
+      check_int("  still one orphan", c.orphans, 1);
+    }
+    {
+      Consumer c;
+      c.record("r-1", T, 1834, A);
+      c.record("r-2", T2, 900, B);
+      c.end(T);
+      c.record("r-3", T, 1700, C);     // arrives after its tally_end
+      c.voidRec("r-1", T);             // so does this void
+      check_int("record and void after tally_end both flagged", c.late, 2);
+      check_int("  and both still apply", c.total(T), 1700);
+      check_int("the other open tally is untouched", c.total(T2), 900);
+    }
   }
 
   printf("\n%s: %d failure(s)\n", failures ? "FAIL" : "PASS", failures);
