@@ -11,7 +11,7 @@ simple: no signing, no key management, no security hardware, nothing mil-spec.
 under *References*. A claim with `file:line` is read from this repository. **Inference** marks
 a conclusion drawn from cited facts but not stated in any source. **NOT DETERMINABLE** marks
 something no available source settles. Nothing here was measured on hardware. The only
-measurement is the firmware build in §1.1.
+measurement is the firmware build in §1.2.
 
 ---
 
@@ -19,7 +19,8 @@ measurement is the firmware build in §1.1.
 
 | Item | Recommendation | Approx. price |
 |---|---|---|
-| Platform | **Keep the Arduino UNO R4 WiFi (ABX00087), with a new board, and spend the robustness budget on power, enclosure and wiring** | $27.50 |
+| Platform | **A new Arduino UNO R4 WiFi (ABX00087), with protection.** Decided by Alex (§1.1) | $27.50 |
+| Screw-terminal shield | **Adafruit Proto-ScrewShield R3, product 196**. Alternative: Electronics-Salon D-1683 ($23.00) | $14.95 |
 | Reader | **SparkFun Simultaneous RFID Reader – M7E Hecto (WRL-24738)** on D0/D1, through the level interface in §2.2 | $309.95 |
 | Level interface | **TI SN74AHCT125N** (reader TX → board RX) plus a resistor divider (board TX → reader RX) | not established |
 | Antenna | **Vulcan RFID C610 (VUL-C610-FCC)**: IP67, circular, 6 dBiC, waterproof SMA | $149.00 |
@@ -29,8 +30,8 @@ measurement is the firmware build in §1.1.
 | Reader supply | The existing off-board 5 V supply, as Alex stated, **only if it meets the M7E's ripple limits**. Otherwise a **Pololu D36V28F5** | $23.95 if needed |
 | Enclosure | **Hammond 1554 series**, polycarbonate, cUL Type 4, 4X, 6, 6P, sized to the layout | not established |
 
-**Priced subtotal:** $567.40 for the board, reader, antenna, coax and the Pololu regulator.
-Adding one box of 150 tags ($279.00) brings it to **$846.40**. The DC-DC converter, enclosure,
+**Priced subtotal:** $582.35 for the board, shield, reader, antenna, coax and the Pololu
+regulator. Adding one box of 150 tags ($279.00) brings it to **$861.35**. The DC-DC converter, enclosure,
 pigtail, glands, buffer, TVS and fuse are not priced here (§7). **Inference:** those are a small
 fraction of the reader's price.
 
@@ -38,75 +39,108 @@ fraction of the reader's price.
 
 ## 1. Platform
 
-### 1.1 What the firmware depends on today
+### 1.1 Decided: a new UNO R4 WiFi, plus a screw-terminal shield
 
-These are read from source. Every platform-specific item below has to be ported on any board
-other than an RA4M1 Arduino.
+**Alex ruled 2026-10-07, in the coordinator's dialog.** He chose "New UNO R4 + protection" and
+added: *"1 but also a hat for screwdown terminals"*. The platform is a new Arduino UNO R4 WiFi
+(ABX00087) with the §5 protection, plus a screw-terminal shield (§1.4). In the same dialog he
+ruled that records are taken only within WiFi range ("Range only is fine"), and that a record with
+no GPS fix is accepted with no position. These are closed. This document does not argue them.
+
+Every function the firmware has today carries over unchanged on this board:
 
 | Function | How it is done now | Where |
 |---|---|---|
 | 4–20 mA loop | MCP3421 over I2C on `Wire1` (Qwiic), behind a TCA9548A/PCA9548A mux at `0x70`, channel 3 | `include/mcp3421.h:8`, `:21-22`; `include/i2c_mux.h:16-21` |
-| LCD | LCD2004A behind a PCF8574 backpack at `0x27`, mux channel 7. The backpack is typically a 5 V part on a 3.3 V bus | `include/lcd2004.h:6`, `:10-13` |
+| LCD | LCD2004A behind a PCF8574 backpack at `0x27`, mux channel 7 | `include/lcd2004.h:6`, `:10-13` |
 | Power monitor | INA219 at `0x40`, mux channel 2 | `include/ina219.h:7`; `references/01_controller_card.md:39` |
 | J1939 | RA4M1 on-chip CAN through `Arduino_CAN`, drained from an `FspTimer` ISR. Receive on D13; the transceiver's D pin is tied recessive so the node cannot transmit | `include/j1939_can.h:23-30`; `references/01_controller_card.md:26-27`, `:53-62` |
-| MQTT over WiFi | `WiFiS3` (the R4's ESP32-S3 bridge) and `ArduinoMqttClient` | `src/ArduinoHydraulicScale.cpp:12-13`; `platformio.ini:643-650` |
-| Watchdog | `WDT.h`, armed with `WDT.begin(WDT_TIMEOUT_MS)` | `src/ArduinoHydraulicScale.cpp:14`, `:1563` |
-| Reset cause | Reads RA4M1 `RSTSR0`/`RSTSR1` directly | `src/ArduinoHydraulicScale.cpp:350-382` |
-| Calibration store | `EEPROM.get`/`put` (virtual EEPROM on data flash) | `src/ArduinoHydraulicScale.cpp:1490-1496`, `:1623-1647` |
-| UART | `Serial1` on D0/D1 at 9600 baud, today the HC-05 | `src/ArduinoHydraulicScale.cpp:1460`; `references/01_controller_card.md:24-25` |
+| MQTT over WiFi | `WiFiS3` and `ArduinoMqttClient` | `src/ArduinoHydraulicScale.cpp:12-13`; `platformio.ini:643-650` |
+| Watchdog / reset cause | `WDT.h`; RA4M1 `RSTSR0`/`RSTSR1` | `src/ArduinoHydraulicScale.cpp:14`, `:350-382`, `:1563` |
+| Calibration store | `EEPROM.get`/`put` | `src/ArduinoHydraulicScale.cpp:1490-1496`, `:1623-1647` |
+| UART | `Serial1` on D0/D1 at 9600 baud, today the HC-05. It goes to the reader | `src/ArduinoHydraulicScale.cpp:1460`; `references/01_controller_card.md:24-25` |
 
-**Headroom, measured.** `tools/build-check.sh` on this branch's base, run with `TMPDIR` pointed at
-a private scratch directory, compiles to **104,328 bytes of flash (39%)** and **17,792 bytes of
-RAM (54%), leaving 14,976 bytes**. The SparkFun reader library allocates a 255-byte message
-buffer [11]. **Inference:** the R4 has room for the reader driver and the record fields the
-notes describe.
+### 1.2 RAM is the binding constraint: the offline queue must shrink
 
-### 1.2 The options compared
+**Measured.** `tools/build-check.sh` on this branch's base, run with `TMPDIR` pointed at a private
+scratch directory, compiles to 104,328 bytes of flash (39%) and **17,792 bytes of RAM (54%),
+leaving 14,976 bytes**.
 
-| | **(a) UNO R4 WiFi** ABX00087 | **(b) Opta WiFi** AFX00002 | **(c) Portenta Machine Control** AKX00032 | **(d) ESP32-S3 industrial**: Waveshare ESP32-S3-RS485-CAN |
-|---|---|---|---|---|
-| Spare hardware UART for the reader | 1, D0/D1 (`Serial1`), freed by retiring the HC-05 [1]; core 1.6.0 `variants/UNOWIFIR4/variant.cpp:27-28` | None exposed as TTL. One half-duplex RS-485 port [3] | One port, configurable RS-232/422/485, no TTL [4] | External terminal exposes only GPIO1, GPIO2 and 3V3 [5]. The internal 2.0 mm header carries further IO [6]; which pins are free is NOT DETERMINABLE without mapping it |
-| CAN for J1939 | On-chip controller; external transceiver (fitted today) [1] | **None** [3] | On-board TJA1049T/3J, rated for a 12 V or 24 V bus [4] | On-board isolated CAN with TVS protection [5] |
-| I2C (MCP3421, mux, LCD, INA219) | 2 buses, one on Qwiic [1] | **None exposed.** The expansion port is proprietary [3] | Grove connector, 3.4 V max, 10 kΩ pull-ups [4] | Shares the two exposed GPIOs [5] |
-| WiFi for MQTT | ESP32-S3-MINI-1 [1] | 802.11 b/g/n [3] | Via the Portenta H7 (included); SMA antenna connector [4] | ESP32-S3 [5] |
-| Supply | VIN 6–24 V [1] | 12–24 VDC [3] | **24 V DC ±20 %** (19.2–28.8 V) [4] | 7–36 V DC [5] |
-| On 12 V tractor power | In range | In range | **Out of range. Needs a 12→24 V boost** (inference from the range) | In range |
-| Operating temperature | −40 to +85 °C [1] | −20 to +50 °C [3] | −40 to +85 °C, "conservative thermal limits" [4] | NOT DETERMINABLE (not published [5]) |
-| Ingress / vibration | None. Bare PCB (inference) | IP20 [3] | Not stated; DIN-rail module [4] | Rail-mount ABS case; IP and vibration not stated [5] |
-| Logic level at the reader | 5 V. Needs translation both ways (§2.2) | n/a | n/a | 3.3 V. Matches the M7E directly (inference from [5], [8]) |
-| Price | $27.50 [7] | $199.00 [7] | $300.00, Portenta H7 included [7] | $18.99–$19.99 listed [5] |
+**The RFID firmware fits only if the offline queue shrinks.** The record contract sizes one queued
+RFID event at **152 bytes**, against 12 bytes for today's `WeightRecord`. At today's depth of 200
+entries that is **30,400 bytes**, about twice the RAM left. At 32 entries it is 4,864 bytes
+(`feat/rfid-record-contract:notes/2026-10-07-rfid-record-contract.md:258-268`, sizes from its
+host test). The contract note says a 200-entry event queue does not fit on this board (same
+lines). Its multi-tag ack needs up to 559 bytes against today's 192-byte buffer (same table).
 
-### 1.3 What carries over, and what must be ported
+**Records are taken only in range,** so the queue holds only events whose live publish failed in
+the same pass. That makes it a small buffer, not the out-of-range store it is today
+(`feat/rfid-record-contract:notes/2026-10-07-rfid-record-contract.md:247-252`, where the note
+draws this inference). **Inference:** freeing today's 2,400-byte ring and spending 4,864 bytes on
+32 events leaves about 12.5 KB for the reader library's 255-byte buffer [11] and the larger ack.
+That is arithmetic, not a build. Choosing the depth is a firmware-gate decision, and the consumer
+documents the 200 bound separately (contract note, `:268`).
 
-| Function | (a) R4 WiFi | (b) Opta WiFi | (c) Machine Control | (d) ESP32-S3 |
-|---|---|---|---|---|
-| 4–20 mA via MCP3421 | Carries over | **Lost.** No I2C. Analog inputs are 0–10 V [3] | Replaced by the on-board 4–20 mA input (120 Ω burden, internal 12–16-bit ADC) [4]. Burden, scaling, NE43 banding and calibration are all re-derived | Ports (I2C exists); driver re-tested |
-| J1939 CAN | Carries over | **Lost.** No CAN | Port from `Arduino_CAN`/`FspTimer` to the H7 core's CAN | Port to the ESP32 TWAI driver. The hardware "cannot transmit" guarantee (`j1939_can.h:23-26`) relies on tying the transceiver's TX pin, which an on-board isolated transceiver may not allow. **Inference:** silence becomes a software listen-only setting |
-| MQTT over WiFi | Carries over | Port (`WiFiS3` → the Opta's WiFi stack) | Port (`WiFiS3` → the Portenta WiFi stack) | Port (`WiFiS3` → ESP32 `WiFi`) |
-| LCD | Carries over | **Lost.** No I2C | Ports. The backpack must run on a 3.4 V-max connector (`lcd2004.h:10-13`; [4]) | Ports |
-| Watchdog / reset cause | Carries over | Rewrite for STM32H747 | Rewrite for STM32H747 | Rewrite for ESP32 |
-| Calibration store | Carries over | Rewrite | Rewrite | Rewrite |
-| Reader UART | `Serial1` re-used at the reader's baud rate | Needs an RS-485 reader or a TTL↔RS-485 converter | Needs a TTL↔RS-232/485 converter at the reader | Ports only if the internal header has a free UART |
+### 1.3 What else was considered, for the record
 
-### 1.4 Recommendation: stay on the UNO R4 WiFi
+| Option | Why not |
+|---|---|
+| Arduino Opta WiFi (AFX00002), as on PLCs #1–#3 (`BRIEF.md:35-36`) | No CAN and no exposed I2C (proprietary expansion port), so no J1939, loop converter or LCD. IP20, −20 to +50 °C [3] |
+| Arduino Portenta Machine Control (AKX00032) | Needs 24 V ±20 % (19.2–28.8 V) on a 12 V tractor [4] |
+| Waveshare ESP32-S3-RS485-CAN | Only GPIO1 and GPIO2 exposed. Temperature rating not published [5], [6] |
+| Olimex ESP32-EVB-IND | 5 V input; −40 to +85 °C. From the adversarial review, relayed by the coordinator; datasheet not read here |
+| Industrial Shields ESP32 PLC 14 | 0 to +60 °C. From the review; the vendor page refused automated requests here |
+| NORVI IIOT | 24 V supply and no CAN. From the review; datasheet not read here |
 
-**Buy a new UNO R4 WiFi for the RFID build. Put the robustness money into what surrounds it:
-the 12 V front end, a sealed enclosure, glands and a proper bulkhead.**
+### 1.4 Screw-terminal shield
 
-The reason is short. It is the only option on which every function in §1.1 carries over
-unchanged. The reader needs a three-part interface, not a port. The Opta lacks both CAN and I2C,
-so it loses the J1939 feed, the converter and the display. The Machine Control is the strongest
-industrial unit, but it needs 24 V on a 12 V tractor and an RS-232 adapter at the reader. It
-would also mean porting and re-calibrating firmware that is in service and proven. The Waveshare
-ESP32 board publishes no temperature rating and shows too few pins to be judged.
+**What has to land on it** (`references/01_controller_card.md:22-41`; `include/`):
 
-**What would change this:** "a more robust platform" (Alex, 2026-10-07) is not tied to any
-failure recorded in this repository. A search of `findings/`, `notes/` and `references/` finds no
-failure of the board in service. The one unexplained reset on record happened on the bench at
-first WiFi association. Its two candidate causes were a timing tolerance and bench USB power
-(`findings/2026-09-01-post-flash-review.md:266-275`). Neither is a board fault. If Alex has a specific failure in mind, such as
-connectors shaking loose, heat, or a board that died, the Machine Control is the step up, at about $300 plus a boost converter and a
-firmware port. See §7.
+| Signal | Today | On the shield |
+|---|---|---|
+| 12 V into VIN | not recorded | VIN terminal, fed from the DDR-30G-12 (§5.1); 6–24 V [1] |
+| Reader UART | D0/D1, HC-05 | D0/D1 terminals; the SN74AHCT125N and the divider on the proto area (§2.2) |
+| Reader ENABLE | — | D2 terminal, through a divider on the proto area |
+| CAN | D13 from the transceiver's receive output; D10 unconnected | D13 terminal. The transceiver board sits on the proto area or off-board, with its D pin tied recessive as today |
+| Loop | 68 Ω burden across the MCP3421's differential input (`references/02_pressure_loop_wiring.md:15`, `:34`) | Two spare terminals bring the loop wires in; they run on to the MCP3421 and its burden |
+| Qwiic / I2C chain | `Wire1` on the R4's Qwiic connector, to the mux and on to the MCP3421, LCD and INA219 | **Stays on the R4's Qwiic connector.** The shield's SDA/SCL terminals are `Wire` (A4/A5), a different bus [1] §10. Do not move the chain onto them |
+
+**Pick: Adafruit Proto-ScrewShield (Wingshield) R3 Kit, product 196, $14.95** [30].
+- A large 0.1" prototyping area with power and ground rails. The buffer, dividers and, if wanted,
+  the CAN transceiver board go here.
+- 3.5 mm screw terminals on 36 breakouts. Four "free" terminals and extra grounds take the loop
+  and reader wiring.
+- The R3 version adds SCL/SDA breakouts and a stacking 2×3 ICSP header. Reset button, power LED.
+- A kit of through-hole parts that needs soldering, about half an hour [30].
+- **Terminal rating.** Adafruit's 3.5 mm terminal-block product page links the 4UCON drawing
+  19963: **10 A per way**, 150 V AC, 16–30 AWG, −40 to +105 °C [31]. **Inference:** the kit's
+  blocks are that part; Adafruit's shield page does not name it.
+
+**Alternative: Electronics-Salon / CZH-LABS D-1683, $23.00 (1–9 units)** [32].
+- Assembled. Labelled for the UNO R4 WiFi and Minima, including the R4's OFF and VRTC pins.
+- 3.5 mm terminals, 26–16 AWG, M2 screws. IDC40 header, power LED, reset button.
+- Current rating **not stated** (only "UL CE CQC certified terminal blocks") [32].
+- **No proto area.** The buffer and dividers would need a separate small board.
+
+**Current the terminals carry.** The reader's supply current, up to about 620 mA at +27 dBm and
+1 A at the limit [8], does not need to pass through the shield. Feed the reader directly from its
+5 V supply (§5.2), and run only TX, RX, ENABLE and a signal ground through the shield
+(inference). The loop carries at most about 30 mA (`references/02_pressure_loop_wiring.md:66`,
+hard-over current). The VIN terminal carries the board's own draw, which is not established
+here. Even if the reader's current were routed through a terminal, it is well inside the
+Adafruit block's 10 A [31]. The D-1683's rating cannot be checked.
+
+**Qwiic connector clearance (inference, needs a bench fit check).** The R4's Qwiic connector J2
+sits at the board's right edge, between the ICSP header and the analog header ([1] §4.1). The part is an
+SM04B-SRSS-TB ([1] §10). **Inference, from JST's part naming and not from a JST datasheet
+read here:** that is a side-entry connector, so the cable plugs in horizontally from the board
+edge, below a stacked shield. Neither shield's maker gives a drawing, so whether a terminal
+block overhangs that corner is NOT DETERMINABLE from the sources. Check before ordering in
+quantity.
+
+**WiFi antenna (inference).** The R4's ESP32-S3-MINI-1 module (M1) sits at the USB / DC-jack end
+of the board ([1] §4.1). Keep metal parts and wide copper on the proto area away from that end.
+Whether either shield's copper detunes the antenna is NOT DETERMINABLE without trying it.
 
 ---
 
@@ -122,7 +156,7 @@ firmware port. See §7.
 | UART | TTL UART, 9600–921600 baud, **default 115200**. No hardware flow control. The host must accept up to 255 bytes in one burst | [8] §5.1.4 |
 | UART logic level | Module: **3.3 V CMOS.** RX VIH min 1.9 V, **max 3.7 V while powered**, and no more than V3R3 + 0.3 V while off. RX has an internal 49.9 kΩ pull-up. TX VOH **2.7 V min**, 3.0 V typ | [8] Table 2, §5.1.4.1 |
 | Board header level | "0.1"-Spaced PTH Header (**3.3V logic**)". The schematic shows TX/RX going straight from the module to header J2 through a PRTR5V0U2F ESD clamp only, with **no level shifting** | [9]; [10] |
-| Current | DC input 3.3–5.5 V. Internal limit at **1 A**. Full power 0.665 W at 5 V; up to 4 W into a poor antenna match at high temperature | [8] §5.2, §5.2.1, §5.2.4 |
+| Current | DC input 3.3–5.5 V; 3.7–5.5 V for +27 dBm. Internal limit at **1 A**. DC power required: **3.1 W at 5 V for +27 dBm out (about 620 mA)**; under 1.2 W at 0 dBm. 0.665 W is the **Ready (idle)** figure, with 0.140 W Sleep and 0.080 W Shutdown. Up to 4 W into a poor antenna match at high temperature | [8] spec table "DC Power Required"; §5.2, §5.2.1 |
 | Supply quality | **5 V ±5 %, < 25 mV p-p ripple, < 11 mV p-p below 100 kHz, switching frequency ≥ 500 kHz** | [8] §5.2.2 |
 | Temperature | −40 to +60 °C operating (case). Transmission stops at +85 °C on the internal sensor | [8] §5.4.1, §5.4.2.3 |
 | Antenna port | U.FL on the SparkFun board. **External use requires moving a 0 Ω resistor from R4 to R5** ("Move 0 Ohm resistor to switch between internal and external antennas") | [9]; [10] |
@@ -167,7 +201,7 @@ reader would exceed. A BSS138 two-FET shifter is also rejected: it is open-drain
 rising edge. `notes/2026-09-20-can-level-interface-plan.md:230-238` already sets that topology
 aside for push-pull signals.
 
-**Not needed on a 3.3 V platform** (option d). This is the one point in that option's favour.
+**Not needed on a 3.3 V platform.** None was chosen (§1.1).
 
 ### 2.3 Alternative reader
 
@@ -301,7 +335,7 @@ transceiver and the 24 V loop supply already share board ground
 
 ### 5.2 5 V to the reader
 
-The reader draws up to 1 A at 5 V [8]. **Alex states the existing off-board 5 V supply has the
+The reader draws 3.1 W at 5 V, about 620 mA, at +27 dBm, and its input limit is 1 A [8]. **Alex states the existing off-board 5 V supply has the
 capacity. That is his statement, not a measurement** (`notes/rfid-inventory-discussion.md:35-36`).
 
 **Capacity is not the only test.** The M7E needs **< 25 mV p-p ripple and a switching frequency of
@@ -339,7 +373,7 @@ compliant on paper.
 
 | # | Part | Manufacturer part number | Purpose | Approx. price (USD) | Datasheet |
 |---|---|---|---|---|---|
-| 1 | Arduino UNO R4 WiFi | ABX00087 | Controller | 27.50 | [1] |
+| 1 | Arduino UNO R4 WiFi | ABX00087 | Controller | 27.50 [7] | [1] |
 | 2 | SparkFun Simultaneous RFID Reader – M7E Hecto | WRL-24738 (module: JADAK ThingMagic M7E-HECTO) | UHF EPC Gen2 reader | 309.95 | [8], [9], [10] |
 | 3 | TI quad buffer, TTL inputs | SN74AHCT125N | Reader TX → D0 at 5 V levels | not established | [24] |
 | 4 | Resistors, 2.2 kΩ and 3.3 kΩ (two pairs) | generic | D1 → reader RX and D2 → ENABLE dividers | not established | inference, §2.2 |
@@ -353,15 +387,31 @@ compliant on paper.
 | 12 | Hammond enclosure, polycarbonate | 1554 series, size not fixed | Sealed housing | not established | [29] |
 | 13 | Cable glands, IP68 metric | not established | Cable entries | not established | — |
 | 14 | Fuse and holder | not established | Supply protection | not established | — |
+| 15 | Adafruit Proto-ScrewShield (Wingshield) R3 Kit | Adafruit 196 | Screw terminals plus proto area for the level interface | 14.95 | [30], [31] |
+| 15-alt | Electronics-Salon / CZH-LABS terminal breakout | D-1683 | Alternative to item 15, assembled, no proto area | 23.00 (not in total) | [32] |
 
-**Priced lines:** items 1, 2, 5, 7 and 11 total **$567.40**. With one box of tags, **$846.40**.
+**Priced lines:** items 1, 2, 5, 7, 11 and 15 total **$582.35**. With one box of tags,
+**$861.35**.
 
 ---
 
 ## 7. What could not be established
 
-- **What "more robust" is meant to fix.** No failure of the board in service is recorded in the
-  repository. The platform choice in §1.4 turns on it.
+- **Power dropout during cranking.** The DDR-30G-12's input range starts at 9 V [27]. How far
+  this tractor's 12 V sags while cranking is not recorded. If it goes below 9 V, the board
+  resets, unless the board is unpowered while cranking anyway.
+- **Load dump and a 24 V jump start against the SM8S22A and the fuse.** The tractor's load-dump
+  profile is not recorded. The SM8S22A stands off 22 V [26], so a 24 V jump start would drive it
+  into conduction until the fuse opens. Whether the fuse clears before the TVS fails is not
+  established.
+- **Tag read performance on fabric or poly bags.** The Sentry Duo is rated for "any surfaces"
+  [20], but no read-range figure on fabric or polypropylene was found.
+- **Tag price at 150 units.** The $1.86 listed for the Sentry Duo [21] is not shown to be the
+  price per tag in a box of 150.
+- **Offline queue depth** on the UNO R4 (§1.2): a firmware-gate decision, and the consumer's
+  documented 200 bound moves with it.
+- **Shield fit:** clearance at the R4's Qwiic connector and any effect on WiFi (§1.4). The
+  D-1683's terminal current rating.
 - **The existing 5 V supply:** part, ripple and switching frequency, so whether it meets the
   M7E's §5.2.2 limits. Alex's capacity statement is not a measurement.
 - **The board supply in service today** and whether any 12 V transient protection exists ahead of
@@ -375,7 +425,6 @@ compliant on paper.
 - **Cable glands:** no manufacturer datasheet could be retrieved, so no part is named.
 - **Vishay SM8S..AHM3 figures:** taken from the superseded SM8S datasheet, not the AHM3 one.
 - **Vulcan S9025PL low-temperature limit:** its datasheet contradicts itself (§3.2).
-- **Option (d)'s internal header pin map** and its temperature and ingress ratings.
 - **CAEN Lepton3x1 price and host protocol;** its user manual was not reached.
 - **Read reliability in the field:** RF power, antenna position and tag orientation can only be
   settled at the machine. Mounting is out of scope.
@@ -490,3 +539,13 @@ DDR-30-SPEC 2026-03-31. [Online]. Available: https://www.meanwell.com/Upload/PDF
 
 [29] Hammond Manufacturing, "1554W Regular Enclosure," drawing 1554W2GYCL. [Online]. Available:
 https://www.hammfg.com/files/parts/pdf/1554W2GYCL.pdf
+
+[30] Adafruit Industries, "Proto-Screwshield (Wingshield) R3 Kit for Arduino," product 196,
+product page. [Online]. Available: https://www.adafruit.com/product/196
+
+[31] 4UCON Technology, "3.5 mm terminal block," drawing 19963, rev. A4, Dec. 27, 2011, linked from
+Adafruit product 725. [Online]. Available: https://cdn-shop.adafruit.com/datasheets/19963.pdf
+
+[32] CZH-LABS / Electronics-Salon, "Screw Terminal Block Breakout Module for Arduino UNO R4 R3 R2
+Zero, D-1683," product page. [Online]. Available:
+https://czh-labs.com/products/screw-terminal-block-breakout-module-for-arduino-uno-r4-r3-r2-zero-electronics-salon-d-1683
