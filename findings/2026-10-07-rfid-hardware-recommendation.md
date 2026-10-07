@@ -428,6 +428,13 @@ compliant on paper.
 - **CAEN Lepton3x1 price and host protocol;** its user manual was not reached.
 - **Read reliability in the field:** RF power, antenna position and tag orientation can only be
   settled at the machine. Mounting is out of scope.
+- **Bench identity for the new R4.** The firmware hard-codes client id `plc4-jd5055e` and topic
+  root `plc4/jd5055e` (`src/ArduinoHydraulicScale.cpp:266-267`). A bench board built with the
+  same values and run against the farm broker would take over the tractor's session and knock it
+  off the broker (inference: an MQTT broker drops the existing client when a second one connects
+  with the same id). Its test records would also land on production topics. The bench build needs
+  its own client id and topic root (for example `plc4bench/...`), or a separate broker. Raised by
+  the consumer coordinator's review (2026-10-07).
 
 ## 8. What this does not cover
 

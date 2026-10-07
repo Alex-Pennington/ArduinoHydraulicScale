@@ -39,11 +39,11 @@ Ruled in the coordinator's dialog and relayed to this worker by Ymir. These are 
 | Message | Topic | Direction | New or changed |
 |---|---|---|---|
 | Record command (`+`) | `plc4/jd5055e/cmd` | app → board | Changed: tally, phone time, GPS, optional chosen tag |
-| Void command (`-`) | `plc4/jd5055e/cmd` | app → board | Changed: names the record it voids |
+| Void command (`-`) | `plc4/jd5055e/cmd` | app → board | Changed: names the record it voids and that record's tally |
 | Tally-end command (`end`) | `plc4/jd5055e/cmd` | app → board | New verb. It replaces `b` |
 | Ack | `plc4/jd5055e/ack` | board → app | Changed: `rec`, `tally`, `tag`, `w`, `tags`, `tags_seen`. `n` and `total` are dropped |
 | Record event | `plc4/jd5055e/weight` | board → consumer | Changed: `kind`, `rec`, `tally`, `tag`, `t_ms`, `lat`, `lon`, `acc`. `n` and `total` are dropped |
-| Void event | `plc4/jd5055e/weight` | board → consumer | New |
+| Void event | `plc4/jd5055e/weight` | board → consumer | New. Carries `rec` and `tally` |
 | Tally-end event | `plc4/jd5055e/weight` | board → consumer | New |
 | Confirmation | `plc4/jd5055e/confirm` | consumer → app | New. **Consumer and app own it; the board takes no part** |
 
@@ -61,7 +61,7 @@ charset, 40-character cap, the eight-deep dedup ring, and a repeat replays the s
 ### Record — verb `+`
 
 ```json
-{"id":"3f2a9c21-7b4e-4c1d-9a0e-5d6f7a8b9c0d","verb":"+","tally":"T-day-1007",
+{"id":"3f2a9c21-7b4e-4c1d-9a0e-5d6f7a8b9c0d","verb":"+","tally":"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3",
  "t_ms":1791398400123,"lat":44.1234567,"lon":-72.7654321,"acc":5}
 ```
 
@@ -69,7 +69,7 @@ The retry after a `MULTIPLE TAGS` refusal uses a **new `id`** and names the tag 
 tapped:
 
 ```json
-{"id":"8e1b44d0-2c55-4a1f-b1e3-0a9d6c7e2f11","verb":"+","tally":"T-day-1007",
+{"id":"8e1b44d0-2c55-4a1f-b1e3-0a9d6c7e2f11","verb":"+","tally":"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3",
  "t_ms":1791398406410,"lat":44.1234567,"lon":-72.7654321,"acc":5,
  "tag":"E28011700000020F1A2B3C01"}
 ```
@@ -78,14 +78,23 @@ tapped:
 |---|---|---|---|
 | `id` | string | yes | As today. **It becomes the record ID if the record is accepted** (see *Record ID*) |
 | `verb` | `"+"` | yes | |
-| `tally` | string, the `id` charset, 1–40 chars | yes | The open tally this record goes to. The app picks it when a daily log and a delivery are both open |
-| `t_ms` | integer | yes | Phone time: UTC milliseconds since the Unix epoch |
+| `tally` | string, an app-generated UUID | yes | The open tally this record goes to. The app picks it when a daily log and a delivery are both open. Must be unique; see *Tallies*. The board checks only the `id` charset and the 40-character cap |
+| `t_ms` | integer | yes | The phone's clock at the moment of the press: UTC milliseconds since the Unix epoch. See *Phone time* |
 | `lat`, `lon` | number, decimal degrees | all three, or none | Phone fix. The board keeps 1e-7 degree and truncates extra decimals. Exponent form (`1e-7`) is refused |
 | `acc` | number, metres | all three, or none | Phone fix accuracy. The board rounds it **up** to whole metres, 0–65535 |
 | `tag` | string, upper-case hex EPC | no | The chosen tag, on the retry only |
 
 GPS is optional: the phone may have no fix, and Alex ruled that such a record is accepted with no
 position. Time is required.
+
+**Phone time.** GPS and time come from the phone (`notes/rfid-inventory-discussion.md:28-29`), so
+`t_ms` is the phone's clock when the operator pressed the button. A resend repeats it unchanged
+(*Rules for the app*). The board has no clock of its own (`notes/rfid-inventory-discussion.md:78`),
+so it checks only the shape. An absent `t_ms` is refused `NO TIME` (`include/rfid_record.h`,
+`readTimeAndFix()`). A string, a fraction, an exponent, zero, a negative value or more than 15
+digits is refused `BAD TIME` (`parseEpochMs()`, same header). A positive integer from a phone
+whose clock is wrong is **accepted and published as sent**. The board cannot tell, and judging
+plausibility (against the broker receive time, for example) is the consumer's job.
 
 **A retry must carry a new `id`.** A repeated `id` is not run again: the board replays the stored
 verdict (`src:1147-1152`). If a retry reused the `id` of the refused attempt, it would get the
@@ -95,21 +104,24 @@ refusal back without the board reading the tags again.
 
 ```json
 {"id":"v-5b0c","verb":"-","rec":"3f2a9c21-7b4e-4c1d-9a0e-5d6f7a8b9c0d",
- "t_ms":1791398460000,"lat":44.1234567,"lon":-72.7654321,"acc":5}
+ "tally":"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3","t_ms":1791398460000,"lat":44.1234567,
+ "lon":-72.7654321,"acc":5}
 ```
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `rec` | string, the `id` charset | yes | The record ID being voided. The app sends the last record of the tally the operator is in |
+| `tally` | as for `+` | yes | The tally the voided record went to. The app knows it, because it chose the tally when it sent the record |
 | `t_ms`, `lat`, `lon`, `acc` | as for `+` | as for `+` | |
 
-The board does not hold the tally, so it cannot check that `rec` exists. It checks only the
-syntax. Matching the void to a record is the consumer's job.
+The board does not hold the tally, so it cannot check that `rec` exists or that it belongs to
+`tally`. It checks only the syntax: `rec` first, then `tally`, then time and GPS. Matching the
+void to a record is the consumer's job.
 
 ### Tally end — verb `end`
 
 ```json
-{"id":"e-77a1","verb":"end","tally":"T-day-1007","t_ms":1791420000000}
+{"id":"e-77a1","verb":"end","tally":"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3","t_ms":1791420000000}
 ```
 
 | Field | Type | Required | Meaning |
@@ -131,7 +143,7 @@ below are added. `n` and `total` are not sent any more.
 | No tag in view | false | `NO TAG` | none |
 | Several tags, none chosen | false | `MULTIPLE TAGS` | `tags` (strongest first), `tags_seen` |
 | Chosen tag not in this read | false | `TAG NOT IN VIEW` | `tags` (what *is* in view), `tags_seen` |
-| No tally ID / malformed | false | `NO TALLY` / `BAD TALLY` | none |
+| No tally ID / malformed (`+`, `-`, `end`) | false | `NO TALLY` / `BAD TALLY` | none |
 | No phone time / malformed | false | `NO TIME` / `BAD TIME` | none |
 | GPS partial, malformed or out of range | false | `BAD GPS` | none |
 | Chosen tag malformed | false | `BAD TAG` | none |
@@ -145,13 +157,13 @@ below are added. `n` and `total` are not sent any more.
 
 ```json
 {"id":"3f2a9c21-…","verb":"+","ok":true,"detail":"recorded","rec":"3f2a9c21-…",
- "tally":"T-day-1007","tag":"E28011700000020F1A2B3C01","w":1834}
+ "tally":"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3","tag":"E28011700000020F1A2B3C01","w":1834}
 {"id":"7f3a0001","verb":"+","ok":false,"detail":"MULTIPLE TAGS",
  "tags":[{"epc":"E28011700000020F1A2B3C02","rssi":-45},
          {"epc":"E28011700000020F1A2B3C01","rssi":-70}],"tags_seen":2}
 {"id":"7f3a0002","verb":"+","ok":false,"detail":"TAG NOT IN VIEW","tags":[],"tags_seen":0}
 {"id":"v-5b0c","verb":"-","ok":true,"detail":"voided","rec":"3f2a9c21-…"}
-{"id":"e-77a1","verb":"end","ok":true,"detail":"ended","tally":"T-day-1007"}
+{"id":"e-77a1","verb":"end","ok":true,"detail":"ended","tally":"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3"}
 ```
 
 The checks run in this order, and the first failure is the one reported: tally, then time, then
@@ -183,7 +195,7 @@ point of the discussion's "one complete record" decision.
 ### Record
 
 ```json
-{"kind":"record","rec":"3f2a9c21-…","tally":"T-day-1007","w":1834,
+{"kind":"record","rec":"3f2a9c21-…","tally":"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3","w":1834,
  "tag":"E28011700000020F1A2B3C01","t_ms":1791398400123,"lat":44.1234567,
  "lon":-72.7654321,"acc":5,"age_ms":0,"backlog":false,"sensor":"ok","cal":"ok",
  "id":"plc4-jd5055e"}
@@ -206,18 +218,20 @@ point of the discussion's "one complete record" decision.
 ### Void
 
 ```json
-{"kind":"void","rec":"3f2a9c21-…","t_ms":1791398460000,"lat":44.1234567,
- "lon":-72.7654321,"acc":5,"age_ms":0,"backlog":false,"id":"plc4-jd5055e"}
+{"kind":"void","rec":"3f2a9c21-…","tally":"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3",
+ "t_ms":1791398460000,"lat":44.1234567,"lon":-72.7654321,"acc":5,"age_ms":0,
+ "backlog":false,"id":"plc4-jd5055e"}
 ```
 
 ### Tally end
 
 ```json
-{"kind":"tally_end","tally":"T-day-1007","t_ms":1791420000000,"lat":null,"lon":null,
+{"kind":"tally_end","tally":"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3","t_ms":1791420000000,"lat":null,"lon":null,
  "acc":null,"age_ms":0,"backlog":false,"id":"plc4-jd5055e"}
 ```
 
-Voids and tally ends carry no `w`, `sensor` or `cal`: they record no reading.
+Voids and tally ends carry no `w`, `sensor` or `cal`: they record no reading. Every event
+carries `tally`.
 
 ## Record ID
 
@@ -234,11 +248,12 @@ Why:
 2. **The app knows the ID before it sends the command.** So a lost ack (QoS 0) costs nothing: the
    app can still void the record by ID, and it can match the record when it arrives on `weight`.
    If the board generated the ID, a lost ack would leave the app not knowing which ID to void.
-3. **A duplicate cannot hide.** The dedup ring is RAM, eight deep. After a reboot, an app resend
-   of a command the board already executed runs again (the test shows this). Under this scheme the
-   second record carries the **same** `rec`, so the consumer can see the duplicate and drop it.
-   Under a board-side `boot:seq` scheme the duplicate would get a fresh ID and count twice without
-   anyone seeing it.
+3. **A duplicate cannot hide.** The app never resends a record (*Rules for the app*), but a
+   QoS 1 redelivery of a record command can reach the board twice; see *Repeated record ID*. If
+   the dedup ring has lost the `id` by then, the board runs the command again. Under this scheme
+   the second record carries the **same** `rec`, so the consumer sees the duplicate and keeps the
+   first. Under a board-side `boot:seq` scheme the duplicate would get a fresh ID and count twice
+   without anyone seeing it.
 4. **The backlog and the confirmation need nothing extra.** The ID is stored in the queue entry
    with the rest of the event. A confirmation names the same `rec` the app already holds, and a
    resent void carries it too, so a double delivery is visible.
@@ -250,6 +265,55 @@ this with a model of the board.
 What the app must do: generate a globally unique `id` for every record command, and a new one for
 every retry. `rfid::recordIdFor()` only checks and copies the ID; the board does not check
 uniqueness beyond the eight-deep ring.
+
+### Repeated record ID
+
+A second record with a `rec` already seen does not come from the app, which never resends a
+record. It comes from a QoS 1 redelivery of the same record command, which the board then runs a
+second time. Read from source:
+
+- Every command `id` goes into the dedup ring with its verdict: refusals at `src:1178`, everything
+  else at `src:2243`, through `cmdRemember()` (`src:877-885`). A repeated `id` is acked from the
+  ring and **not run** (`src:1147-1152`).
+- The ring is RAM and eight deep (`src:742-751`). It forgets an `id` after a reboot, or once
+  eight newer command ids have pushed it out (`src:883-884`). The test shows both.
+- The board connects with a clean session, the library default (`MqttClient.cpp:69`,
+  `:900-901`; nothing in `src/` calls `setCleanSession`). It PUBACKs an inbound command as soon as
+  the payload is read (`MqttClient.cpp:735`). **Inference:** the broker keeps nothing for the
+  board across a reconnect, so a redelivery reaches the board only from the app's side, as a QoS 1
+  PUBLISH the app's client sent again and the broker forwarded twice.
+
+So a redelivery that arrives while the ring still holds the `id` is a dedup replay and records
+nothing. A second run happens only after a reboot, or after eight newer commands. That second run
+reads the scale and the reader again, so its `w`, and possibly its `tag`, can differ from the
+first. **The consumer keeps the first** and drops the repeat (consumer item 3).
+
+## Tallies
+
+**A tally ID must be unique for all time and across every phone, like a record ID. The app
+generates it as a UUID.** This is a hard requirement, not a recommendation. A reused tally ID
+merges two loads, or two days, without trace. A UUID is 36 characters and fits the 40-character
+cap that tally IDs share with command IDs (`rfid::ID_MAX`, `src:743`), so the cap does not
+change. The board validates only the shape (`rfid::idValid()`, the `id` charset) and the length.
+It cannot detect a reused tally ID.
+
+Every event names its tally: records and tally ends always did, and voids now do too.
+
+**A record or void that arrives after its tally's `tally_end` still applies.** The consumer
+counts it and flags it. The ordering rule makes this rare, because one FIFO and one topic deliver
+in the order the board took them (*Proposed queue*). It can still happen. For example, a void
+whose first send was lost can have its resend arrive after the tally end, or the operator can act
+on a tally the app has already ended.
+
+**Consumer-side rulings.** Alex ruled the following on 2026-10-07. They are relayed by the
+consumer coordinator, not his words recorded here:
+
+- The app publishes tally start on its own topic, and the consumer confirms it.
+- A delivery's customer and order come from Odoo.
+- Attribution cannot be corrected after a tally starts. End the tally and start a new one.
+
+None of these touches the board. The design is in greybeard-plc-consumer, branch
+`docs/plc4-rfid-consumer-design`, `docs/design/plc4-rfid-consumer.md`.
 
 ## Backlog and RAM
 
@@ -289,6 +353,11 @@ it has no tally.
   not traded against RAM. It holds four full capture rings' worth of accepted events (the ring
   is four deep, `src:952-958`), which is more than can be in flight when a link drops. If it ever
   fills, the operator is told and nothing accepted is lost.
+
+The void's `tally` costs no RAM: `rfid::Event` already held a tally for records and tally ends,
+so the entry stays 152 B. The worst-case void command (two 40-character IDs) is 232 B against
+`CMD_BUF` 256, and the worst-case void event is 242 B against `EVENT_BUF` 352. Both are measured
+by the host test. No buffer constant changes.
 
 The queue is RAM only, as Alex ruled for today's queue (`src:320-322`). A reset with events
 queued loses them, and a QoS 0 publish can be lost on the wire after `publishTo()` reports
@@ -355,6 +424,12 @@ only that the bytes reached the radio coprocessor (`src:902-905`). A void or tal
 the wire leaves no trace. A lost void overcounts a delivery, and a lost tally end leaves a
 truckload open. The same is true of a record and of anything queued in RAM when the board resets.
 
+The same holds for the consumer. A record published while the consumer is restarting is lost,
+because nothing on a QoS 0, unretained topic waits for a subscriber that is not there. The board
+cannot see this. What reveals it is the app's unconfirmed-record mark (*Rules for the app*): the
+record gets no confirmation, and the operator is shown that. The consumer coordinator reports
+that it will time its deploys for when the scale is idle.
+
 The board's QoS 1 machinery cannot be leaned on instead. `publishStatus()` discards
 `endMessage()`'s result (`src:512`). `publishNextDtc()` reads it (`src:664-669`), but nothing in
 this repo records whether those publishes are actually acknowledged. **Nothing here shows that
@@ -367,7 +442,7 @@ this broker returns PUBACKs to this board.**
 ```json
 {"kind":"record","rec":"3f2a9c21-…","by":"<consumer client id>"}
 {"kind":"void","rec":"3f2a9c21-…","by":"<consumer client id>"}
-{"kind":"tally_end","tally":"T-day-1007","by":"<consumer client id>"}
+{"kind":"tally_end","tally":"c71e0b52-9d4a-4f3e-8a26-1b7f04d9e8a3","by":"<consumer client id>"}
 ```
 
 | Field | Meaning |
@@ -388,8 +463,8 @@ never subscribes outside `cmd`.
 2. **Confirm every receipt, duplicates included.** If the first confirmation was lost, only a
    confirmation of the resend closes the loop. A duplicate is confirmed and dropped, never
    applied twice.
-3. A void whose `rec` the consumer has never seen is kept or flagged (consumer impact, item 7).
-   It is still confirmed, because the app must stop resending it.
+3. A void whose `rec` the consumer has never seen is kept and flagged as an orphan (consumer
+   impact, item 7). It is still confirmed, because the app must stop resending it.
 
 ### Rules for the app
 
@@ -427,7 +502,9 @@ ended, because the tally lives in the app and consumer. `test_rfid_record.cpp` m
 command path to show this. A repeat under the same `id` is a dedup replay and publishes nothing.
 A repeat under a new `id` publishes again, with the same payload. Two resends while the board is
 offline both queue and flush in order with `backlog: true`. A model of the consumer's rules then
-counts a record once after a duplicate record, a duplicate void and a duplicate tally end.
+counts a record once after a duplicate record, a duplicate void and a duplicate tally end, and
+keeps the first of two records with the same `rec`. It keeps, flags and confirms an orphan void,
+and it flags a record and a void that arrive after their tally end while still counting both.
 
 ## What retires
 
@@ -458,28 +535,54 @@ names `/opt/plc1-monitoring` as where it lives. It belongs to the consumer coord
 2. **Stop reading `n` and `total`** on `weight`, `ack` and `status`. Compute tally totals from
    records minus voids.
 3. Key each record by `rec`, and make the insert idempotent. A second record with a `rec`
-   already seen is an app resend after a board reboot. Drop it and log it. Voids are idempotent
-   on `rec`, and tally ends on `tally`, because the app resends both until they are confirmed.
-4. Take "when" from `t_ms`, which is phone time. `age_ms` and `backlog` mean what they mean
-   today.
+   already seen is a QoS 1 redelivery of the record command that the board ran again after a
+   reboot or a ring eviction (*Repeated record ID*). Its `w` and `tag` may differ. **Keep the
+   first,** drop the repeat and log it. Voids are idempotent on `rec`, and tally ends on `tally`,
+   because the app resends both until they are confirmed.
+4. Take "when" from `t_ms`, the phone's clock at the press. The board does not check it for
+   plausibility (*Phone time*). `age_ms` and `backlog` mean what they mean today.
 5. Take "where" from `lat`/`lon`/`acc`, which may all be `null`. The yard zone is derived from
    these downstream (discussion, *Decided*).
 6. Record the move against `tag`, the one EPC.
-7. **Void:** reverse the move whose `rec` matches. A void naming a `rec` never received must be
-   kept or flagged, not ignored. The queue no longer drops anything, but a board reset still
-   loses whatever was queued in RAM.
-8. **Tally end:** close the tally named in `tally`. A record arriving for a closed tally means the
-   app and consumer disagree. Flag it.
+7. **Void:** reverse the move whose `rec` matches. The void names the record's `tally` too. A
+   void naming a `rec` never received is kept, flagged as an orphan and confirmed, never
+   ignored. The queue no longer drops anything, but a board reset still loses whatever was
+   queued in RAM.
+8. **Tally end:** close the tally named in `tally`. A record or void arriving after it still
+   applies. Count it and flag it (*Tallies*).
 9. **Tally start and attribution are app and consumer work, not the board's.** The app opens a
-   tally with an ID, and attribution is set at start: a daily log, or a delivery with its
+   tally with a UUID, and attribution is set at start: a daily log, or a delivery with its
    customer/order (discussion, *Tallies*). No message on the board's topics carries either. The
-   consumer coordinator owns how the app delivers them to the consumer. The board only stamps the
-   tally ID on records and publishes `tally_end`.
+   consumer-side rulings and the design pointer are under *Tallies*. The board only stamps the
+   tally ID on records and voids, and publishes `tally_end`.
 10. The backlog depth changes from 200 to 16, and full now refuses instead of dropping. Update the
     consumer's documented bound (`src:334-342`).
 11. **Build the confirmation leg** (see *Confirmation*): publish confirmations on
     `plc4/jd5055e/confirm`, and have the app resend unconfirmed voids and tally ends under a new
     command `id`, and flag unconfirmed records. The consumer and the app own all of it.
+
+## App impact — for whoever owns greybeard-plc4-pwa
+
+These are app-side and not this repo's to fix. They come from the consumer coordinator's review
+of this contract (2026-10-07, relayed by Ymir). They were not verified here, because that repo
+is outside this workspace.
+
+- **Confirmations can be lost (C5).** The app connects with `clean_session` and a random client
+  id, so a confirmation published while it is disconnected is lost. Its pending resends are held
+  in RAM. It needs a third publish topic and a subscription to `plc4/jd5055e/confirm`.
+- **No tally total on the phone (C6).** With `n` and `total` retired, the board no longer reports
+  a total. The app sums its confirmed records.
+- **New frames refused (C8).** The app's `parse_weight` requires `w`, `sensor` and `cal` and
+  validates `n`/`total`. So `void` and `tally_end` frames, and records without `n`/`total`, would
+  be refused once the board is flashed.
+- **Resend id rule (reported by the consumer coordinator, citing greybeard-plc4-pwa
+  `commands.mjs:9-10`).** The PWA's rule is to resend under the SAME id, never a new one. This
+  contract requires a NEW command `id` on every resend of a void or tally end. Under the PWA's
+  rule those resends are deduplicated as replays (`src:1147-1152`), and nothing is published. The
+  same-id rule stays correct for a `+` retry after a lost ack, since the board replays the stored
+  verdict and the record is not weighed again. Only void and tally-end resends need a new `id`.
+  The retry after a `MULTIPLE TAGS` refusal also needs one (*Record*), because it must read
+  the tags again.
 
 ## Open questions only Alex can answer
 
