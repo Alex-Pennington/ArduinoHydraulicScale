@@ -18,11 +18,22 @@ inventory moves.
 - One bag per lift. The read is deliberate, done when the operator records the weight.
 - Reader-to-tag range at record time under about 1 m, so UHF EPC Gen2.
 - No read means the record is refused. 100% read reliability is not required.
-- **More than one tag seen: the operator picks.** The app lists the tags seen, strongest
-  signal first and preselected; the operator confirms with one tap or picks another. No
-  printed marking on the tag is needed for this.
-- **The pick happens in the phone app**, next to the zone pick. The board reports what it
-  saw; it does not choose.
+- **One press does it all** (Alex, 2026-10-07). The operator presses record in the app as
+  today; the board reads the tags and the weight in that same step.
+  - One tag in view: the record goes through on that press.
+  - No tag: refused.
+  - Several tags: the board refuses, and its reply lists the tags, strongest signal first.
+    The operator taps the right one; the app sends record again naming that tag; the board
+    reads again and accepts only if that tag is still in view.
+- **GPS and time come from the phone.** The app adds them to every record command. No GPS on
+  the board; the SAM-M10Q is dropped and mux ch4 stays free.
+- **The board publishes the one complete record** on `plc4/jd5055e/weight`, as it does
+  today: weight plus tag plus the phone's GPS and time. The consumer keeps reading one topic
+  from one source and never has to join two messages. (Alex first answered "the app
+  publishes the final record"; on seeing that the weight topic has no per-record ID to join
+  on, he chose this flow.)
+- **Reader power: the existing beefy off-board 5 V supply** (Alex). Its spare capacity for
+  the reader's ~1 A is his statement, not measured.
 
 ## Out of scope for this discussion (Alex)
 
@@ -48,9 +59,14 @@ and for how much time the operator-pick step costs per day.
 - SparkFun M7E Hecto UHF reader — UART only, up to ~1 A at 5 V, onboard antenna ~1-2 ft,
   so an external antenna is likely needed.
 - NXP SC16IS750 UART-to-I2C bridge on mux ch5, to reach the reader without a UART.
-- SparkFun SAM-M10Q GPS on Qwiic (0x42), mux ch4.
+- ~~SparkFun SAM-M10Q GPS on Qwiic (0x42), mux ch4.~~ Dropped: the phone supplies GPS and time.
 
-## Consequence of "operator picks" (inference)
+## What this means for the board (inference, read against the repo)
 
-The board's record has to carry every tag seen with its signal strength, not one tag. The
-app does the choosing, so the board-side change is smaller than a board-side chooser.
+- The record command (`plc4/jd5055e/cmd`) gains optional fields: phone GPS, phone time, and a
+  chosen tag on the retry.
+- The ack for a multi-tag refusal has to carry the tag list with signal strengths.
+- The weight record gains the tag, GPS and time. The phone time also fixes "when" for
+  replayed records, which today carry only `age_ms`.
+- A tag read has to fit inside, or be split across, the 500 ms main loop.
+- All of this is a gated firmware change; nothing here is approved.
