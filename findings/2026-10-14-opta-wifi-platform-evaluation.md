@@ -27,14 +27,18 @@ Plain-language reasons:
    analog I/O and relays [2], [3], [10]. So the UNO stays for the tractor's J1939 bus, as you
    foresaw.
 2. **With the UNO kept, the Opta has little left to do.** The Opta has no plain serial port for
-   the RFID reader and no connection for the LCD (§2). Both stay on the UNO, which already does
-   WiFi and MQTT. The Opta would hold only the pressure loop, and for that it needs the $229
-   Analog Expansion.
+   the RFID reader and no connection for the LCD (§2). Without extra parts both stay on the UNO,
+   which already does WiFi and MQTT. The Opta would then hold only the pressure loop, and for
+   that it needs the $229 Analog Expansion. The strongest form of the idea moves the reader as
+   well; it is set out below.
 3. **It costs about $428 more for two boxes instead of one.** Opta WiFi $199 plus Analog
    Expansion $229 [10], against $42.45 for the UNO and shield already ruled (§5).
 4. **It is rated for a narrower temperature range.** The Opta and its expansions are rated
    −20 to +50 °C [1] §4.1, [2] §3.1. The UNO R4 WiFi is rated −40 to +85 °C [6] §2. This box sits
-   outdoors, sealed, unattended.
+   outdoors, sealed, unattended. **Inference:** in a sealed box in summer sun, the +50 °C ceiling
+   is likely the bigger risk than the cold limit. It would make the Opta the weakest part in the
+   box, below the reader's +60 °C case rating
+   (`findings/2026-10-07-rfid-hardware-recommendation.md:210`).
 5. **Two boxes cost more to run.** You would maintain two firmwares, two WiFi clients and status
    topics, more wiring, and a larger DIN enclosure. Today's firmware is written for the UNO's
    chip (watchdog, reset cause, timers, CAN, EEPROM), so moving to the Opta means rewriting
@@ -44,8 +48,23 @@ Plain-language reasons:
 It also gives a DIN-rail housing with screw terminals, a ±1 % 4–20 mA input on the expansion
 [2] §2.2.2, and the same platform as PLCs #1–#3 (`BRIEF.md:35-36`). The RAM is the only one the
 UNO build cannot match. The RFID contract has already sized its queue to fit the UNO
-(`include/rfid_record.h:53-61`, depth 16), so the RAM gain does not fix anything that is broken
+(`include/rfid_record.h:53-62`, depth 16), so the RAM gain does not fix anything that is broken
 today.
+
+**The strongest form of your idea: the Opta does the weighing, the UNO does CAN only.** The
+UNO reads J1939 and publishes the engine and fault-code topics to MQTT itself. The Opta reads
+the loop through the A0602 and the reader through an RS-485-to-TTL converter, and publishes the
+weight, the tag and everything else. Engine data never affects the weight
+(`references/03_mqtt_contract.md:7-8`), so the boxes need no wire between them. The
+one-record design (weight plus tag on one topic, `notes/rfid-inventory-discussion.md:30-34`)
+survives, and the 1 MB RAM sits where the queue is. Its costs: the reader link depends on an RS-485-to-TTL
+converter that has not been chosen or tested (§2). The LCD has no connection on the Opta, so it
+is lost or replaced by a separate panel (no part chosen). It is still about $428 more (§5),
+still two firmwares and two MQTT clients with a contract change (§3.1), and still rated to
++50 °C. **The recommendation holds:** this form removes the wired link, but it buys RAM the
+UNO build no longer needs and a housing the shield and enclosure already give. In exchange it
+takes on an untested reader path, loses or re-buys the display, and lowers the temperature
+ceiling.
 
 **If you want one industrial box rather than the UNO,** the candidate is the **Portenta Machine
 Control ($300)**, not the Opta. It has CAN, three 4–20 mA inputs, WiFi and an I2C connector on
@@ -58,7 +77,8 @@ a third terminator to the tractor bus, and it has no 3.3 V serial port for the r
 | Option | What it means |
 |---|---|
 | **Keep the UNO-only build (recommended)** | The 10-07 ruling stands. $42.45 for the controller. One box, one firmware |
-| Opta + Analog Expansion, with the UNO kept for CAN, LCD and reader | About $428 more. Two boxes, two firmwares, two WiFi clients. Gains 1 MB RAM and DIN housing. Narrower temperature rating |
+| Opta does the weighing, UNO does CAN only | Opta + A0602 read the loop and the reader and publish the weight record; the UNO publishes engine data on its own. No wire between boxes. About $428 more, plus an untested RS-485-to-TTL converter for the reader. The LCD is lost or replaced by a separate panel. Two firmwares, two MQTT clients. Rated to +50 °C |
+| Opta + Analog Expansion, with the UNO kept for CAN, LCD and reader | About $428 more. Two boxes, two firmwares, two WiFi clients, and a wired link so the weight and tag meet (§3.2). Gains 1 MB RAM and DIN housing. Rated to +50 °C |
 | Portenta Machine Control, one box | $300. CAN, 4–20 mA and WiFi on one board. CAN termination and the reader's serial link must be solved first, so a bench check comes before any purchase |
 
 ---
@@ -71,7 +91,7 @@ and no exposed I2C (proprietary expansion port), so no J1939, loop converter or 
 
 | 10-07 claim | Verdict | Evidence |
 |---|---|---|
-| No CAN | **Confirmed.** | Not among the Opta's interfaces [1] §3.4. Arduino's mbed core defines no CAN pins for the Opta. Its Portenta H7 variant defines `CAN_HOWMANY 1` [5] (`variants/PORTENTA_H7_M7/pins_arduino.h:167-170`; nothing CAN-related in `variants/OPTA/pins_arduino.h`). No Opta expansion has CAN [2], [3], [10] |
+| No CAN | **Confirmed.** | Not among the Opta's interfaces [1] §3.4. Arduino's mbed core defines no CAN pins for the Opta. Its Portenta H7 variant defines `CAN_HOWMANY 1` [5] (`variants/PORTENTA_H7_M7/pins_arduino.h:167-170`; nothing CAN-related in `variants/OPTA/pins_arduino.h`). The Opta build does define `DEVICE_CAN=1` (`variants/OPTA/defines.txt:15`), so the mbed driver is compiled in, but the variant gives it no pins. PB_9 and PH_14 are already Serial3 TX and RX (`variants/OPTA/pins_arduino.h:150-151`; RTS/CTS are PA_15/PB_15, `:152-153`). No Opta expansion has CAN [2], [3], [10] |
 | No exposed I2C; proprietary expansion port | **Confirmed in effect, and imprecise.** | The datasheet calls the port "Proprietary Port … Expansion module communication" [1] §3.4. **Electrically it is I2C:** Arduino's expansion library opens `Wire` as master at 400 kHz, uses a detect line, and assigns module addresses from `0x0A` up [4] (`src/OptaController.cpp:324-326`, `src/OptaControllerCfg.h:18`, `src/OptaBluePrintCfg.h:40`). No connector pinout or logic level is published, so hanging the MCP3421 or the LCD backpack on it is NOT DETERMINABLE and unsupported |
 | So no loop converter | **Incomplete.** | The MCP3421 cannot attach, but **the loop can still be read**: the Analog Expansion (AFX00007) takes 0/4–20 mA directly, 0–25 mA range, 16-bit, ±1 % [2] §2.2, §2.2.2. The Opta's own inputs are 0–10 V only [1] §3.5.1 |
 | So no J1939 or LCD | **Confirmed.** | As above |
@@ -154,8 +174,8 @@ Today's functions, from `findings/2026-10-07-rfid-hardware-recommendation.md:101
 | **MQTT over WiFi** | `WiFiS3`, `ArduinoMqttClient` (`src/ArduinoHydraulicScale.cpp:12-13`) | Native WiFi [1] §5.7. PLC #1 already publishes to the estate broker (`BRIEF.md:66`) | **Native.** A port from `WiFiS3` to the mbed WiFi stack (inference) |
 | **Watchdog and reset cause** | `WDT.h` with an FspTimer heartbeat; RA4M1 `RSTSR0`/`RSTSR1` (`src/ArduinoHydraulicScale.cpp:14-15`, `:223-232`, `:353-382`) | IWDG, as on PLCs #1–#3 (`BRIEF.md:35-36`) | **Native, rewritten.** Every line cited is RA4M1-specific. The STM32 reset-cause registers were not read (§6) |
 | **Calibration store** | `EEPROM.get`/`put` (`src/ArduinoHydraulicScale.cpp:1490`) | 2 MB flash; 16 MB QSPI shared with the maker [1] §3.1 | **Native, rewritten** (inference: a flash key-value store in place of EEPROM) |
-| **Offline queue** | 200 × 12-byte records today (`src/ArduinoHydraulicScale.cpp:343`); RFID contract sizes 16 events for 32 KB RAM (`include/rfid_record.h:53-61`) | 1 MB RAM [1] §3.1 | **Native, and roomier.** The one thing the Opta does clearly better |
-| **RFID reader UART** | `Serial1` on D0/D1 at 9600, going to the M7E (`src/ArduinoHydraulicScale.cpp:1460`; `notes/rfid-inventory-discussion.md:102-103`) | **No 3.3 V/TTL serial on the terminals.** The only wired serial port is RS-485 [1] §3.4, §5.1. The core maps a `Serial1` to MCU pins PG9/PG14 [5] (`variants/OPTA/pins_arduino.h:117-118`), but no published document says which connector, if any, carries them. The SparkFun board has a CH340C USB bridge [9], and the Opta's USB-C can act as host [1] §5.8. Whether the Opta's core drives a CH340 is NOT DETERMINABLE | **UNO**, or an RS-485-to-TTL converter at the reader (no part chosen). **Inference:** one deliberate read per lift is a command and reply, which half-duplex RS-485 can carry. Needs a bench test |
+| **Offline queue** | 200 records today (`src/ArduinoHydraulicScale.cpp:343`), 12 bytes each by the RFID contract's host test (`findings/2026-10-07-rfid-hardware-recommendation.md:119`; struct at `src/ArduinoHydraulicScale.cpp:328-333`); RFID contract sizes 16 events for 32 KB RAM (`include/rfid_record.h:53-62`) | 1 MB RAM [1] §3.1 | **Native, and roomier.** The one thing the Opta does clearly better |
+| **RFID reader UART** | `Serial1` on D0/D1 at 9600, going to the M7E (`src/ArduinoHydraulicScale.cpp:1460`; `notes/rfid-inventory-discussion.md:102-103`) | **No 3.3 V/TTL serial on the terminals.** The only wired serial port is RS-485 [1] §3.4, §5.1. The core maps `Serial1` to Opta pins 13/14 [5] (`variants/OPTA/pins_arduino.h:117-118`), which are MCU pins PG_9/PG_14 [5] (`variants/OPTA/variant.cpp:34-35`), but no published document says which connector, if any, carries them. The SparkFun board has a CH340C USB bridge [9], and the Opta's USB-C can act as host [1] §5.8. Whether the Opta's core drives a CH340 is NOT DETERMINABLE | **UNO**, or an RS-485-to-TTL converter at the reader (no part chosen). **Inference:** one deliberate read per lift is a command and reply, which half-duplex RS-485 can carry. Needs a bench test |
 
 **Net:** on the Opta, natively, only WiFi/MQTT, the watchdog, calibration storage and the queue,
 all rewritten. The loop needs the A0602. CAN, LCD and INA219 cannot move off the UNO. The
@@ -190,11 +210,16 @@ before it can publish. That brings back the RS-485 link the MQTT-only split avoi
 **Inference:** the LCD shows the weight (`notes/rfid-inventory-discussion.md:57`), which lives
 on the Opta, so it also needs that link.
 
+**The alternative split** moves the reader to the Opta through an RS-485-to-TTL converter and
+leaves the UNO on CAN only. The weight and tag then meet on the Opta, and the MQTT-only link
+holds. The cost is the untested converter and the loss of the LCD. See the opening decision
+section.
+
 ### 3.3 What the Opta adds, and what two boxes cost
 
 | The Opta adds | Two boxes cost |
 |---|---|
-| 1 MB RAM against 32 KB [1] §3.1; [6]. The RFID queue is already sized for 32 KB (`include/rfid_record.h:53-61`) | Two firmwares, two builds, two flashing paths. The Opta firmware is a port of the RA4M1-specific code (§2) |
+| 1 MB RAM against 32 KB [1] §3.1; [6]. The RFID queue is already sized for 32 KB (`include/rfid_record.h:53-62`) | Two firmwares, two builds, two flashing paths. The Opta firmware is a port of the RA4M1-specific code (§2) |
 | A DIN-rail housing with 0.5–4 mm² screw terminals [1] §5.2.2, replacing the screw shield | Two WiFi clients, two status topics, a contract change (§3.1) |
 | ±1 % 4–20 mA input on the A0602 [2] | A wired link between the boxes once the weight and tag must meet (§3.2) |
 | The PLC #1–#3 platform and toolchain (`BRIEF.md:35-36`) | A −20 to +50 °C box beside a −40 to +85 °C one [1], [2], [6] |
@@ -203,7 +228,7 @@ on the Opta, so it also needs that link.
 
 **The question your instruction raises:** once the UNO stays and already does WiFi and MQTT,
 the Opta adds RAM, a housing and a better-specified loop input. The UNO build already gets
-round the RAM limit by sizing (`include/rfid_record.h:53-61`). The shield and enclosure in the
+round the RAM limit by sizing (`include/rfid_record.h:53-62`). The shield and enclosure in the
 10-07 BOM supply the housing. The loop input is fine today at 0.13 % of span. **Inference:** none
 of the three justifies a second box.
 
@@ -216,7 +241,7 @@ of the three justifies a second box.
 Everything carries over unchanged (`findings/2026-10-07-rfid-hardware-recommendation.md:101-110`).
 The UNO is rated −40 to +85 °C, VIN 6–24 V, and has on-chip CAN [6] §2. **The binding
 constraint is RAM** (`findings/2026-10-07-rfid-hardware-recommendation.md:112-131`), and the RFID
-contract has sized for it (`include/rfid_record.h:53-61`).
+contract has sized for it (`include/rfid_record.h:53-62`).
 
 ### 4.2 Arduino Portenta Machine Control (AKX00032), $300 [10]
 
@@ -343,7 +368,7 @@ manual, rev. 5. Filed at `docs/vendor/arduino/AFX00005-AFX00006_Opta-Digital-Exp
 [Online]. Available: https://github.com/arduino-libraries/Arduino_Opta_Blueprint
 
 [5] Arduino, *ArduinoCore-mbed*, release 4.6.0, licence NOT DETERMINABLE (see §6),
-`variants/OPTA/pins_arduino.h:117-118`, `:140`, `:143-153`, `:197`;
+`variants/OPTA/pins_arduino.h:117-118`, `:140`, `:143-153`, `:197`; `variants/OPTA/variant.cpp:34-35`; `variants/OPTA/defines.txt:15`;
 `variants/PORTENTA_H7_M7/pins_arduino.h:167-170`. [Online]. Available:
 https://github.com/arduino/ArduinoCore-mbed
 
