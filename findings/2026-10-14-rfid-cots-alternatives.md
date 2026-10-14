@@ -454,6 +454,109 @@ documents that contradict themselves, an unpublished command set and no FCC ID o
 
 ---
 
+## 8. Alex's tag, SLON SA-223, checked 2026-10-14
+
+**Why this exists.** On 2026-10-14 Alex said *"check out these tags"* and pasted a listing for the
+SLON SA-223 "UHF Ties RFID Tags": Alien H3 chip, 860–960 MHz, −40 to +65 °C working,
+">5m (reader Alien ALR9900+, EIRP 4W)". This section checks that listing against the ruled tag.
+**It does not change the ruled build or any total in §0.** Whether to swap tags is Alex's call.
+
+### 8.1 Sources and their limits
+
+- **The maker's pages.** SLON's site carries the SA-223 on two product pages, each in two
+  languages: a French page [31] and a Spanish page [32]. The English versions of both return
+  **HTTP 410 Gone**. The site footer gives "SLon Technology Co.,Limited", Guangzhou [31].
+  **The two pages give different prices for the same model** (table below).
+- **The French page has a second product's specification mixed into it.** Under the SA-223
+  price table it describes the "Tamper Proof RFID Tag SA-224", a paper windscreen label rated
+  −20 to +85 °C, "anti-UV", with a "64位" UID [31]. **Those are SA-224 facts. None of them is
+  used here for the SA-223.**
+- **No SA-223 datasheet was found.** The product pages are the only SA-223 source. The chip
+  facts come from Alien's Higgs-3 datasheet [33], its supplement [34] and its product page [35].
+- **Inference:** Yanzeo's documents name "SLon Technology Co., Ltd." [5], and SLonParts, also in
+  Guangzhou, sells Yanzeo readers. SLON and Yanzeo are probably one company or group. That
+  matters because §1.6 found Yanzeo's documents contradicting themselves.
+
+### 8.2 Comparison
+
+| | SLON SA-223 [31], [32] | RSCT-U8-AN-10330 (ruled) [28] |
+|---|---|---|
+| Chip | Alien Higgs-3 [33] | NXP UCODE 8 |
+| Price, 10 | $7.00 (FR page) or $13.00 (ES page) | $51.00 (10-pack) |
+| Price, 200 | **$140.00 (FR) or $260.00 (ES)**: $0.70 or $1.30 a tag | **$270.00** (2 × 100), $1.35 a tag |
+| Price, 500 | $350.00 (FR) or $650.00 (ES) | $474.00 |
+| Price tiers | FR: $0.70 for 1–1,000, $0.50 to 5,000. ES: $1.30 for 1–1,000, $1.20 to 5,000 | 10 / 100 / 500 / 1,000 packs |
+| MOQ | Tiers start at 1. No other minimum is stated | 10-pack |
+| Lead time / shipping | "3 día" / "3 jour" against every tier. Site footer: "Global free shipping". Packed 500 a box | 15 working days |
+| Operating temp. | **−40 to +65 °C**; storage −40 to +85 °C. Chip: −50 to +85 °C [33] | −25 to +60 °C |
+| IP rating / sealing | **Not stated** | Not stated; described as waterproof |
+| UV | **Not stated.** Body is "polypropylene" | **"UV protection, suitable for outdoor use"** |
+| Tie | 290 × 24 × 8 mm overall; inlay 40 × 15 × 0.3 mm. **Whether it is one-use or releasable is not stated** | 103 × 30 mm tag, 400 mm tie, "Disposable" |
+| EPC | Listing says "EPC 128". Chip: 96 bits by default, extensible to 480 [33], [35]. Writable NVM, 100,000 cycles [33] | 128 bits |
+| TID / serial | **64-bit factory-programmed serial "that cannot be altered"** in TID bank words 2–5 (20h–5Fh), after a 32-bit class and model header [33] | 96-bit factory-locked TID [37]. Whether it carries a unique serial was not established here |
+| User memory | 512 bits [33] | 0 bits (UCODE 8) [37] |
+| Chip read sensitivity | −20 dBm with a 2 dBi dipole [33]; −18 dBm minimum communication power [34] | −23 dBm [37] (third-party; NXP's datasheet refused automated download) |
+| Stated read range | ">5m", Alien ALR-9900+ reader at 4 W EIRP | "Up to 8 m", conditions not stated |
+| Band | 860–960 MHz; ISO/IEC 18000-6C | 860–960 MHz; ISO/IEC 18000-63, Gen2v2 |
+
+### 8.3 Reads on the ruled build
+
+- **Protocol.** The M7E supports only EPC Gen2 (ISO 18000-6C) and says so [36] §8.5. Higgs-3
+  meets EPCglobal Gen2 v1.2.0 and ISO/IEC 18000-6C [33]. The M7E runs Gen2 Read, Write, Lock,
+  Kill, Block Write and Block Permalock [36] Table 11. **Inference:** the M7E reads and writes
+  an H3 tag with standard Gen2 commands. Alien's custom LoadImage command [33] is not needed.
+- **Writing the EPC.** `writeTagEPC()` writes the given bytes to EPC bank word 2 and stops
+  there (`SparkFun_UHF_RFID_Reader.cpp:327-333`) [29]. It does not write the PC word, which
+  holds the EPC length. **Inference:** if the tag ships with a 128-bit EPC as listed, a 12-byte
+  write leaves the last 32 bits as shipped and the tag still reports 128 bits. Write the full
+  16 bytes. The same holds for the RSCT tag, which is also 128-bit.
+- **Reading the serial.** `readUID()` reads TID bank from word 2
+  (`SparkFun_UHF_RFID_Reader.cpp:406-412`) [29]. On Higgs-3 that is where the unalterable
+  64-bit serial sits [33]. **Inference:** the board can read each H3 tag's serial with no
+  library change. The contract keys on the EPC, not the TID
+  (`notes/2026-10-07-rfid-record-contract.md:210`), so this is useful for commissioning, not
+  required.
+- **Range.** The listing's ">5m" is at 4 W EIRP (36 dBm) with a fixed reader. The M7E puts out
+  27 dBm at most [36] §9. JADAK quotes it at "over 4.5 meters" with a 6 dBi antenna at 33 dBm
+  EIRP [36] §9. On the on-board PCB antenna SparkFun gives "roughly one to two feet" [30].
+  The PCB antenna's gain is not published, so the M7E's EIRP on it is NOT DETERMINABLE.
+  **Inference:** at 0.3–0.6 m the reader's antenna is the limit, not the tag, and neither
+  tag's stated range predicts reads on this build. On chip sensitivity alone the H3 is 3 dB
+  below the UCODE 8. For otherwise identical tags that is about 0.7 times the range
+  (10^(−3/20)). The two tags' antennas differ, so this is a direction, not a prediction.
+- **Higgs-3 quirks with the M7E.** The M7E user guide names no tag chip and documents no
+  chip-specific behaviour [36]. SparkFun's write example sets 5 dBm read and write power and
+  warns that higher values may brown out a USB port (`Example3_Write_EPC.ino:61`, `:64`) [29].
+  That applies to any tag.
+- **The bench test decides.** Put both tags in the on-board antenna bench test at the record
+  position (§0, *Open before committing*).
+
+### 8.4 Verdict
+
+**Cheaper and rated colder on paper, but UV and sealing are unstated and the maker's own pages
+disagree on price. It is a candidate for the outdoor trial, not a like-for-like swap.** At 200
+tags it costs $140 or $260 against $270. It is rated to −40 °C where the RSCT tag stops at
+−25 °C, and it carries a 64-bit serial. Against that, nothing on its pages says UV-stabilised,
+waterproof or IP-rated. The only "anti-UV" text belongs to a different product. The tie is
+shorter (290 mm overall against 400 mm). Whether it releases is not stated.
+
+### 8.5 NOT DETERMINABLE
+
+- **Which SA-223 price is current:** $0.70 or $1.30 a tag. Both pages are live, and the English
+  pages are gone. Ask the seller to quote 200 delivered to the US.
+- **IP rating, UV resistance and UV life** of the SA-223. None is stated.
+- **Whether the tie is one-use or releasable.**
+- **Shipping cost and terms to the US.** "Global free shipping" is site-wide footer text.
+  Whether it covers this item is not stated.
+- **US 902–928 MHz performance.** The listing gives 860–960 MHz and one range figure, without
+  saying which region's band it was measured in. The tag antenna's tuning is not published.
+- **Whether a shipped tag's EPC is 96 or 128 bits.** The listing says 128 and the chip
+  defaults to 96.
+- **The on-board antenna's EIRP**, and so the read range of either tag on this build.
+- **Whether the UCODE 8's TID carries a unique serial.** NXP's datasheet was not read.
+
+---
+
 ## References
 
 [1] Shenzhen Chafon Technology, "PRIME CF661 UHF integrated reader," datasheet (CF661 EN), and
@@ -573,3 +676,28 @@ https://github.com/sparkfun/SparkFun_Simultaneous_RFID_Tag_Reader_Library
 
 [30] SparkFun Electronics, "SparkFun Simultaneous RFID Reader – M7E Hecto, WRL-24738," product
 page. [Online]. Available: https://www.sparkfun.com/sparkfun-simultaneous-rfid-reader-m7e-hecto.html
+
+[31] SLon Technology Co., Limited (SLON), "Cravates UHF RFID tags SA-223," product page, French,
+with price tiers and delivery time. The English page at the same path returns HTTP 410.
+[Online]. Available: http://fr.slonrfid.com/pid14737347/product-detail.htm
+
+[32] SLON Tecnología Co., Ltd (SLON), "UHF Ties Etiquetas RFID," SA-223 product page, Spanish,
+with price tiers and delivery time. The English page at the same path returns HTTP 410.
+[Online]. Available: http://es.slonrfid.com/pid14901762/product-detail.htm
+
+[33] Alien Technology, "Higgs 3 EPC Class 1 Gen 2 RFID Tag IC," ALC-360 datasheet, Dec. 21, 2014.
+[Online]. Available: http://www.alientechnology.com/wp-content/uploads/ALC-360%20Higgs3%202014-12-21.pdf
+
+[34] Alien Technology, "Higgs 3 IC Datasheet Supplement," §3.1.4, Tables 4.2–4.3, 2006–2013.
+Hosted by a third party, RFID Alliance. [Online]. Available:
+https://www.rfid-alliance.com/RFIDshop/Alien-Technology-Higgs-3-IC-Datasheet.pdf
+
+[35] Alien Technology, "Higgs 3," product page. [Online]. Available:
+https://www.alientechnology.com/products/ic/higgs-3/
+
+[36] JADAK (Novanta), "ThingMagic M7E-HECTO User Guide," Rev. 1.2, Nov. 2023, §8.5, §8.7 Table 11,
+§9. [Online]. Available: https://cdn.sparkfun.com/assets/8/5/2/4/d/M7E_HECTO_User_Guide.pdf
+
+[37] Roxtron, "NXP UCODE 8 Datasheet: Specifications, Memory, Protocol," rfid-datasheet.com.
+A third-party summary. NXP's own datasheet (SL3S1205_15) refused automated download (HTTP 404)
+and was not read. [Online]. Available: https://rfid-datasheet.com/chip/ucode-8
