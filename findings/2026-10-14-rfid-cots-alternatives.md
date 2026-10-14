@@ -18,6 +18,55 @@ not stated in any source. **NOT DETERMINABLE** marks something no source reached
 Nothing was measured on hardware. Every price is the price on the cited page when this
 document was written; none is a quote.
 
+> **Revised 2026-10-14, second pass.** Alex ruled on the build (below), and an adversarial
+> review corrected this document. What changed and why:
+> - **Ruled build added** (§0): the M7E keeps its on-board antenna, with 200 RFIDsolution
+>   RSCT-U8-AN-10330 cable-tie tags.
+> - **§4 "no outdoor tag beats $1.86" is withdrawn.** It was false, and the Fujitsu row in the
+>   same table already showed it. The RSCT tag is added.
+> - **EPC uniqueness is a commissioning requirement, not a tag-selection criterion** (§4, §6).
+> - **Option 1 risk added:** the priced SR691 listing shows no RS-232 and an 8–12 V supply
+>   (§1.6).
+>
+> Superseded text stays in place, marked **Superseded 2026-10-14**, per Alex's standing rule.
+
+## Ruled by Alex, 2026-10-14
+
+In the coordinator's dialog, Alex chose **"Cheap tags, no antenna"** over "Cheap tags, keep
+antenna" (the recommended option), "As designed, HID tags" and "Integrated reader". The option
+was put to him as: *"$646. Reader's built-in antenna only, so the reader must sit within ~0.5 m
+of the bag. Cheapest. Needs a bench test on the loader before committing."* **That wording is
+the coordinator's option text, not his sentence.** His act was choosing it. This is closed.
+
+## 0. The ruled build: the M7E's on-board antenna and cable-tie tags
+
+**Current figures. Read this section first.**
+
+| Line | Price |
+|---|---|
+| Arduino UNO R4 WiFi | $27.50 |
+| Adafruit Proto-ScrewShield R3, product 196 | $14.95 |
+| SparkFun M7E Hecto, WRL-24738, **on-board PCB antenna** | $309.95 |
+| Pololu D36V28F5, only if the existing 5 V supply fails the M7E's ripple limits | $23.95 |
+| **Hardware priced** | **$376.35** |
+| 200 RFIDsolution RSCT-U8-AN-10330 tags (2 × 100 at $135) [28] | $270.00 |
+| **Total priced** | **$646.35** |
+| 10-pack outdoor trial of the same tag, before the 200 [28] | $51.00 |
+
+- **Removed:** the Vulcan C610 antenna ($149.00) and the 12 ft coax ($57.00), saving $206.00.
+  Also removed, and never priced: the Taoglas CAB.011 pigtail and its sealed bulkhead.
+- **Range.** SparkFun gives the built-in PCB trace antenna "a read range of roughly one to two
+  feet" [30], 0.3–0.6 m. So the reader must sit within about 0.5 m of where the bag hangs.
+  Mounting is out of scope (`notes/rfid-inventory-discussion.md:65`); this is stated as a
+  constraint only.
+- **Still unpriced:** SN74AHCT125N, divider resistors, Mean Well DDR-30G-12, Vishay TVS, Hammond
+  enclosure, cable glands, fuse and holder.
+- **Open before committing:** a bench test of the on-board antenna's read range on the loader at
+  the record position, through the enclosure. An RF-transparent enclosure face (polycarbonate,
+  no metal) in front of the reader. The 10-pack outdoor tag trial. The tag's IP rating, which is
+  not stated.
+- **Requirement:** each tag gets a unique EPC written once before use (§4).
+
 ---
 
 ## Summary
@@ -40,6 +89,10 @@ custom build is **$1,272.35**, not $861.35. The tags, not the reader, are the la
 | 2 | Bluetooth handheld or sled paired to the phone | $126.99 to $1,411.45, board reader removed | $816.99 to $2,101.45 | **No.** Reverses "one press does it all" |
 | 3 | COTS loader-scale system | NOT DETERMINABLE (dealer quote only) | — | **No.** Replaces the in-service PLC #4 |
 | 4 | Cheaper tags | — | $596.00 for 200 Xerafy Data Trak II; $244.00 for 200 Fujitsu WT-A543 | Yes |
+| 0b | **Ruled 2026-10-14:** custom build on the M7E's on-board antenna, 200 RSCT-U8-AN-10330 tags | $376.35 | $646.35 with 200 RSCT tags ($270) | Yes, with the reader within ~0.5 m of the bag |
+
+**Superseded 2026-10-14:** the recommendation below. Alex ruled "Cheap tags, no antenna"
+(coordinator's option text, not his words); see *Ruled by Alex* and §0.
 
 **Recommendation: keep the custom M7E build, and fix the tag line first.** The one COTS route
 that keeps the ruled design (option 1) saves about $220 on priced lines, but it rests on vendor
@@ -175,6 +228,11 @@ the real saving is somewhat larger.
   (`findings/2026-10-07-rfid-hardware-recommendation.md:237-241`). No integrated reader read
   publishes a beamwidth or front-to-back ratio. Power is adjustable on all of them, and that is
   the only read-zone control. The antenna cannot be swapped on the Chafon or Yanzeo units read.
+- **The priced SR691 listing does not match the maker's page.** Added 2026-10-14 from the
+  adversarial review and checked against the listing. The Newegg listing [8] gives
+  "Interfaces(USB, RS485, Wiegand26/34)" with **no RS-232**, and a supply of **VCC min 8, typ 9,
+  max 12 V**. Yanzeo's own page lists RS-232 [6]. The $316.99 unit would need an RS-485
+  transceiver, not the MAX3232 of §1.3, and a regulated 12 V supply like the SR681.
 - **Supply chain.** Both priced listings are third-party Newegg sellers ("Cozylux anky", ships
   from Hong Kong; "Tactifans Outdoor Sport Goods") [8]. Returns and lead time were not read.
   The maker's own sites say "Call for Price" or ¥0.00.
@@ -282,9 +340,19 @@ tags means the "150 Tags" option.
 | HID Sentry Slim | 150 @ $3.80; 600 @ $2.74 | $570.00 (150) | $1,644.00 | Adhesive only; for metal | −50 to +85 °C | Not guaranteed unique | [27] |
 | Xerafy TEX silicone (the custom build's alternative) | 1,000 @ $1.45; 5,000 @ $0.98 | — (1,000 minimum) | — | Sewn | −40 to +85 °C | Unique | [25] |
 | Xerafy Pod Trak 60 | 2,000 @ $1.27; 10,000 @ $1.01 | — (2,000 minimum) | — | Zip ties, rivets, screws | −40 to +55 °C | Unique | [26] |
+| **RFIDsolution RSCT-U8-AN-10330** (added 2026-10-14; **ruled**) | 10 for $51; 100 for $135; 500 for $474; 1,000 for $790 | **$270.00** (2 × 100) | $609.00 (500 + 100) | **Cable tie, 400 mm, disposable**; ABS and nylon, 103 × 30 mm | −25 to +60 °C | 128-bit EPC; uniqueness not stated | [28] |
+
+**RSCT-U8-AN-10330, from its datasheet [28]:** NXP UCODE 8, 860–960 MHz, EPC Gen2v2, read range
+"Up to 8 m". The characteristics line reads "UV protection, suitable for outdoor use". The
+description also calls it waterproof, but **no IP rating is given**. Mounting is "Tie onto
+projects", for plastic, wood and liquid surfaces. The tag type is "Disposable": the tie is
+single-use, so reuse means a new tie. Lead time is 15 working days [28].
 
 **Findings.**
 
+- **Superseded 2026-10-14:** the bullet below is false. The Fujitsu row in the table above
+  ($1.22 at 100, $1.02 at 500) already beat $1.86, and so does the RSCT-U8-AN-10330 ($1.35 at
+  100, $0.948 at 500) [28]. Found by the adversarial review.
 - **No outdoor tag on the pages read beats $1.86 at 150–600.** The $1.86 Duo price, and the
   $0.98 Xerafy TEX price the custom build cites
   (`findings/2026-10-07-rfid-hardware-recommendation.md:304`), are both 5,000-plus tiers [22],
@@ -302,6 +370,13 @@ tags means the "150 Tags" option.
 - **The Duo's EPC is "Not Guaranteed Unique"** [22]. The contract records the EPC as the bag's
   identity (`notes/2026-10-07-rfid-record-contract.md:210`). The Data Trak II and the WT-A543
   ship with unique EPCs [23], [24]. This holds whatever reader is chosen.
+- **Superseded 2026-10-14:** the bullet above treats EPC uniqueness as a reason to choose a
+  tag. It is not one. The EPC is writable, and the board's reader library has `writeTagEPC()`,
+  `readTID()` and `readUID()` (`SparkFun_UHF_RFID_Reader.h:138`, `:152-153`), plus an
+  `Example3_Write_EPC` sketch [29]. The write cannot pick which tag hears it ("This function
+  doesn't control which tag hears the command", `SparkFun_UHF_RFID_Reader.cpp:326`) [29], so
+  tags are written one at a time.
+- **Requirement, whatever tag is chosen:** each tag gets a unique EPC written once before use.
 
 ---
 
@@ -317,10 +392,16 @@ tags means the "150 Tags" option.
 | 2 Phone sled (Geenfc A7 to TSL 1128) | All RFID on the board | $126.99–1,411.45 | $816.99–2,101.45 / $722.99–2,007.45 | Board stops reading tags | **Changes** | **Reverses "one press"** | Bag scanned is not proven to be the bag weighed; Web Bluetooth only on Android Chrome |
 | 3 Loader scale | The weighing half of PLC #4 | NOT DETERMINABLE | — | Replaced, not changed | Lost | Lost | No RFID in either brochure read |
 | 4 Cheaper tags | Tag line only | — | Saves $94 against 150 Duo | None | None | None | Data Trak II sealing not established; WT-A543 is sewn and rated to −20 °C |
+| **0b Ruled 2026-10-14:** M7E on-board antenna, 200 RSCT tags | C610, coax, pigtail, bulkhead, Duo tags | **$376.35** (−$206.00) | **$646.35** (200 RSCT at $270) | Unchanged | As approved | As ruled; reader within ~0.5 m of the bag | Read range on the loader not yet bench-tested; tag IP rating not stated |
 
 ---
 
 ## 6. Recommendation
+
+**Superseded 2026-10-14:** Alex ruled "Cheap tags, no antenna" (coordinator's option text, not
+his words). The build is §0. The text below is the recommendation he was shown before that, kept
+as the record. Where it says the Data Trak II "brings unique EPCs", read §4: uniqueness is a
+one-time write, not a tag property to buy.
 
 **Keep the custom M7E build, and price the tags at their real tier.** Reason in one line: the
 only COTS route that keeps the ruled design saves about $220, and buys that with vendor
@@ -365,6 +446,11 @@ documents that contradict themselves, an unpublished command set and no FCC ID o
 - **Cheap Chinese zip-tie tags:** a "TF9620" cable-tie seal tag is listed at $51.71 on Newegg,
   but the listing states no pack quantity, chip or rating, so it is not costed.
 - **The yard's winter low,** which decides whether −10 °C or −20 °C limits matter.
+- **The on-board antenna's read range on the loader,** through the enclosure, at the record
+  position. SparkFun's "one to two feet" [30] is a bench figure, not a field one. (Added
+  2026-10-14.)
+- **The RSCT-U8-AN-10330's IP rating** (none given [28]), its read range on a bag, and its winter
+  performance below its −25 °C limit. (Added 2026-10-14.)
 
 ---
 
@@ -474,3 +560,16 @@ https://www.atlasrfidstore.com/xerafy-tex-trak-uhf-rfid-silicone-laundry-tag-55-
 
 [27] atlasRFIDstore, "HID Sentry Slim UHF RFID Tag | M750," product page and quantity tiers.
 [Online]. Available: https://www.atlasrfidstore.com/hid-sentry-slim-uhf-rfid-tag-m750/
+
+[28] RFIDsolution, "UHF RFID Cable Tie Tag – ABS and Nylon – NXP UCODE 8 – 103×30 mm,
+RSCT-U8-AN-10330," product page with quantity prices and lead time, and datasheet. [Online].
+Available: https://rfidsolution.com/?p=2545 ;
+https://rfidsolution.com/wp-content/uploads/2025/07/UHF-RFID-Cable-Tie-Tag-ABS-and-Nylon-NXP-UCODE-8-103-30-mm-datasheet-RSCT-U8-AN-10330.pdf
+
+[29] SparkFun Electronics, *SparkFun Simultaneous RFID Tag Reader Library*, v1.2.0, MIT License,
+`src/SparkFun_UHF_RFID_Reader.h`, `src/SparkFun_UHF_RFID_Reader.cpp`,
+`examples/Example3_Write_EPC`. [Online]. Available:
+https://github.com/sparkfun/SparkFun_Simultaneous_RFID_Tag_Reader_Library
+
+[30] SparkFun Electronics, "SparkFun Simultaneous RFID Reader – M7E Hecto, WRL-24738," product
+page. [Online]. Available: https://www.sparkfun.com/sparkfun-simultaneous-rfid-reader-m7e-hecto.html

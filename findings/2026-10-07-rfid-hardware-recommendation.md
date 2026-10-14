@@ -13,6 +13,53 @@ a conclusion drawn from cited facts but not stated in any source. **NOT DETERMIN
 something no available source settles. Nothing here was measured on hardware. The only
 measurement is the firmware build in §1.2.
 
+> **Revised 2026-10-14.** Alex ruled the build on 2026-10-14; the current BOM is *Current build*
+> directly below. What changed and why:
+> - **Antenna, coax, U.FL pigtail and sealed bulkhead removed.** The M7E reads through its own
+>   on-board PCB antenna. Reason: Alex's ruling.
+> - **Tags: 200 RFIDsolution RSCT-U8-AN-10330 in place of the HID Sentry Duo.** Reason: Alex's
+>   ruling, and the Duo's $1.86 turned out to be the 5,100-tag tier, $4.60 a tag at 150
+>   (`findings/2026-10-14-rfid-cots-alternatives.md`, §4).
+> - **Open items added** (§7): an on-loader read-range test, an RF-transparent enclosure face,
+>   the reader within ~0.5 m of the bag, a 10-pack tag trial, the tag's IP rating, and a one-time
+>   unique-EPC write.
+>
+> Superseded text stays in place, marked **Superseded 2026-10-14**, per Alex's standing rule.
+
+## Current build (ruled 2026-10-14)
+
+**Ruling.** In the coordinator's dialog, Alex chose **"Cheap tags, no antenna"** over "Cheap
+tags, keep antenna" (the recommended option), "As designed, HID tags" and "Integrated reader".
+The option was put to him as: *"$646. Reader's built-in antenna only, so the reader must sit
+within ~0.5 m of the bag. Cheapest. Needs a bench test on the loader before committing."*
+**That wording is the coordinator's option text, not his sentence.** His act was choosing it.
+It is closed. He chose against the HID Sentry Duo.
+
+| Item | Part | Price |
+|---|---|---|
+| Platform | Arduino UNO R4 WiFi (ABX00087) | $27.50 |
+| Screw-terminal shield | Adafruit Proto-ScrewShield R3, product 196 | $14.95 |
+| Reader | SparkFun M7E Hecto (WRL-24738), **on its on-board PCB antenna**. The antenna-select 0 Ω resistor stays as shipped: **do not move it to R5** | $309.95 |
+| Reader supply | Pololu D36V28F5, only if the existing 5 V supply fails the M7E's ripple limits (§5.2) | $23.95 |
+| **Hardware, priced** | | **$376.35** |
+| Tags | **RFIDsolution RSCT-U8-AN-10330**, UCODE 8 cable-tie tag, 200 as 2 × 100 at $135 [33] | $270.00 |
+| **Total, priced** | | **$646.35** |
+| Tag trial | 10-pack of the same tag, outdoors, before ordering the 200 [33] | $51.00 (not in the total) |
+
+**Still unpriced:** SN74AHCT125N buffer, divider resistors, Mean Well DDR-30G-12, Vishay
+SM8S22AHM3 TVS, Hammond 1554 enclosure, cable glands, fuse and holder.
+
+**Constraints and open items** (detail in §7):
+- **Read range.** SparkFun gives the on-board PCB antenna "a read range of roughly one to two
+  feet" [9], 0.3–0.6 m. The reader sits within about 0.5 m of where the bag hangs. Mounting
+  stays out of scope (`notes/rfid-inventory-discussion.md:65`); this is a constraint, not a
+  mounting design.
+- **Enclosure face.** The face in front of the reader is RF-transparent: polycarbonate, no metal.
+- **Bench test** of the on-board antenna's read range on the loader, at the record position,
+  through the enclosure, before committing.
+- **Tags.** A 10-pack trial outdoors before the 200. The tag's IP rating is not stated [33].
+- **Each tag gets a unique EPC written once before use.**
+
 ---
 
 ## Summary
@@ -23,12 +70,14 @@ measurement is the firmware build in §1.2.
 | Screw-terminal shield | **Adafruit Proto-ScrewShield R3, product 196**. Alternative: Electronics-Salon D-1683 ($23.00) | $14.95 |
 | Reader | **SparkFun Simultaneous RFID Reader – M7E Hecto (WRL-24738)** on D0/D1, through the level interface in §2.2 | $309.95 |
 | Level interface | **TI SN74AHCT125N** (reader TX → board RX) plus a resistor divider (board TX → reader RX) | not established |
-| Antenna | **Vulcan RFID C610 (VUL-C610-FCC)**: IP67, circular, 6 dBiC, waterproof SMA | $149.00 |
-| Antenna feed | **Taoglas CAB.011** U.FL-compatible to SMA(F) bulkhead, then SMA–SMA 195-series coax | CAB.011 not established; cable $57 (12 ft) |
-| Tags | **HID Sentry Duo, US (AST1-160-0300)**: IP68, zip-tie slot, reusable | $1.86 each, box of 150 |
+| Antenna | **Superseded 2026-10-14** (Alex ruled "Cheap tags, no antenna" (coordinator's option text, not his words); see *Current build*). **Vulcan RFID C610 (VUL-C610-FCC)**: IP67, circular, 6 dBiC, waterproof SMA | $149.00 |
+| Antenna feed | **Superseded 2026-10-14** (removed with the antenna). **Taoglas CAB.011** U.FL-compatible to SMA(F) bulkhead, then SMA–SMA 195-series coax | CAB.011 not established; cable $57 (12 ft) |
+| Tags | **Superseded 2026-10-14:** Alex chose against the Duo; the current tag is the RSCT-U8-AN-10330 (*Current build*). $1.86 is the 5,100-tag tier; 150 tags are $4.60 each, $690.00 [21]. **HID Sentry Duo, US (AST1-160-0300)**: IP68, zip-tie slot, reusable | $1.86 each, box of 150 |
 | Board supply | **Mean Well DDR-30G-12** (9–36 V in, reverse-polarity protected) behind a fuse and a load-dump TVS | not established |
 | Reader supply | The existing off-board 5 V supply, as Alex stated, **only if it meets the M7E's ripple limits**. Otherwise a **Pololu D36V28F5** | $23.95 if needed |
 | Enclosure | **Hammond 1554 series**, polycarbonate, cUL Type 4, 4X, 6, 6P, sized to the layout | not established |
+
+**Superseded 2026-10-14:** the subtotal below. The current total is $646.35 (*Current build*).
 
 **Priced subtotal:** $582.35 for the board, shield, reader, antenna, coax and the Pololu
 regulator. Adding one box of 150 tags ($279.00) brings it to **$861.35**. The DC-DC converter, enclosure,
@@ -159,7 +208,7 @@ Whether either shield's copper detunes the antenna is NOT DETERMINABLE without t
 | Current | DC input 3.3–5.5 V; 3.7–5.5 V for +27 dBm. Internal limit at **1 A**. DC power required: **3.1 W at 5 V for +27 dBm out (about 620 mA)**; under 1.2 W at 0 dBm. 0.665 W is the **Ready (idle)** figure, with 0.140 W Sleep and 0.080 W Shutdown. Up to 4 W into a poor antenna match at high temperature | [8] spec table "DC Power Required"; §5.2, §5.2.1 |
 | Supply quality | **5 V ±5 %, < 25 mV p-p ripple, < 11 mV p-p below 100 kHz, switching frequency ≥ 500 kHz** | [8] §5.2.2 |
 | Temperature | −40 to +60 °C operating (case). Transmission stops at +85 °C on the internal sensor | [8] §5.4.1, §5.4.2.3 |
-| Antenna port | U.FL on the SparkFun board. **External use requires moving a 0 Ω resistor from R4 to R5** ("Move 0 Ohm resistor to switch between internal and external antennas") | [9]; [10] |
+| Antenna port | U.FL on the SparkFun board. **External use requires moving a 0 Ω resistor from R4 to R5** ("Move 0 Ohm resistor to switch between internal and external antennas"). **2026-10-14: the ruled build uses the on-board antenna. The board ships set for it** ("For immediate use right out of the box, the built-in PCB trace antenna…" [9]), **so leave the resistor as shipped and do not move it to R5** | [9]; [10] |
 | Control | RUN/ENABLE: high or open = run; low for 50 ms resets the module. [8] recommends driving it from a host GPIO | [8] §5.1.6; [10] header J1 |
 | Arduino driver | SparkFun library v1.2.0, MIT. Takes any `Stream`, supports `ThingMagic_M7E_HECTO`, `REGION_NORTHAMERICA` and `getTagRSSI()` | [11] |
 | RF exposure | Keep people at least 21 cm from the antenna face (FCC long-term limit) | [9] |
@@ -217,6 +266,8 @@ aside for push-pull signals.
 ---
 
 ## 3. Antenna
+
+**Superseded 2026-10-14:** all of §3. Alex ruled "Cheap tags, no antenna" (coordinator's option text, not his words): the M7E reads through its on-board PCB antenna, and no external antenna, pigtail, bulkhead or coax is fitted. See *Current build*. §3 is kept as the record of what was considered.
 
 ### 3.1 Recommendation: Vulcan RFID C610 (VUL-C610-FCC), $149.00 [15], [16]
 
@@ -278,6 +329,8 @@ section names tag types and their properties only.
 
 ### 4.1 Recommendation: HID Sentry Duo, US variant (AST1-160-0300)
 
+**Superseded 2026-10-14:** Alex chose against this tag. The current tag is in §4.3.
+
 | Property | Value [20] |
 |---|---|
 | Band / chip | 902–928 MHz (FCC); Impinj M750; 96-bit EPC, 32-bit user memory |
@@ -289,7 +342,7 @@ section names tag types and their properties only.
 | Temperature | −50 to +85 °C operating |
 | Impact | 18 in drop of a 1 in steel ball |
 | Box | 150 pieces |
-| Price | **$1.86 listed** [21]. Whether that is a unit or a volume price was not established |
+| Price | **$1.86 listed** [21]. Whether that is a unit or a volume price was not established. **Superseded 2026-10-14:** established. $1.86 is the 5,100-tag tier. 150 tags are $4.60 each ($690.00), and 600 are $3.32 each [21] |
 
 **Reuse is plausible (inference).** The tag is a rigid PCB tag with a zip-tie slot, so it can be
 cut free and re-tied to another bag. If tags move between bags, a tag ID identifies a bag only
@@ -301,8 +354,25 @@ not stated for the Duo [20], so its life in sunlight is NOT DETERMINABLE.
 EPC Gen2 (ISO 18000-63), 860–960 MHz, NXP UCODE 9, 96-bit EPC. Up to 6 m off metal, linear
 polarisation. Silicone, 55 × 12 × 2.5 mm, IP68, −40 to +85 °C. Survives 100+ commercial wash
 cycles and bleach. MIL-STD-810G vibration. **Mounting: sewn** into a hem or pocket [22]. Listed at
-$0.98 [23]. Choose it if the bag is fabric and a sewn tag suits. Reuse is less plausible than the
+$0.98 [23]. **Superseded 2026-10-14:** $0.98 is the 5,000-tag tier, with 1,000 at $1.45 the smallest offered (`findings/2026-10-14-rfid-cots-alternatives.md`, §4). Choose it if the bag is fabric and a sewn tag suits. Reuse is less plausible than the
 Duo's (inference: it has to be unpicked).
+
+### 4.3 Current: RFIDsolution RSCT-U8-AN-10330 (ruled 2026-10-14)
+
+| Property | Value [33] |
+|---|---|
+| Chip / band | NXP UCODE 8; 860–960 MHz; ISO/IEC 18000-63, EPC Gen2v2; 128-bit EPC |
+| Read range | "Up to 8 m" |
+| Form | ABS and nylon cable-tie tag, 103 × 30 mm, 400 mm tie. Tag type "Disposable": the tie is single-use |
+| Outdoors | "UV protection, suitable for outdoor use"; described as waterproof. **No IP rating given** |
+| Temperature | −25 to +60 °C operating |
+| Surfaces | Plastic, wood, liquid |
+| Price | 10 for $51; 100 for $135; 500 for $474; 1,000 for $790. Lead time 15 working days |
+
+**Unique EPC.** Each tag gets a unique EPC written once before use. The SparkFun library has
+`writeTagEPC()`, `readTID()` and `readUID()` (`SparkFun_UHF_RFID_Reader.h:138`, `:152-153`)
+[11]. Its write "doesn't control which tag hears the command"
+(`SparkFun_UHF_RFID_Reader.cpp:326`) [11], so tags are written one at a time.
 
 ---
 
@@ -362,7 +432,8 @@ compliant on paper.
   is inferred from the part name, not read.
 - **Cable glands:** IP68 metric nylon glands sized to each cable's outside diameter, one cable
   per gland. No gland datasheet could be fetched (§7), so no part is named.
-- **Antenna bulkhead:** CAB.011's SMA(F) bulkhead, sealed (§3.3).
+- **Antenna bulkhead:** CAB.011's SMA(F) bulkhead, sealed (§3.3). **Superseded 2026-10-14:** no bulkhead; the antenna is on the reader board.
+- **RF-transparent face (2026-10-14).** The reader reads through the enclosure, so the face in front of it is polycarbonate with no metal: no metal lid, plate, label or fixing between the reader and the bag. The 1554 series in polycarbonate suits this (inference; its RF loss was not read).
 - **Heat (inference):** the M7E is rated to +60 °C case [8] and the box is sealed outdoors. One
   read per lift is a low duty cycle, which [8] §5.4.2 says may need no heat-sinking. Keep the box
   out of direct sun where the mount allows (mounting is out of scope).
@@ -377,10 +448,10 @@ compliant on paper.
 | 2 | SparkFun Simultaneous RFID Reader – M7E Hecto | WRL-24738 (module: JADAK ThingMagic M7E-HECTO) | UHF EPC Gen2 reader | 309.95 | [8], [9], [10] |
 | 3 | TI quad buffer, TTL inputs | SN74AHCT125N | Reader TX → D0 at 5 V levels | not established | [24] |
 | 4 | Resistors, 2.2 kΩ and 3.3 kΩ (two pairs) | generic | D1 → reader RX and D2 → ENABLE dividers | not established | inference, §2.2 |
-| 5 | Vulcan RFID C610 antenna | VUL-C610-FCC | Outdoor circular antenna | 149.00 | [15] |
-| 6 | Taoglas cable assembly | CAB.011 | U.FL to SMA(F) bulkhead | not established | [19] |
-| 7 | 195-series coax, SMA-M to SMA-M, 12 ft | Vulcan accessory (part number not established) | Bulkhead to antenna | 57.00 | [16] |
-| 8 | HID Sentry Duo, US | AST1-160-0300 | Bag tag | 1.86 each (box of 150: 279.00) | [20], [21] |
+| 5 | ~~Vulcan RFID C610 antenna~~ **Superseded 2026-10-14:** removed by the ruling | VUL-C610-FCC | Outdoor circular antenna | 149.00 | [15] |
+| 6 | ~~Taoglas cable assembly~~ **Superseded 2026-10-14:** removed with the antenna | CAB.011 | U.FL to SMA(F) bulkhead | not established | [19] |
+| 7 | ~~195-series coax, SMA-M to SMA-M, 12 ft~~ **Superseded 2026-10-14:** removed with the antenna | Vulcan accessory (part number not established) | Bulkhead to antenna | 57.00 | [16] |
+| 8 | ~~HID Sentry Duo, US~~ **Superseded 2026-10-14:** Alex chose against it; see row 16 | AST1-160-0300 | Bag tag | 1.86 each (box of 150: 279.00) | [20], [21] |
 | 9 | Mean Well DIN-rail DC-DC | DDR-30G-12 | Protected 12 V to board VIN | not established | [27] |
 | 10 | Vishay load-dump TVS | SM8S22AHM3 (successor named for SM8S22A) | Clamp 12 V input transients | not established | [26] |
 | 11 | Pololu step-down regulator | D36V28F5 | Reader 5 V, only if the existing supply fails §5.2 | 23.95 | [28] |
@@ -389,6 +460,11 @@ compliant on paper.
 | 14 | Fuse and holder | not established | Supply protection | not established | — |
 | 15 | Adafruit Proto-ScrewShield (Wingshield) R3 Kit | Adafruit 196 | Screw terminals plus proto area for the level interface | 14.95 | [30], [31] |
 | 15-alt | Electronics-Salon / CZH-LABS terminal breakout | D-1683 | Alternative to item 15, assembled, no proto area | 23.00 (not in total) | [32] |
+| 16 | RFIDsolution UHF cable-tie tag, UCODE 8 (added 2026-10-14) | RSCT-U8-AN-10330 | Bag tag, 200 as 2 × 100 | 270.00 | [33] |
+
+**Current total, priced (2026-10-14):** items 1, 2, 11 and 15 total **$376.35**. With item 16 (200 tags, $270.00), **$646.35**. Unpriced: items 3, 4, 9, 10, 12, 13 and 14.
+
+**Superseded 2026-10-14:** the line below. Items 5, 7 and 8 are removed.
 
 **Priced lines:** items 1, 2, 5, 7, 11 and 15 total **$582.35**. With one box of tags,
 **$861.35**.
@@ -396,6 +472,20 @@ compliant on paper.
 ---
 
 ## 7. What could not be established
+
+**Open items added 2026-10-14, for the ruled build:**
+
+- **Bench test of the on-board antenna's read range** on the loader, at the record position,
+  through the enclosure. SparkFun's "roughly one to two feet" [9] is not a field figure. The
+  ruling's own option text names this test as a condition of committing.
+- **RF-transparent enclosure face** in front of the reader: polycarbonate, no metal (§5.3).
+- **Reader position:** within about 0.5 m of where the bag hangs. Mounting is out of scope
+  (`notes/rfid-inventory-discussion.md:65`); this states the constraint only.
+- **A 10-pack tag trial outdoors** ($51.00) before ordering 200 [33].
+- **The RSCT-U8-AN-10330's IP rating:** not given; the datasheet says only "waterproof" and
+  "suitable for outdoor use" [33]. Its read range on a bag, and its life below −25 °C, are not
+  established.
+- **One-time unique-EPC write:** each tag gets a unique EPC written once before use (§4.3).
 
 - **Power dropout during cranking.** The DDR-30G-12's input range starts at 9 V [27]. How far
   this tractor's 12 V sags while cranking is not recorded. If it goes below 9 V, the board
@@ -406,7 +496,7 @@ compliant on paper.
   established.
 - **Tag read performance on fabric or poly bags.** The Sentry Duo is rated for "any surfaces"
   [20], but no read-range figure on fabric or polypropylene was found.
-- **Tag price at 150 units.** The $1.86 listed for the Sentry Duo [21] is not shown to be the
+- **Superseded 2026-10-14, answered:** $1.86 is the 5,100-tag tier (§4.1). **Tag price at 150 units.** The $1.86 listed for the Sentry Duo [21] is not shown to be the
   price per tag in a box of 150.
 - **Offline queue depth** on the UNO R4 (§1.2): a firmware-gate decision, and the consumer's
   documented 200 bound moves with it.
@@ -418,13 +508,13 @@ compliant on paper.
   it.
 - **The tractor's 12 V transient profile.** Whether the 5055E's alternator has load-dump
   suppression is not recorded. ISO 16750-2 / ISO 7637-2 test levels were not read.
-- **Whether the M7E's FCC modular grant covers the SparkFun carrier** with the C610 (§3.1).
+- **Whether the M7E's FCC modular grant covers the SparkFun carrier** with the C610 (§3.1). **Superseded 2026-10-14:** the C610 is removed. Whether the grant covers the SparkFun carrier on its own PCB trace antenna is NOT DETERMINABLE from the sources read.
 - **Prices** for items 3, 4, 6, 9, 10, 12, 13 and 14. Hammond's and Industrial Shields' pages sat behind a JavaScript
   check and Lapp's catalogue URLs redirected to a 404. Other distributors were not tried.
-- **Whether the HID Sentry Duo price is per unit or a volume tier,** and the tag's UV resistance.
+- **Superseded 2026-10-14, answered** (§4.1), and the Duo is no longer chosen. **Whether the HID Sentry Duo price is per unit or a volume tier,** and the tag's UV resistance.
 - **Cable glands:** no manufacturer datasheet could be retrieved, so no part is named.
 - **Vishay SM8S..AHM3 figures:** taken from the superseded SM8S datasheet, not the AHM3 one.
-- **Vulcan S9025PL low-temperature limit:** its datasheet contradicts itself (§3.2).
+- **Superseded 2026-10-14 (moot, no external antenna).** **Vulcan S9025PL low-temperature limit:** its datasheet contradicts itself (§3.2).
 - **CAEN Lepton3x1 price and host protocol;** its user manual was not reached.
 - **Read reliability in the field:** RF power, antenna position and tag orientation can only be
   settled at the machine. Mounting is out of scope.
@@ -556,3 +646,8 @@ Adafruit product 725. [Online]. Available: https://cdn-shop.adafruit.com/datashe
 [32] CZH-LABS / Electronics-Salon, "Screw Terminal Block Breakout Module for Arduino UNO R4 R3 R2
 Zero, D-1683," product page. [Online]. Available:
 https://czh-labs.com/products/screw-terminal-block-breakout-module-for-arduino-uno-r4-r3-r2-zero-electronics-salon-d-1683
+
+[33] RFIDsolution, "UHF RFID Cable Tie Tag – ABS and Nylon – NXP UCODE 8 – 103×30 mm,
+RSCT-U8-AN-10330," product page with quantity prices and lead time, and datasheet. [Online].
+Available: https://rfidsolution.com/?p=2545 ;
+https://rfidsolution.com/wp-content/uploads/2025/07/UHF-RFID-Cable-Tie-Tag-ABS-and-Nylon-NXP-UCODE-8-103-30-mm-datasheet-RSCT-U8-AN-10330.pdf
