@@ -5,6 +5,12 @@ for purchase, wiring or firmware. **Question (Alex, 2026-10-14, verbatim):** *"e
 plc4 hardware to a arduino opta wifi, consider we could keep the uno for the can bus if the opta
 dosent support it"*.
 
+**Decided: keep the UNO only.** Alex ruled 2026-10-14, in the coordinator's dialog. He chose
+**"Keep UNO only (Recommended)"** over "Opta + UNO for CAN" and "Portenta Machine Control".
+**Those labels are the coordinator's option text, not his sentence.** His act was choosing it.
+The 2026-10-07 build stands: one UNO R4 WiFi with a screw-terminal shield. It is closed. The
+analysis below is unchanged.
+
 **Sizing rule:** this is a firewood business, not NORAD (Alex, 2026-10-07). No signing, no key
 management, nothing mil-spec.
 
