@@ -197,3 +197,64 @@ Pigtail Cable Assembly," Rev 1.1. [Online]. Available: https://docs.rs-online.co
 
 [10] Pasternack, "LMR-195-UF Low Loss Flexible Outdoor Rated Coax Cable," datasheet. [Online].
 Available: https://www.pasternack.com/images/ProductPDF/LMR-195-UF.pdf
+
+## 5. Where the C610 mounts (working basis: bag on pallet forks)
+
+Alex answered "On pallet forks" to how a bag is carried at record time, then asked for the
+question again; the answer is used here as the working basis, not as settled. Everything in this
+section is **inference** unless cited. The M520's dimensions and the fork frame's shape were not
+read.
+
+**Mount the antenna with the loader, not the tractor.** The bag rides on the tines, so anything
+fixed to the loader's front end keeps the same distance and angle to it at every boom height.
+RF power is then tuned once.
+
+| Place | For | Against |
+|---|---|---|
+| **A. Loader side of the quick-attach**, above the fork carriage, facing forward along the tines | Stays on the loader when the forks come off; no connector rides the attachment | Must sit above the carriage's backrest so no steel is in front of the radome |
+| B. On the fork frame or backrest, facing forward | Closest to the bag; nothing in the way | Coax needs an SMA joint at the quick-attach, unplugged every time the forks come off |
+| C. On the tractor (grille guard, hood) | Coax never flexes | Distance to the bag changes with boom height and the tines may sit well over a metre out |
+
+**Recommended: A.** Steel *behind* a patch antenna is not a problem (it has its own ground plane);
+steel *in front* of it is.
+
+Coax route for A: from the antenna along the boom with the hydraulic lines, with a slack loop at
+the quick-attach pivot and another at the boom's tower pivot, every flexing bend at ≥ 51 mm
+radius [10], back to the case on the ROPS. Jumper length: measure that route and add slack; NOT
+DETERMINABLE here.
+
+**Setting it up at the machine:**
+
+1. Start at low RF power. Raise it in 0.5 dB steps [5] until a bag on the tines reads every time.
+2. With bags stacked nearby where they normally stand, check none of them reads. Back off if one
+   does.
+3. Keep people 20 cm or more from the antenna face [5].
+
+## 6. Alex's answer on placement, and the question it opened (2026-10-25)
+
+Asked where the C610 goes, he answered in his own words instead of picking an option:
+
+> *"Will you see but you know I'm an RF engineer so I will definitely be able to get the antenna in
+> a good spot i'm thinking it should go basically the tractor has like a brush guard or something
+> like you'd you know a guard on the front of it and what we'll do is attach it to that guard It's
+> in front of everything but behind the loader in front of the tractors engine and intake and all
+> that well in front of it but behind the loader should be fine My big question here though um is
+> we could bring the tag to the unit to scan it while we're loading the bags like I could bring the
+> zip tie to the RFID unit to scan it It really doesn't even need to be on the loader when I start
+> thinking about it because this RFID thing may actually want to be a handheld unit on its own or
+> there may be an RFID scanner device that we could use that's already built the loader does only
+> has to tie the two pieces of information together and not even the loader does that the PWA app
+> can do that does that make sense I know this is a lot of question but we need to get it right and
+> you should pass this information on to the coordinator"*
+
+**Placement:** the C610 goes on the tractor's front guard, behind the loader and in front of the
+engine and intake. He places it himself. §5's options A–C are superseded by this.
+
+**The open question is his, and it is undecided:** whether the tag read leaves the loader
+altogether, with a handheld or an existing reader scanning the tag and the PWA joining tag and
+weight. This is option 2 of `findings/2026-10-14-rfid-cots-alternatives.md` (§2), researched on
+2026-10-14: a Bluetooth reader paired to the phone, from a $126.99 pocket reader (0–30 cm) to IP54
+sleds at $1,184–1,369. §2.2 there lists what it changes: it reverses "one press does it all"
+(`notes/rfid-inventory-discussion.md`), the board can no longer refuse on several tags or confirm
+the scanned tag is on the forks, the approved record contract changes, and Web Bluetooth works only
+in Chrome on Android.
