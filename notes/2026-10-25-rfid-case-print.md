@@ -71,10 +71,14 @@ polycarbonate box that §5.3 named.
 
 ## Gaps
 
-- **The generator is not in the bundle or this repository.** The print README names
-  `case_params.py` and `build_case.py` (regenerate the files), and `verify_3mf.py` and
-  `fit_check.py` (the checks). None is in the bundle. Where they are is NOT DETERMINABLE from this
-  tree. Without them, V2 is a remodel rather than a parameter change.
+- **The generator is not in the bundle or this repository — it is in `greybeard-plc4-pwa`.** The
+  print README names `case_params.py` and `build_case.py` (regenerate the files), and
+  `verify_3mf.py` and `fit_check.py` (the checks). None is in the bundle. Found 2026-10-25 by a
+  filename search: all four are in the `greybeard-plc4-pwa` repo at `design/case-print/`, tracked
+  on its `main`. The three 3MFs, `README.md` and `preview-top.svg` beside them hash identically to
+  the artifact's bundle (the SHA-256 values above), so that folder is the source of the printed V1.
+  V2 is a change to `case_params.py` / `build_case.py` there, not a remodel. A `fit_check.py` under
+  `/tmp/pc-scripts/` is the pendant case's, not this one (its docstring says so).
 - **Reader placement on the tractor — unreviewed inference, not a finding.** The reader is fixed
   behind the lid, so it faces wherever the LCD faces, and the whole case must sit within the ~0.5 m
   of the bag that the ruled build needs. The bracket clamps to a ROPS post, and the artifact says
