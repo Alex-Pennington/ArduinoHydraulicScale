@@ -16,13 +16,9 @@ Host tests
 The files here are host checks built with plain g++, not PlatformIO tests.
 Each carries its own build line in its header comment; run from the repo root.
 
-  test_rfid_record.cpp   RFID record / tally contract logic, include/rfid_record.h.
-                         Board side gated (notes/2026-10-07-rfid-record-contract.md);
-                         nothing in src/ includes the header.
+  test_loop_scaling.cpp    4-20 mA scaling arithmetic, include/loop_scaling.h.
+  test_can_event_mask.cpp  CAN error-event classification, include/can_event_mask.h.
+  test_j1939_replay.cpp    J1939 decode replayed over a candump log,
+                           include/j1939_decode.h. Takes the log path as argument.
 
-    g++ -std=c++17 -Wall -Wextra -Iinclude test/test_rfid_record.cpp -o /tmp/r
-    /tmp/r
-
-  It prints one line per check and ends "PASS: 0 failure(s)"; the exit status
-  is the failure count. The "info" lines are measured payload, command and
-  backlog-entry sizes, checked against the proposed UNO R4 WiFi buffer sizes.
+  Each exits with its failure count.
