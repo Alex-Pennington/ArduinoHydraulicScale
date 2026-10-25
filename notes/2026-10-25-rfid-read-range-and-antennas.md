@@ -100,6 +100,16 @@ Alex asked for both on 2026-10-25, after the ruling above.
 
 ### 4.1 Antennas compared
 
+**Ruled by Alex, 2026-10-25: the Vulcan C610.** In this session's dialog he chose "Vulcan C610
+(Recommended)" over "RFMAX R9025". The option was put to him as: *"250 mm square, 0.69 kg.
+Narrow 70° beam and 20 dB rejection behind it, so a second bag nearby is less likely to read.
+Rated to −40 °C. About $129–149."* That wording is this session's option text, not his sentence.
+
+The build's antenna chain is therefore: M7E RF resistor moved to u.FL → Siretta
+ASMG010XD113S11 or ASMG015XD113S11 (SMA female bulkhead, IP67) → SMA male–male Times LMR-195-UF
+jumper → Vulcan C610 (VUL-C610-FCC). Jumper length, the antenna's bracket on the loader, and the
+pigtail length are NOT DETERMINABLE here.
+
 | | RFMAX R9025-LPF-SSF [3] | Vulcan RFID C610 [6] | Vulcan RFID C912 [7], **unverified** |
 |---|---|---|---|
 | Size | 150 × 149.4 × 14.5 mm, 0.23 kg | 250 × 250 × 20 mm, 0.69 kg | not read |
