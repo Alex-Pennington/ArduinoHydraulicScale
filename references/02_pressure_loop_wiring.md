@@ -24,7 +24,7 @@
 | Burden, supply end | | | Loop supply −; converter VIN− |
 | Converter VIN+ | Positive differential input [5] | | Transmitter −; burden, transmitter end |
 | Converter VIN− | Negative differential input [5] | | Loop supply −; burden, supply end |
-| Loop supply − | Loop return | | Burden, supply end; converter VIN−; board GND, `01` §*Header pins* |
+| Loop supply − | Loop return | | Burden, supply end; converter VIN−; board ground, `01` §*Header pins* |
 
 The schematic is `schematics/pressure_loop.png`, drawn from `schematics/pressure_loop.tex`.
 
@@ -54,7 +54,7 @@ The schematic is `schematics/pressure_loop.png`, drawn from `schematics/pressure
 | Item | Value |
 |---|---|
 | Transmitter supply | 12 to 45 V dc at the transmitter terminals, output codes S and E [1] |
-| Burden drop | 1.36 V at 20 mA, leaving about 22.6 V at the transmitter from 24 V |
+| Burden drop | 1.36 V at 20 mA, leaving 22.64 V at the transmitter from 24 V |
 
 ## References
 

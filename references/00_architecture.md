@@ -49,11 +49,11 @@ The weight, telemetry, status, engine data and fault codes, on the topics in `03
 Each convention applies to every termination it names. A row elsewhere in the binder states only
 what is specific to that termination.
 
-| Convention | Applies to | Why |
+| Convention | Applies to | Fault when broken |
 |---|---|---|
-| An output lands on an input: a module's transmit goes to the board's receive, and its receive to the board's transmit | The radio module, `01A` §*Terminals*; the CAN transceiver's receive output, `01B` §*Terminals* | A link wired straight through is silent both ways with nothing else wrong. The board keeps weighing, so the fault looks like a dead module |
-| Every sensor-bus device lands on its own multiplexer channel, and only the multiplexer sits on the trunk. Fit the address variant the channel table names | Every Qwiic device, `01C` §*Bus channels* | A device answers only while its channel is selected. One on the wrong channel, or a variant at another address, reads as absent |
-| Every supply that feeds a signal the board reads shares board ground | The 24 V loop supply negative; the CAN transceiver ground | A signal with no common return floats against the reader's supply and drifts out of the range it can read, and gives a plausible number before an obviously wrong one |
+| An output lands on an input: a module's transmit goes to the board's receive, and its receive to the board's transmit | The radio module, `01A` §*Terminals*; the CAN transceiver's receive output, `01B` §*Terminals* | The link is silent both ways and the board keeps weighing |
+| Every sensor-bus device lands on its own multiplexer channel, and only the multiplexer sits on the trunk. Fit the address variant the channel table names | Every Qwiic device, `01C` §*Bus channels* | The device reads as absent |
+| Every supply that feeds a signal the board reads shares board ground | The 24 V loop supply negative; the CAN transceiver ground | The signal floats and reads a plausible wrong value |
 
 ## Scope of this binder
 

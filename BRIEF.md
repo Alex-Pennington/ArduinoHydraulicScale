@@ -188,7 +188,7 @@ values read at 14-bit resolution, so only "Right" registers. The LCD never shows
 **Superseded, 2026-09-18: the LCD and the operator interface both changed.** The 16x2
 LCD-plus-keypad shield is gone. The current source carries a 20x4 LCD on the Qwiic bus,
 always showing the weight, behind a clear coverplate as a read-only readout — see
-`references/01_controller_card.md`. The board's discrete buttons are removed as well: the
+the PLC #4 Tractor Scale binder, *Display* §*Rows*. The board's discrete buttons are removed as well: the
 outdoor enclosure needs no holes for a keypad, five holes being five places for water to get
 in. Every operator action now arrives over MQTT from a phone app, on `plc4/jd5055e/cmd`,
 through the same handler the console uses so the two paths cannot diverge. The serial and

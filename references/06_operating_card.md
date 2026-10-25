@@ -13,7 +13,9 @@ service path that works with no broker in reach. Which verbs the app may send is
 ## Weighing
 
 **All three steps happen at the boom mark**, which is marked on the machine so the position
-can be reproduced. Boom position changes the unloaded pressure as well as the loaded pressure.
+can be reproduced. Boom position changes the unloaded pressure as well as the loaded pressure: a
+tare taken at one position and a weight read at another differ by a constant offset in every
+reading.
 
 | Step | Verb | Condition |
 |---|---|---|
@@ -77,7 +79,7 @@ Two of its messages look alike and lead to different first checks:
 - **`NO SENSOR`** — the current loop itself is dead. Check the transmitter's wiring and the loop
   supply.
 - **`NO ADC`** — the board cannot reach the converter that reads that loop. Check the bus cable
-  first. It appears about two seconds after the board stops hearing from the converter [1];
+  first. It appears 2 s after the board stops hearing from the converter [1];
   until then the last good reading sits unmoving, which is what a loose connector looks like.
 
 Either blanks the weight, and `tare`, `+` and `kv` are refused while one shows. So does
@@ -111,7 +113,7 @@ the count once the queue has overflowed, and `net` reports both.
 | The smoothing factor | yes, stored, for a value above 0. `w0` reverts to 0.1 at the next reset [1] |
 | The recorded tally | yes, stored as it is recorded [1] |
 | Weights queued for upload | no, `03` §*Weight* |
-| The `sm` full-scale setting | no; reverts to 3000 psi [1] |
+| The `sm` full-scale setting | no; reverts to 3000 psi [1]. A transducer of another range that stays on the machine has its range set in the firmware |
 | `debug` and the `canf` filter | no, both off [1], [4] |
 
 `sum` is still right after a reset. If the queue matters, get back in range before powering down.

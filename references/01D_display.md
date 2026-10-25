@@ -12,6 +12,12 @@
 | Interface | PCF8574 backpack [2] on the sensor bus, `01C` §*Bus channels* |
 | Inputs | None. The display is read-only; operator actions arrive over MQTT, `03` §*Command* |
 
+## Connection
+
+| Terminal | Function | Wire | Connected to |
+|---|---|---|---|
+| Backpack sensor-bus terminals | PCF8574 serial data and clock [2] | | Multiplexer channel 7, `01C` §*Bus channels* |
+
 ## Rows
 
 | Row | Shows, first match wins |

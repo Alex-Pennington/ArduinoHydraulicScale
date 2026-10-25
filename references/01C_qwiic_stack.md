@@ -13,13 +13,13 @@
 
 ## Bus channels
 
-| Channel | Address | Device | Used by the firmware |
-|---|---|---|---|
-| 0 | `0x67` | MCP9600 thermocouple amplifier [4] | no [3] |
-| 1 | `0x2A` | NAU7802 load-cell amplifier [5] | no [3] |
-| 2 | `0x40` | INA219 voltage and current monitor [6] | yes, diagnostics [3] |
-| 3 | `0x68` | MCP3421A0 pressure-loop converter [7], `02` §*Parts* | yes, the measurement [3] |
-| 7 | `0x27` | LCD2004A display, PCF8574 backpack [8], `01D` §*Display* | yes [3] |
+| Channel | Address | Device | Used by the firmware | Wire |
+|---|---|---|---|---|
+| 0 | `0x67` | MCP9600 thermocouple amplifier [4] | no [3] | |
+| 1 | `0x2A` | NAU7802 load-cell amplifier [5] | no [3] | |
+| 2 | `0x40` | INA219 voltage and current monitor [6] | yes, diagnostics [3] | |
+| 3 | `0x68` | MCP3421A0 pressure-loop converter [7], `02` §*Parts* | yes, the measurement [3] | |
+| 7 | `0x27` | LCD2004A display, PCF8574 backpack [8], `01D` §*Display* | yes [3] | |
 
 ## References
 

@@ -34,6 +34,7 @@ torque byte of 0 at 0 rpm, such as at power-up, publishes `torque_pct` -125 and 
 |---|---|
 | `+` records a negative weight when the tare is stale [3] | Tare at the boom mark, bucket empty, before each weighing session |
 | The full-scale setting `sm` after a reset, `06` §*What survives a reset* | Set it again after every reset, or leave it at the built-in 3000 psi |
+| Engine values stop arriving with the CAN hardware filter on [4] | Turn the filter off again with `canf` |
 
 ## See also
 
@@ -46,3 +47,5 @@ torque byte of 0 at 0 rpm, such as at power-up, publishes `torque_pct` -125 and 
 [2] A. Pennington, *greybeard-plc4-tractor-scale*, `include/j1939_decode.h`, lines 338–350, at the stamped build. License: none stated. [Online]. Available: https://github.com/Alex-Pennington/greybeard-plc4-tractor-scale
 
 [3] A. Pennington, *greybeard-plc4-tractor-scale*, `src/ArduinoHydraulicScale.cpp`, lines 1902–1918, at the stamped build. License: none stated. [Online]. Available: https://github.com/Alex-Pennington/greybeard-plc4-tractor-scale
+
+[4] A. Pennington, *greybeard-plc4-tractor-scale*, `include/j1939_can.h`, lines 122–138, at the stamped build. License: none stated. [Online]. Available: https://github.com/Alex-Pennington/greybeard-plc4-tractor-scale

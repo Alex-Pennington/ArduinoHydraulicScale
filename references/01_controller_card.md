@@ -11,17 +11,16 @@
 | Controller | Arduino UNO R4 WiFi [1] |
 | Sensor bus | Qwiic connector, the board's second two-wire bus, `Wire1` [1], [2] |
 | Console | Serial over USB and over the radio module, both at once [2] |
+| Radio module pins | `01A` §*Terminals* |
 | Header pins used | Only those in §*Header pins* |
 
 ## Header pins
 
 | Pin | Function | Spec | Wire | Connected to |
 |---|---|---|---|---|
-| D0 | Serial receive, console [1], [2] | 9600 baud [2] | | Radio module transmit output, `01A` §*Terminals* |
-| D1 | Serial transmit, console [1], [2] | 9600 baud [2] | | Radio module receive input, `01A` §*Terminals* |
-| D10 | CAN transmit [1] | 250 kbit/s [3] | | Not connected |
-| D13 | CAN receive [1] | 250 kbit/s [3] | | CAN transceiver receive output, `01B` §*Terminals* |
-| GND | Board ground | | | Loop supply negative, `02` §*Connections*; CAN transceiver ground, `01B` §*Terminals* |
+| D10 | CAN transmit, the CAN controller's pin [1] | 250 kbit/s [3] | | Not connected |
+| D13 | CAN receive, the CAN controller's pin [1] | 250 kbit/s [3] | | CAN transceiver, P1 pin 2, `01B` §*Terminals* |
+| GND | Board ground | | | Loop supply negative, `02` §*Connections*; CAN transceiver, P1 pin 3, `01B` §*Terminals* |
 | Qwiic | Sensor bus trunk | 3.3 V [1] | | Multiplexer, `01C` §*Bus channels* |
 | USB | Console | 115200 baud [2] | | Laptop, when servicing |
 
@@ -36,7 +35,7 @@
 
 ## References
 
-[1] Arduino, "Arduino UNO R4 WiFi, product reference manual," SKU ABX00087, §10 *Qwiic I2C Connector* and §12.2 *Digital*. Filed in `docs/vendor/arduino/`
+[1] Arduino, "Arduino UNO R4 WiFi," datasheet, SKU ABX00087, §10 *Qwiic I2C Connector* and §12.2 *Digital*. Filed in `docs/vendor/arduino/`
 
 [2] A. Pennington, *greybeard-plc4-tractor-scale*, `src/ArduinoHydraulicScale.cpp`, lines 25–46 and 1460–1461, at the stamped build. License: none stated. [Online]. Available: https://github.com/Alex-Pennington/greybeard-plc4-tractor-scale
 

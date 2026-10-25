@@ -11,14 +11,15 @@
 | Board | Waveshare SN65HVD230 CAN Board [1] |
 | Transceiver | TI SN65HVD230, 3.3 V supply [1], [2] |
 | Bus | Tractor J1939 bus, `01` §*CAN* |
+| On-board resistor | R2, 120 Ω, across CANH and CANL [1] |
 
 ## Terminals
 
 | Terminal | Transceiver pin | Function | Wire | Connected to |
 |---|---|---|---|---|
 | P1 pin 1 | D | Transmit data input; high is recessive [1], [2] | | Tied recessive, so the node cannot drive the bus [3] |
-| P1 pin 2 | R | Receive data output [1], [2] | | Board D13, `01` §*Header pins* |
-| P1 pin 3 | GND | Ground [1], [2] | | Board GND, `01` §*Header pins* |
+| P1 pin 2 | R | Receive data output [1], [2] | | Board CAN receive, `01` §*Header pins* |
+| P1 pin 3 | GND | Ground [1], [2] | | Board ground, `01` §*Header pins* |
 | P1 pin 4 | VCC | 3.3 V supply [1], [2] | | |
 | can1 pin 2 | CANH | CAN high [1], [2] | | Tractor J1939 bus, CAN high |
 | can1 pin 1 | CANL | CAN low [1], [2] | | Tractor J1939 bus, CAN low |

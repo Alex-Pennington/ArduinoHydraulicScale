@@ -32,7 +32,7 @@ What has been decided about this machine, and by whom. Rulings only.
 | Source of truth | Milliamps. Counts are derived at compile time from the burden [1] | Alex |
 | Hand-written counts | Not permitted anywhere | Alex |
 | Live zero | 4 mA is zero pressure, not zero counts [1] | derived |
-| Fault banding | `02` §*What each current means*. The high fault threshold is the NAMUR NE43 fault level [1]; the transmitter offers NE43-compliant output levels as an option [2] | derived |
+| Fault banding | `02` §*What each current means*. Dead below 3.5 mA [1]. The transmitter's NAMUR NE43 output levels are ordering options CN and C4 [2] | derived |
 
 ## Reporting
 

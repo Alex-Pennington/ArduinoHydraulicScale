@@ -53,18 +53,12 @@ A replayed weight, held on the machine and published later:
 | `n` | Entries in the tally after this one. Live records only |
 | `total` | Running total of the tally after this one. Live records only |
 
-> **The running total arrives with the record that moved it.** A consumer never has to add the
-> weights up itself, and never races a message it has not seen yet. The status topic carries the
-> same figure, but only once a minute.
+A live record carries the running total after it, `n` and `total` [1].
 
-> **A replayed weight carries no `n` and no `total`.** The figures would be today's, standing
-> beside a weight captured before the link dropped — a true number in a position that makes it
-> read as the total at the time of capture.
+A replayed weight carries no `n` and no `total` [1].
 
-> **Treat `backlog` and `age_ms` as part of the reading.** A buffered weight published bare is
-> worse than not buffering at all, because the consumer cannot tell it from a fresh one. A record
-> captured during a fault carries the fault state it was captured under, so a later publication
-> can never claim the sensor was healthy.
+Read `backlog` and `age_ms` as part of the reading. A record carries the sensor state it was
+captured under [1].
 
 The machine holds up to 200 weights in RAM while the broker is out of reach. A 201st drops the
 oldest and counts it in `dropped`. The queue does not survive a reset. On replay the weights go out
@@ -304,7 +298,7 @@ the split between acting and not acting.
 | `ok` | yes | Measuring, within the band |
 | `UNDER ZERO` | yes | Below the live zero, still measuring |
 | `SATURATED` | yes | At or past full scale, still measuring |
-| `NO SENSOR` | no | Loop below the dead threshold — cut wire, no supply, transmitter removed |
+| `NO SENSOR` | no | Loop below the dead threshold, `02` §*What each current means* |
 | `XMTR FAULT` | no | At or above the fault threshold |
 | `BAD STATE` | no | A corrupted queued record. Never produced by a live reading |
 
@@ -319,9 +313,8 @@ record or a calibration only in state `ok`, `06` §*When an action is refused*.
 > healthy and this reading is not current — the converter has stopped answering. A consumer
 > reading only `sensor` banks a frozen weight as live.
 
-The retained status topic is where this matters most: a subscriber connecting after the converter
-has failed receives that state on its first delivery, describing a fault that began before it was
-listening. Do not infer staleness from `i2c_err`, which counts every failure since the last reset.
+A late subscriber receives `stale` on the retained status topic's first delivery. `stale` is read
+from the field itself, not from `i2c_err`.
 
 ## See also
 
