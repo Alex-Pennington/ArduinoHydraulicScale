@@ -14,7 +14,7 @@ documents:
   subject: The machine, the measurement chain, faults, what reaches the broker, wiring
     conventions, scope of this binder
   version: '3'
-  odin_id: pending
+  odin_id: pending Odin ingestion
   last_updated: '2026-10-25'
 - num: '01'
   source: 01_controller_card.md
@@ -23,7 +23,7 @@ documents:
   kind: Cabinet Reference Card
   subject: Board, header pins, CAN controller mode and filter
   version: '3'
-  odin_id: pending
+  odin_id: pending Odin ingestion
   last_updated: '2026-10-25'
 - num: '01A'
   source: 01A_radio_module.md
@@ -32,7 +32,7 @@ documents:
   kind: Cabinet Reference Card
   subject: HC-05 module, serial port, terminals
   version: '1'
-  odin_id: pending
+  odin_id: pending Odin ingestion
   last_updated: '2026-10-25'
 - num: '01B'
   source: 01B_can_transceiver.md
@@ -41,7 +41,7 @@ documents:
   kind: Cabinet Reference Card
   subject: SN65HVD230 board, transceiver pins, terminals
   version: '1'
-  odin_id: pending
+  odin_id: pending Odin ingestion
   last_updated: '2026-10-25'
 - num: '01C'
   source: 01C_qwiic_stack.md
@@ -50,7 +50,7 @@ documents:
   kind: Cabinet Reference Card
   subject: Trunk, multiplexer, bus channel map
   version: '1'
-  odin_id: pending
+  odin_id: pending Odin ingestion
   last_updated: '2026-10-25'
 - num: '01D'
   source: 01D_display.md
@@ -59,7 +59,7 @@ documents:
   kind: Cabinet Reference Card
   subject: LCD2004A module, interface, rows
   version: '1'
-  odin_id: pending
+  odin_id: pending Odin ingestion
   last_updated: '2026-10-25'
 - num: '02'
   source: 02_pressure_loop_wiring.md
@@ -70,7 +70,7 @@ documents:
   subject: Parts, terminal connections and schematic, burden placement, current-to-meaning
     table, converter headroom, supply
   version: '3'
-  odin_id: pending
+  odin_id: pending Odin ingestion
   last_updated: '2026-10-25'
 - num: '03'
   source: 03_mqtt_contract.md
@@ -81,7 +81,7 @@ documents:
   subject: Topic root and leaves, weight, telemetry, status, engine and fault-code payloads,
     the last will, command and acknowledgement, the six sensor values, staleness
   version: '3'
-  odin_id: pending
+  odin_id: pending Odin ingestion
   last_updated: '2026-10-25'
 - num: '04'
   source: 04_decisions.md
@@ -90,7 +90,7 @@ documents:
   kind: Decision Record
   subject: Platform, measurement front end, scaling, reporting contract, operating rules
   version: '3'
-  odin_id: pending
+  odin_id: pending Odin ingestion
   last_updated: '2026-10-25'
 - num: '05'
   source: 05_known_defects.md
@@ -99,7 +99,7 @@ documents:
   kind: Defect Register
   subject: Open defects, standing hazards of the build
   version: '3'
-  odin_id: pending
+  odin_id: pending Odin ingestion
   last_updated: '2026-10-25'
 - num: '06'
   source: 06_operating_card.md
@@ -109,5 +109,5 @@ documents:
   subject: Weighing at the boom mark, the command table, refusals, the display messages, the
     tally, what survives a reset
   version: '3'
-  odin_id: pending
+  odin_id: pending Odin ingestion
   last_updated: '2026-10-25'
