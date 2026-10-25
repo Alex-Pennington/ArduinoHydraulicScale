@@ -228,4 +228,4 @@ DETERMINABLE here.
 1. Start at low RF power. Raise it in 0.5 dB steps [5] until a bag on the tines reads every time.
 2. With bags stacked nearby where they normally stand, check none of them reads. Back off if one
    does.
-3. Keep people 21 cm or more from the antenna face [5].
+3. Keep people 20 cm or more from the antenna face [5].
