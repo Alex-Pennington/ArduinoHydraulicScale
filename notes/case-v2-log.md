@@ -50,6 +50,22 @@ work), or **suggestion** (a session's inference, not his instruction). A suggest
 - Not Alex's instruction. Where the reader and the bulkhead go is for the layout worker to work out
   with him.
 
+### 5. Antenna placement: Alex
+
+- **Alex**, 2026-10-25, in `plc4-hardware-1025`'s dialog: he places the C610 himself ("I'm an RF
+  engineer"). If it stays on the tractor, it goes on the front guard, behind the loader and in front
+  of the engine and intake. Source: `notes/2026-10-25-rfid-read-range-and-antennas.md` §6.
+
+### 6. Does the RFID read belong on the tractor at all? OPEN, and it gates inputs 3-5
+
+- **Alex**, 2026-10-25, same dialog, his question and not a decision: the tag could be brought to a
+  reader instead, maybe a handheld or an existing reader, with the PWA app tying tag to weight.
+  *"we need to get it right"*. Full quote in `notes/2026-10-25-rfid-read-range-and-antennas.md` §6.
+- If the read leaves the tractor, the case may need no reader, antenna, bulkhead or u.FL rework
+  (inference). Settle this before the layout worker places them.
+- The background research is option 2 of `findings/2026-10-14-rfid-cots-alternatives.md` §2.
+  `plc4-hardware-1025` is putting the question to him.
+
 ## When Alex says go
 
 Dispatch one worker in a worktree of greybeard-plc4-pwa, briefed with this log and Alex's words,
