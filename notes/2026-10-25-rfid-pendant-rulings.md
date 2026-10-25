@@ -59,7 +59,9 @@ design."*
 Asked where the T-Deck would be flashed, he chose **"Plug into Saga"**. Then he said *"wait"*, so
 nothing is flashed until he says go. Then: *"lets plan to use pin 21,22"*. Asked whether that is
 the ESP32-C3 header labelled TX(21), RX(20) (LilyGO `images/c3_boot.jpg`, which shows RX as 20),
-he chose **"Yes, TX21 / RX20"**. The plan is `spikes/tdeck-nfc/PLAN-c3-header.md`.
+he chose **"Yes, TX21 / RX20"**. The plan is `spikes/tdeck-nfc/PLAN-c3-header.md`. Told it needs a 3.3 V USB-TTL adapter on a
+2.0 mm header, he chose **"Use the Grove plug"** and wrote *"just use the othe pins"*: the test
+uses the Grove build (S3 GPIO43/44) already on the branch.
 
 ### "The heltec mesh code" (read-only survey, not his words)
 

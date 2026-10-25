@@ -1,5 +1,10 @@
 # Plan: the PN532 on the keyboard ESP32-C3's header (TX21 / RX20)
 
+> **Set aside by Alex, 2026-10-25.** Asked about the USB-TTL adapter it needs, he chose "Use the
+> Grove plug" (*"Skip the keyboard chip for this test; flash the Grove build already made"*, this
+> session's option text) and wrote *"just use the othe pins"*. The test uses `src/main.cpp` on the
+> Grove plug. This plan is kept as the record.
+
 **Status: plan only. Nothing here is built or flashed.** Alex, 2026-10-25: *"lets plan to use pin
 21,22"*. Asked whether that means the 6-pin ESP32-C3 header labelled TX(21), RX(20), IO09(BOOT),
 RST, GND, VCC, he chose **"Yes, TX21 / RX20"**. The spike as first built put the reader on the
