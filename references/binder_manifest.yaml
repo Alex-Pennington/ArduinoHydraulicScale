@@ -1,5 +1,5 @@
 binder:
-  title: PLC #4 Tractor Scale
+  title: 'PLC #4 Tractor Scale'
   subtitle: Hydraulic loader scale on the John Deere 5055E — pressure loop, controller,
     J1939 reader and wiring
   compass_priority: pending
@@ -8,71 +8,106 @@ binder:
 documents:
 - num: '00'
   source: 00_architecture.md
-  title: Architecture — PLC #4 Tractor Scale
+  title: 'Architecture — PLC #4 Tractor Scale'
   subtitle: What the machine measures, and why the signal is a current loop
   kind: Cabinet Reference Card
-  subject: The machine, the measurement chain, boom position, what reaches the broker,
-    wiring conventions, scope of this binder
-  version: '2'
+  subject: The machine, the measurement chain, faults, what reaches the broker, wiring
+    conventions, scope of this binder
+  version: '3'
   odin_id: pending
-  last_updated: '2026-09-28'
+  last_updated: '2026-10-25'
 - num: '01'
   source: 01_controller_card.md
-  title: Controller Card — PLC #4 Tractor Scale
-  subtitle: The controller, its header pins, the sensor bus, the CAN connection, the
-    console and the display
+  title: 'Controller Card — PLC #4 Tractor Scale'
+  subtitle: The controller board, its header pins and its CAN controller
   kind: Cabinet Reference Card
-  subject: Board, header pins, multiplexer channel map, CAN, console, display rows
-  version: '2'
+  subject: Board, header pins, CAN controller mode and filter
+  version: '3'
   odin_id: pending
-  last_updated: '2026-09-28'
+  last_updated: '2026-10-25'
+- num: '01A'
+  source: 01A_radio_module.md
+  title: 'Radio Module — PLC #4 Tractor Scale'
+  subtitle: The HC-05 field console and its terminals
+  kind: Cabinet Reference Card
+  subject: HC-05 module, serial port, terminals
+  version: '1'
+  odin_id: pending
+  last_updated: '2026-10-25'
+- num: '01B'
+  source: 01B_can_transceiver.md
+  title: 'CAN Transceiver — PLC #4 Tractor Scale'
+  subtitle: The SN65HVD230 CAN board between the controller and the tractor J1939 bus
+  kind: Cabinet Reference Card
+  subject: SN65HVD230 board, transceiver pins, terminals
+  version: '1'
+  odin_id: pending
+  last_updated: '2026-10-25'
+- num: '01C'
+  source: 01C_qwiic_stack.md
+  title: 'Qwiic Stack — PLC #4 Tractor Scale'
+  subtitle: The sensor-bus multiplexer and the device on each channel
+  kind: Cabinet Reference Card
+  subject: Trunk, multiplexer, bus channel map
+  version: '1'
+  odin_id: pending
+  last_updated: '2026-10-25'
+- num: '01D'
+  source: 01D_display.md
+  title: 'Display — PLC #4 Tractor Scale'
+  subtitle: The 20 by 4 display and what each row shows
+  kind: Cabinet Reference Card
+  subject: LCD2004A module, interface, rows
+  version: '1'
+  odin_id: pending
+  last_updated: '2026-10-25'
 - num: '02'
   source: 02_pressure_loop_wiring.md
-  title: Pressure Loop Wiring — PLC #4 Tractor Scale
+  title: 'Pressure Loop Wiring — PLC #4 Tractor Scale'
   subtitle: Transmitter, loop supply, burden resistor and the connections between
     them
   kind: Wiring Reference
-  subject: Parts, terminal connections, burden placement, ground bond, current-to-meaning
-    table, headroom
-  version: '2'
+  subject: Parts, terminal connections and schematic, burden placement, current-to-meaning
+    table, converter headroom, supply
+  version: '3'
   odin_id: pending
-  last_updated: '2026-09-28'
+  last_updated: '2026-10-25'
 - num: '03'
   source: 03_mqtt_contract.md
-  title: MQTT Contract — PLC #4 Tractor Scale
+  title: 'MQTT Contract — PLC #4 Tractor Scale'
   subtitle: The published and subscribed topics, their payloads, retain and quality
     of service
   kind: Cabinet Reference Card
   subject: Topic root and leaves, weight, telemetry, status, engine and fault-code payloads,
     the last will, command and acknowledgement, the six sensor values, staleness
-  version: '2'
+  version: '3'
   odin_id: pending
-  last_updated: '2026-09-28'
+  last_updated: '2026-10-25'
 - num: '04'
   source: 04_decisions.md
-  title: Decisions — PLC #4 Tractor Scale
+  title: 'Decisions — PLC #4 Tractor Scale'
   subtitle: What has been decided about this machine, and by whom
   kind: Decision Record
-  subject: Measurement front end, scaling, reporting contract, operating rules
-  version: '2'
+  subject: Platform, measurement front end, scaling, reporting contract, operating rules
+  version: '3'
   odin_id: pending
-  last_updated: '2026-09-28'
+  last_updated: '2026-10-25'
 - num: '05'
   source: 05_known_defects.md
-  title: Known Defects — PLC #4 Tractor Scale
+  title: 'Known Defects — PLC #4 Tractor Scale'
   subtitle: What is known to be wrong, what to do until it is fixed, and standing hazards
   kind: Defect Register
-  subject: Open defects, defects closed in this build, standing hazards of the build
-  version: '2'
+  subject: Open defects, standing hazards of the build
+  version: '3'
   odin_id: pending
-  last_updated: '2026-09-28'
+  last_updated: '2026-10-25'
 - num: '06'
   source: 06_operating_card.md
-  title: Operating Card — PLC #4 Tractor Scale
+  title: 'Operating Card — PLC #4 Tractor Scale'
   subtitle: The weighing procedure, the verbs that drive it, and what the machine refuses
   kind: Cabinet Reference Card
-  subject: Weighing at the boom mark, the command table and which verbs reach the app, refusals,
-    the display messages, the tally, what survives a reset
-  version: '2'
+  subject: Weighing at the boom mark, the command table, refusals, the display messages, the
+    tally, what survives a reset
+  version: '3'
   odin_id: pending
-  last_updated: '2026-09-28'
+  last_updated: '2026-10-25'

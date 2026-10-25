@@ -1,7 +1,8 @@
 # MQTT Contract — PLC #4 Tractor Scale
 
 **Document:** 03 — MQTT Contract
-**Firmware:** build `699e3c6c`
+**Firmware:** `uno_r4_wifi` build `699e3c6c`
+**Updated:** 2026-10-25
 
 Seven topics under one root. A consumer that reads only the weight topic gets every deliberate
 record; a consumer that reads only telemetry gets a live stream and no record of what the operator
@@ -22,8 +23,9 @@ weight.
 | `plc4/jd5055e/ack` | Outbound | no | 0 | Once per command received with a usable `id`, including a repeat |
 
 The root is one constant and every topic is built from it. A topic that would not fit its buffer is
-refused rather than published to a truncated stub. Every outbound payload carries `id`, the
-machine's client identifier `plc4-jd5055e`.
+refused rather than published to a truncated stub [1]. Every outbound payload except the ack
+carries `id`, the machine's client identifier `plc4-jd5055e` [1]. The ack's `id` is the command's
+`id`, §*Acknowledgement*.
 
 ## Weight
 
@@ -105,7 +107,7 @@ the last one published.
 {"up":true,"cal":"ok","sensor":"ok","stale":false,"tare":412,"cf":0.51230,
  "n":12,"total":19408,"q":0,"dropped":0,"uptime_s":8130,"rssi":-58,"overrange":0,
  "overrange_max":0,"underrange":0,"i2c_err":0,"vbus":13.120,
- "shunt_mv":-12.710,"ina_err":0,"build":"699e3c6c","reset":"...","id":"plc4-jd5055e"}
+ "shunt_mv":-12.710,"ina_err":0,"build":"...","reset":"...","id":"plc4-jd5055e"}
 ```
 
 | Field | Meaning |
@@ -119,9 +121,9 @@ the last one published.
 | `uptime_s`, `rssi`, `reset` | Seconds running, radio strength, why the board last restarted |
 | `build` | The source commit this firmware was compiled from |
 | `overrange`, `overrange_max`, `underrange` | Readings at or past full scale, the highest such reading in counts, readings below the live zero |
-| `i2c_err` | Converter read failures since power-on. Never resets |
+| `i2c_err` | Converter read failures since the last reset [2] |
 | `vbus`, `shunt_mv` | The voltage monitor's bus volts and shunt millivolts, or null when unread |
-| `ina_err` | Voltage monitor read failures since power-on. Never resets |
+| `ina_err` | Voltage monitor read failures since the last reset [3] |
 
 > **`build` identifies the source, not the deployment.** It names the commit the image was
 > compiled from, never the commit the repository stood at when the board was flashed. A trailing
@@ -156,18 +158,18 @@ The tractor's engine values, read off the J1939 bus. Published every 15 s while 
 
 | Key | Unit | Source on the bus |
 |---|---|---|
-| `rpm` | rpm | EEC1, PGN 61444 |
-| `torque_pct` | % actual engine torque | EEC1, SPN 513 |
-| `load_pct` | % load at current speed | EEC2, PGN 61443, SPN 92 |
-| `coolant_c` | °C | ET1, PGN 65262 |
-| `oil_temp_c` | °C | ET1, PGN 65262 |
-| `oil_kpa` | kPa | EFLP1, PGN 65263 |
-| `fuel_lph` | litres per hour | LFE, PGN 65266, SPN 183 |
-| `batt_v` | V | VEP1, PGN 65271, SPN 168 |
-| `keysw_v` | V, keyswitch battery potential | VEP1, PGN 65271, SPN 158 |
-| `hours` | engine hours | PGN 65253, SPN 247 |
-| `fuel_level_pct` | % | DD, PGN 65276, SPN 96 |
-| `hyd_oil_c` | °C, hydraulic oil | VF, PGN 65128, SPN 1638 |
+| `rpm` | rpm | EEC1, PGN 61444 [5] |
+| `torque_pct` | % actual engine torque | EEC1, SPN 513 [5] |
+| `load_pct` | % load at current speed | EEC2, PGN 61443, SPN 92 [5] |
+| `coolant_c` | °C | ET1, PGN 65262 [5] |
+| `oil_temp_c` | °C | ET1, PGN 65262 [5] |
+| `oil_kpa` | kPa | EFLP1, PGN 65263 [5] |
+| `fuel_lph` | litres per hour | LFE, PGN 65266, SPN 183 [5] |
+| `batt_v` | V | VEP1, PGN 65271, SPN 168 [5] |
+| `keysw_v` | V, keyswitch battery potential | VEP1, PGN 65271, SPN 158 [5] |
+| `hours` | engine hours | PGN 65253, SPN 247 [5] |
+| `fuel_level_pct` | % | DD, PGN 65276, SPN 96 [5] |
+| `hyd_oil_c` | °C, hydraulic oil | VF, PGN 65128, SPN 1638 [5] |
 | `rpm_min`, `rpm_max`, `rpm_avg` | rpm | Every valid `rpm` sample since the last message |
 | `load_pct_min`, `_max`, `_avg` | % | Every valid `load_pct` sample since the last message |
 | `torque_pct_min`, `_max`, `_avg` | % | Every valid `torque_pct` sample since the last message |
@@ -191,7 +193,7 @@ The CAN counters are always present:
 | `unknown` | Frames on groups this firmware does not decode |
 | `ring_full`, `ring_high` | Drains that found the 32-frame ring full, so frames were lost; the deepest the ring has been |
 | `can_err`, `can_last` | Driver error events, and the last error code |
-| `drains` | Times the drain has run. Climbing with `frames` at 0 means nothing is arriving at D13 |
+| `drains` | Times the drain has run. Climbing with `frames` at 0 means nothing is arriving at the board's CAN receive pin, `01` §*Header pins* |
 | `can_up` | False when the CAN controller did not open |
 | `filt` | True when the hardware acceptance filter is in force |
 
@@ -209,7 +211,7 @@ source address in decimal. The retained message is that unit's current fault sta
 | `sa` | Source address of the unit reporting |
 | `n` | Codes the board kept for this unit |
 | `mil`, `rsl`, `awl`, `pl` | Malfunction, red stop, amber warning and protect lamp status, each 0 to 3 |
-| `dtc` | Each code's suspect parameter number, failure mode and occurrence count |
+| `dtc` | One object per code: `spn` suspect parameter number, `fmi` failure mode identifier, `oc` occurrence count [1] |
 | `trunc` | True when the unit sent more codes than the board keeps (12) or than fit the message |
 
 > **A lamp can be on with an empty `dtc` list.** A unit that raises a lamp without naming a code
@@ -239,8 +241,8 @@ over MQTT instead of a wire, and is answered on `ack`.
 | | |
 |---|---|
 | Allowed | `tare` `+` `-` `b` `kv` `c` `w` `sm` |
-| Refused, as a safety measure | `hang`. It deliberately stops the board to prove the watchdog; over the network that is a denial of service against a machine holding a load |
-| Refused, as redundant | `read`, `net`, `sum`. The app already has that data from `telemetry` and `status` |
+| Refused | `hang`, which stops the board to prove the watchdog |
+| Refused | `read`, `net`, `sum`, whose data `telemetry` and `status` already carry |
 | Refused | Every other verb, including the console diagnostics `debug`, `i2c`, `pwr`, `can` and `canf` |
 
 > **Never retained.** A retained command would re-run on every reconnect, re-taring or clearing the
@@ -250,8 +252,9 @@ over MQTT instead of a wire, and is answered on `ack`.
 > **A repeat `id` is acked but not re-executed.** The board remembers the last eight command ids
 > and replays the stored verdict for a repeat.
 
-No ack is sent for a command with no usable `id`, a retained command, a command that arrived
-before a reconnect, or one that arrived while four were already waiting. Resend it with the same
+No ack is sent for a command with no usable `id`, a retained command, a command whose payload had
+not fully arrived when it was read, a command that arrived before a reconnect, or one that arrived
+while four were already waiting [1]. Resend it with the same
 `id`.
 
 ## Acknowledgement
@@ -291,9 +294,6 @@ Apart from the cases above, every command gets exactly one reply, published on `
 > **A duplicate replays the stored verdict.** A repeat of a refused command reports `ok:false`
 > again; it can never claim a success that never happened.
 
-> **QoS 0 is deliberate.** A QoS 1 ack spins waiting for a PUBACK, which would stall the weighing
-> loop and age the reading to stale. A lost ack is cheap: the repeat rule makes retrying safe.
-
 ## Sensor states
 
 Six values. Three carry a real measurement and three do not, and that split is not the same as
@@ -308,16 +308,8 @@ the split between acting and not acting.
 | `XMTR FAULT` | no | At or above the fault threshold |
 | `BAD STATE` | no | A corrupted queued record. Never produced by a live reading |
 
-> **Do not discard the two over-range states.** Both carry a real reading, and throwing them away
-> loses the excursions this front end was fitted to capture — the circuit goes past full scale in
-> normal service. A consumer that treats everything but `ok` as invalid is not failing safe, it is
-> dropping data.
-
-The machine keeps a second and narrower rule for itself: it refuses a tare, a record or a
-calibration unless the state is exactly `ok`, because a reading at the end of its range is no
-basis for setting a zero. That rule is about permitting an action. The table above is about
-trusting a number. They are different questions and collapsing them loses data one way or refuses
-valid work the other.
+Keep readings in every state that carries a real measurement [4]. The machine acts on a tare, a
+record or a calibration only in state `ok`, `06` §*When an action is refused*.
 
 ## Staleness is a separate question
 
@@ -329,9 +321,21 @@ valid work the other.
 
 The retained status topic is where this matters most: a subscriber connecting after the converter
 has failed receives that state on its first delivery, describing a fault that began before it was
-listening. Do not infer staleness from `i2c_err`, which counts from power-on and never clears.
+listening. Do not infer staleness from `i2c_err`, which counts every failure since the last reset.
 
 ## See also
 
-`01` §*Bus channels* for the converter and the bus whose failure sets `stale`.
+`01C` §*Bus channels* for the converter and the bus whose failure sets `stale`.
 `01` §*CAN* for the bus the engine and fault-code topics are read from.
+
+## References
+
+[1] A. Pennington, *greybeard-plc4-tractor-scale*, `src/ArduinoHydraulicScale.cpp`, lines 260–267, 388–410, 640–660, 1030–1066 and 1319–1344, at the stamped build. License: none stated. [Online]. Available: https://github.com/Alex-Pennington/greybeard-plc4-tractor-scale
+
+[2] A. Pennington, *greybeard-plc4-tractor-scale*, `include/mcp3421.h`, lines 25–26, at the stamped build. License: none stated. [Online]. Available: https://github.com/Alex-Pennington/greybeard-plc4-tractor-scale
+
+[3] A. Pennington, *greybeard-plc4-tractor-scale*, `include/ina219.h`, lines 41–42, at the stamped build. License: none stated. [Online]. Available: https://github.com/Alex-Pennington/greybeard-plc4-tractor-scale
+
+[4] A. Pennington, *greybeard-plc4-tractor-scale*, `include/loop_scaling.h`, lines 71–77, at the stamped build. License: none stated. [Online]. Available: https://github.com/Alex-Pennington/greybeard-plc4-tractor-scale
+
+[5] A. Pennington, *greybeard-plc4-tractor-scale*, `include/j1939_decode.h`, lines 31–40 and 338–420, at the stamped build. License: none stated. [Online]. Available: https://github.com/Alex-Pennington/greybeard-plc4-tractor-scale

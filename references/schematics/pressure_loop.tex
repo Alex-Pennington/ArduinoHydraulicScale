@@ -1,0 +1,28 @@
+% PLC #4 pressure loop. Source for pressure_loop.png, cited from 02_pressure_loop_wiring.md.
+% Build: pdflatex pressure_loop.tex; pdftoppm -r 300 -png -singlefile pressure_loop.pdf pressure_loop
+\documentclass[border=6pt]{standalone}
+\usepackage[american]{circuitikz}
+\begin{document}
+\begin{circuitikz}[scale=1.1, transform shape]
+  % loop supply
+  \draw (0,0) to[battery1, l_=24 V loop supply, invert] (0,4);
+  \node[left] at (0,4) {$+$};
+  \node[left] at (0,0) {$-$};
+  % supply + to transmitter +
+  \draw (0,4) -- (3,4);
+  \draw (3,3.4) rectangle (5.4,4.6);
+  \node at (4.2,4.0) {\shortstack{Transmitter\\Rosemount 1151}};
+  \node[above] at (3.15,4.6) {$+$};
+  \node[above] at (5.25,4.6) {$-$};
+  % transmitter - down through burden to supply -
+  \draw (5.4,4) -- (6.5,4) to[short,*-] (6.5,3.5)
+        to[R, l=68 $\Omega$ burden] (6.5,0.5) to[short,-*] (6.5,0) -- (0,0);
+  % converter inputs
+  \draw (6.5,4) -- (10.2,4) node[right] {VIN+};
+  \draw (6.5,0) -- (10.2,0) node[right] {VIN$-$};
+  \draw (10.2,-0.6) rectangle (13.0,4.6);
+  \node at (11.6,2) {\shortstack{Converter\\MCP3421A0}};
+  % board ground
+  \draw (3,0) to[short,*-] (3,-1) node[ground]{} node[right=6pt]{Board GND};
+\end{circuitikz}
+\end{document}
