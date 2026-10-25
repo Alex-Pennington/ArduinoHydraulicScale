@@ -1,96 +1,46 @@
 # Controller Card — PLC #4 Tractor Scale
 
 **Document:** 01 — Controller Card
-**Firmware:** build `699e3c6c`
-
-An Arduino Uno R4 WiFi carries the whole machine. Every sensor and the display reach it over one
-Qwiic bus through an eight-channel multiplexer. The tractor's J1939 bus reaches it through a CAN
-transceiver on D10 and D13.
+**Firmware:** `uno_r4_wifi` build `699e3c6c`
+**Updated:** 2026-10-25
 
 ## Board
 
 | Field | Value |
 |---|---|
-| Controller | Arduino Uno R4 WiFi |
-| Sensor bus | Qwiic connector, the board's second two-wire bus |
-| Multiplexer | TCA9548A or PCA9548A, eight channels, address `0x70`, on the bus trunk |
-| CAN | On-chip controller, 250 kbit/s, receive only |
-| Console | Serial over USB and over the radio module, both at once |
+| Controller | Arduino UNO R4 WiFi [1] |
+| Sensor bus | Qwiic connector, the board's second two-wire bus, `Wire1` [1], [2] |
+| Console | Serial over USB and over the radio module, both at once [2] |
+| Radio module pins | `01A` §*Terminals* |
+| Header pins used | Only those in §*Header pins* |
 
 ## Header pins
 
 | Pin | Function | Spec | Wire | Connected to |
 |---|---|---|---|---|
-| D0 | Console receive | 9600 baud | | Radio module transmit |
-| D1 | Console transmit | 9600 baud | | Radio module receive |
-| D10 | CAN transmit | 250 kbit/s | | Not connected; see §*CAN* |
-| D13 | CAN receive | 250 kbit/s | | CAN transceiver receive output |
-| Qwiic | Sensor bus trunk | 3.3 V | | Multiplexer |
-| USB | Console | 115200 baud | | Laptop, when servicing |
-
-No other header pin is used by the firmware.
-
-## Bus channels
-
-| Channel | Address | Device | Used by the firmware |
-|---|---|---|---|
-| 0 | `0x67` | MCP9600 thermocouple amplifier | no |
-| 1 | `0x2A` | NAU7802 load-cell amplifier | no |
-| 2 | `0x40` | INA219 voltage and current monitor | yes, diagnostics |
-| 3 | `0x68` | MCP3421A0 pressure-loop converter | yes, the measurement |
-| 7 | `0x27` | LCD2004A display, 20 by 4, PCF8574 backpack | yes |
-
-> **A scan that finds nothing means the trunk or the multiplexer, never a device behind it.**
-> The multiplexer sits ahead of every channel. When it cannot answer, the converter and the
-> display both fall silent together and neither one is at fault. Check the trunk lead and the
-> bus supply before opening anything downstream.
-
-The thermocouple and the load cell belong to no function on this machine. Leave them in place
-rather than treating them as spare inputs.
+| D10 | CAN transmit, the CAN controller's pin [1] | 250 kbit/s [3] | | Not connected |
+| D13 | CAN receive, the CAN controller's pin [1] | 250 kbit/s [3] | | CAN transceiver, P1 pin 2, `01B` §*Terminals* |
+| GND | Board ground | | | Loop supply negative, `02` §*Connections*; CAN transceiver, P1 pin 3, `01B` §*Terminals* |
+| Qwiic | Sensor bus trunk | 3.3 V [1] | | Multiplexer, `01C` §*Bus channels* |
+| USB | Console | 115200 baud [2] | | Laptop, when servicing |
 
 ## CAN
 
-The board reads the tractor's J1939 bus and never transmits on it: no frame, no request, and no
-acknowledgement.
-
 | Item | Value |
 |---|---|
-| Bit rate | 250 kbit/s, 29-bit identifiers |
-| Board receive | D13, from the transceiver's receive output |
-| Board transmit | D10, left unconnected |
-| Transceiver transmit input | Tied recessive at the transceiver, so the node cannot drive the bus |
-| Termination | None at this node. The tractor bus is terminated at its ends; a third 120 Ω resistor degrades it |
-| Hardware filter | Off at every power-up; `canf` turns it on |
+| Controller | On-chip, 250 kbit/s, 29-bit identifiers [3], [4] |
+| Mode | Normal. The controller acknowledges frames, and the transceiver's transmit input, tied recessive, keeps the node off the bus [3], `01B` §*Terminals* |
+| Transmit | The firmware sends no frame and no request [3] |
+| Hardware filter | Off at every power-up; `canf` turns it on [3], [5] |
 
-With no transceiver fitted, the scale weighs exactly as it does with one, and publishes no engine
-data.
+## References
 
-## Console
+[1] Arduino, "Arduino UNO R4 WiFi," datasheet, SKU ABX00087, §10 *Qwiic I2C Connector* and §12.2 *Digital*. Filed in `docs/vendor/arduino/`
 
-The console answers on both the USB port and the radio module, and takes commands from either.
-A technician with a laptop and an operator with a handset see the same output.
+[2] A. Pennington, *greybeard-plc4-tractor-scale*, `src/ArduinoHydraulicScale.cpp`, lines 25–46 and 1460–1461, at the stamped build. License: none stated. [Online]. Available: https://github.com/Alex-Pennington/greybeard-plc4-tractor-scale
 
-| Device | Terminal | Direction | Rate |
-|---|---|---|---|
-| HC-05 radio module | D0 | Board receives | 9600 baud |
-| HC-05 radio module | D1 | Board transmits | 9600 baud |
-| USB | — | Both directions | 115200 baud |
+[3] A. Pennington, *greybeard-plc4-tractor-scale*, `include/j1939_can.h`, lines 23–26, 33 and 74–87, at the stamped build. License: none stated. [Online]. Available: https://github.com/Alex-Pennington/greybeard-plc4-tractor-scale
 
-## Display
+[4] A. Pennington, *greybeard-plc4-tractor-scale*, `include/j1939_decode.h`, line 332, at the stamped build. License: none stated. [Online]. Available: https://github.com/Alex-Pennington/greybeard-plc4-tractor-scale
 
-Four rows of 20 characters, one screen, read-only. Every operator action reaches the board over
-MQTT from a phone app, never from the display. The console, over USB or the radio module, is the
-service and recovery path.
-
-| Row | Shows |
-|---|---|
-| 1 | Weight in pounds and the tally count, or the fault name when the reading cannot be trusted |
-| 2 | Pressure in psi and loop current in mA, or dashes |
-| 3 | Dropped weights, queued weights, tally full or nearly full, or the link state |
-| 4 | The worst current fault, or blank |
-
-## See also
-
-`02` §*Connections* for how the transmitter, the burden resistor and the supply join up.
-`06` §*Commands* for the console verbs, including `i2c`, `pwr`, `can` and `canf`.
-`06` §*What the display asks for* for the fault messages on row 4.
+[5] A. Pennington, *greybeard-plc4-tractor-scale*, `src/ArduinoHydraulicScale.cpp`, line 1583, at the stamped build. License: none stated. [Online]. Available: https://github.com/Alex-Pennington/greybeard-plc4-tractor-scale
