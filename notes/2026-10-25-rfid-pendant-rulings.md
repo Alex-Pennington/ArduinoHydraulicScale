@@ -41,6 +41,31 @@ void last, tare, moisture entry), he answered in his own words:
 Which code that names, and what "the rest" covers, is being read (read-only) before anything is
 built on it.
 
+### The host: Heltec V4 or LilyGO T-Deck
+
+Unprompted, later the same day:
+
+> *"Note I mentioned the Heltech V4 Development Board that we use we also have a Liligo T deck
+> Both of those will be an option and that the tea deck could be repurposed with its outputs into
+> a RFID reader that I already have that would be a pretty cool test"*
+
+So both the Heltec WiFi LoRa 32 V4 and the LilyGO T-Deck are candidate hosts. He suggests a test:
+a T-Deck wired to a reader he already has. Asked which, he answered: *"NFC nodule V3 ELECHOUSE,
+or frio-rc522"*, read as the Elechouse PN532 NFC module V3 or an MFRC522 ("RC522") module. Asked
+whether that test comes before the design is written, he chose **"Test first"**: *"Wire the
+T-Deck to the reader, scan a tie, show the tag on screen. Throwaway. What it teaches feeds the
+design."*
+
+### "The heltec mesh code" (read-only survey, not his words)
+
+It is `/home/rayven/mesh`, env `mesh-handheld` on the Heltec V4 TFT, with a T-Deck sibling env
+`mesh-handheld-tdeck`. Per the survey, it already runs PLC #4 TARE, RECORD into the daily log or a
+selected delivery, UNDO LAST, CLEAR BOARD, DAILY LOG +, tally select and end, delivery start from
+the director list, and the live weight. It sends them by HTTP to the PLC #4 PWA
+(`firmware/src/modules/plc/core/Plc4Operator.h:33`), not MQTT. On the PWA's RFID build it disables
+its PLC #4 buttons (`Plc4Operator.cpp:492-493`). It has no RFID reader code, no moisture entry and
+no void. That repo belongs to the mesh coordinator; nothing in it is edited from here.
+
 ### How many pendants
 
 He chose **"Not decided"**: *"Design so either works."*
