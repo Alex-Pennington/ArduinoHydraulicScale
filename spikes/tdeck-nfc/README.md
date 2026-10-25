@@ -1,5 +1,8 @@
 # T-Deck + PN532 NFC spike (throwaway)
 
+The UART version on the Grove plug was replaced 2026-10-25 by I2C, after Alex read the plug's
+labels as SDA/SCL. The C3-header plan beside it is set aside.
+
 Alex chose "NFC now, UHF later" on 2026-10-25 (`notes/2026-10-25-rfid-pendant-rulings.md`). This is
 the "now" half. It proves the T-Deck host, the reader wiring, the screen and a RECORD press. **It
 cannot read the UHF tie tags**: the PN532 is a 13.56 MHz reader. **RECORD sends nothing**: no WiFi,
@@ -9,28 +12,28 @@ Not PLC #4 firmware, and not the pendant's firmware. Keeping any of it is a new 
 
 ## Wiring
 
-Original T-Deck (not Plus). Its Grove plug, P8 (4-pin, 2.0 mm), carries GND, VDD3V3, UAR0_TX and
-UAR0_RX (LilyGO `schematic/schematic.pdf`); UAR0_TX/RX are the ESP32-S3 module's TXD0/RXD0,
-GPIO43/GPIO44. On the T-Deck Plus that plug is the GPS's (LilyGO `README.MD`), so this does not
-apply there.
+Original T-Deck (not Plus). LilyGO's schematic (`schematic/schematic.pdf`) puts the Grove plug P8
+(4-pin, 2.0 mm) on GND, VDD3V3 and the ESP32-S3's GPIO43/GPIO44, named there as UART pins. **Alex's
+board labels that plug SDA/SCL** (2026-10-25). So the PN532 runs in **I2C mode**, and the
+firmware looks for it on the Grove pins both ways round (SDA43/SCL44, then SDA44/SCL43) and then on
+the board's own I2C (SDA 18 / SCL 8, which the keyboard at 0x55 also uses). The screen says which
+one answered.
 
-| T-Deck Grove | PN532 V3 (HSU pins, printed on the back) |
+| T-Deck Grove (as labelled) | PN532 V3 (I2C pins, printed on the front) |
 |---|---|
 | GND | GND |
-| 3V3 | VCC (3.3–5 V per the V3 guide) |
-| TX (GPIO43) | RXD |
-| RX (GPIO44) | TXD |
+| 3V3 / VCC | VCC (3.3–5 V per the V3 guide) |
+| SDA | SDA |
+| SCL | SCL |
 
-PN532 V3 interface switches: **both OFF = HSU**, the default (Elechouse V3 user guide). Which wire
-colour is which Grove pin is not stated here; check the plug against the schematic's pin order
-(1 GND, 2 VDD3V3, 3 UAR0_TX, 4 UAR0_RX) before powering.
+PN532 V3 interface switches for I2C: **channel 1 ON, channel 2 OFF** (Elechouse V3 user guide).
 
 Inference, not measured: the PN532 module's draw is well inside what the T-Deck's 3.3 V buck can
 give. Its current was not read from a datasheet.
 
 ## Use
 
-Power on. The screen shows `Reader: PN532 OK` or `NOT ANSWERING`. Hold a 13.56 MHz card (MIFARE,
+Power on. The screen shows `Reader: PN532 OK` with the bus it found, or `NOT ANSWERING`. Hold a 13.56 MHz card (MIFARE,
 NTAG) within about 5 cm: its UID appears. Press the trackball, or Enter on the keyboard: the screen
 says `RECORD: not sent (spike)`. USB serial (115200) logs `SCAN` and `RECORD (not sent)` lines.
 

@@ -1,8 +1,10 @@
-// THROWAWAY SPIKE: T-Deck + PN532 V3 (HSU). Scan a card, show its UID, press RECORD.
+// THROWAWAY SPIKE: T-Deck + PN532 V3 in I2C mode. Scan a card, show its UID, press RECORD.
 // RECORD SENDS NOTHING. PLC #4 is in service; this spike has no WiFi and no MQTT on purpose.
 //
-// Pins are the LilyGO T-Deck's (examples/UnitTest/utilities.h); the Grove plug P8 carries GND,
-// VDD3V3, UAR0_TX and UAR0_RX (schematic.pdf), which are WROOM-1 TXD0/RXD0 = GPIO43/GPIO44.
+// Pins are the LilyGO T-Deck's (examples/UnitTest/utilities.h). LilyGO's schematic puts the Grove
+// plug P8 on GPIO43/GPIO44 (UAR0_TX/RX); Alex's board labels that plug SDA/SCL. So the PN532 runs
+// in I2C mode, and the firmware looks for it on the Grove pins (Wire1, both ways round) and on
+// the board's own I2C (Wire, SDA 18 / SCL 8, shared with the keyboard at 0x55).
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -15,7 +17,7 @@ static constexpr int PIN_TFT_CS = 12, PIN_TFT_DC = 11, PIN_TFT_BL = 42;
 static constexpr int PIN_SPI_MOSI = 41, PIN_SPI_MISO = 38, PIN_SPI_SCK = 40;
 static constexpr int PIN_SD_CS = 39, PIN_RADIO_CS = 9;
 static constexpr int PIN_TRACKBALL_PRESS = 0; // active low
-static constexpr int PIN_GROVE_TX = 43, PIN_GROVE_RX = 44;
+static constexpr int PIN_GROVE_A = 43, PIN_GROVE_B = 44; // which is SDA and which SCL: not known
 static constexpr uint8_t KB_ADDR = 0x55;
 
 class LGFX : public lgfx::LGFX_Device {
@@ -61,7 +63,8 @@ public:
 };
 
 static LGFX tft;
-static Adafruit_PN532 nfc(-1, &Serial1);
+static Adafruit_PN532 *nfc = nullptr;
+static const char *readerBus = "";
 
 static bool readerOk = false;
 static char lastUid[3 * 7 + 1] = "";
@@ -80,7 +83,7 @@ static void show(const char *status, uint16_t colour) {
 
   tft.setTextSize(2);
   tft.setCursor(8, 60);
-  tft.printf("Reader: %s\n", readerOk ? "PN532 OK" : "NOT ANSWERING");
+  tft.printf("Reader: %s %s\n", readerOk ? "PN532 OK" : "NOT ANSWERING", readerBus);
   tft.setCursor(8, 90);
   tft.println("Tag:");
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
@@ -132,15 +135,33 @@ void setup() {
   tft.setRotation(1); // landscape, as the mesh firmware sets it
   tft.setBrightness(160);
 
-  Serial1.begin(115200, SERIAL_8N1, PIN_GROVE_RX, PIN_GROVE_TX);
-  nfc.begin();
-  uint32_t ver = nfc.getFirmwareVersion();
-  readerOk = ver != 0;
-  if (readerOk) {
-    Serial.printf("PN5%02lX firmware %lu.%lu\n", (ver >> 24) & 0xFF, (ver >> 16) & 0xFF, (ver >> 8) & 0xFF);
-    nfc.SAMConfig();
-  } else {
-    Serial.println("PN532 not answering: check HSU switches (both OFF), TX/RX crossed, 3V3 and GND");
+  // Both buses are started with their pins first; the library's own begin() then finds them
+  // already running and keeps those pins (arduino-esp32 2.0.17 TwoWire::begin).
+  // Which Grove pin is SDA is not known from the schematic (it names them UART pins), so both
+  // ways round are tried.
+  struct { TwoWire *bus; int sda, scl; const char *name; } buses[] = {
+    {&Wire1, PIN_GROVE_A, PIN_GROVE_B, "Grove SDA43 SCL44"},
+    {&Wire1, PIN_GROVE_B, PIN_GROVE_A, "Grove SDA44 SCL43"},
+    {&Wire, PIN_I2C_SDA, PIN_I2C_SCL, "board I2C 18/8"}};
+  for (auto &b : buses) {
+    if (b.bus == &Wire1) {
+      Wire1.end();
+      Wire1.begin(b.sda, b.scl, 100000);
+    }
+    auto *candidate = new Adafruit_PN532(255, 255, b.bus); // no IRQ, no reset line
+    if (!candidate->begin()) { delete candidate; continue; }
+    uint32_t ver = candidate->getFirmwareVersion();
+    if (ver == 0) { delete candidate; continue; }
+    nfc = candidate;
+    readerBus = b.name;
+    readerOk = true;
+    Serial.printf("PN5%02lX firmware %lu.%lu %s\n", (ver >> 24) & 0xFF, (ver >> 16) & 0xFF,
+                  (ver >> 8) & 0xFF, b.name);
+    nfc->SAMConfig();
+    break;
+  }
+  if (!readerOk) {
+    Serial.println("PN532 not answering: check I2C switch (channel 1 ON, channel 2 OFF), SDA/SCL, 3V3, GND");
   }
   show(readerOk ? "Hold a card to the reader" : "Check wiring", readerOk ? TFT_GREEN : TFT_RED);
 }
@@ -150,7 +171,7 @@ void loop() {
     uint8_t uid[7];
     uint8_t len = 0;
     // Short timeout so the buttons stay responsive.
-    if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &len, 100)) {
+    if (nfc->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &len, 100)) {
       char buf[sizeof(lastUid)];
       char *p = buf;
       for (uint8_t i = 0; i < len && i < 7; i++) p += sprintf(p, i ? ":%02X" : "%02X", uid[i]);
