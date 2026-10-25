@@ -8,6 +8,27 @@ the "PLC #4 Case Layout" page, version `1792960451-5dfc`. **Inference** marks a 
 source states. **NOT DETERMINABLE** marks something no source reached here settles. Nothing was
 measured.
 
+## Ruled by Alex, 2026-10-25
+
+In this session's dialog he chose **"External antenna (Recommended)"** over "Bench test V1 first"
+and "Reader in own box". The option was put to him as: *"Reverses the 10-14 'no antenna' choice.
+Move one 0 Ω resistor on the reader, fit a sealed ~150 mm patch on the loader facing the bag
+(RFMAX R9025, ~$171), run coax to the case. LCD stays facing you."* **That wording is this
+session's option text, not his sentence.** His act was choosing it.
+
+What follows from it (inference, for the V2 case and the BOM; nothing here is decided beyond the
+ruling):
+
+- The M7E's RF 0 Ω resistor moves to the u.FL position [2]. Hand rework.
+- A U.FL-to-SMA(F) bulkhead pigtail passes through the case wall, sealed. The 10-07 finding named
+  the Taoglas CAB.011 (`findings/2026-10-07-rfid-hardware-recommendation.md` §3.3); its sealing is
+  not rated. V2 needs a hole for it, which V1 does not have (artifact §08: "No antenna passes
+  through the wall").
+- The reader no longer has to sit on the lid behind a no-metal zone. Where it goes in V2 is open.
+- Coax: SMA(M)–SMA(M), the shortest that reaches. Length, routing past the loader pivots, and the
+  antenna's bracket on the loader are NOT DETERMINABLE here.
+- RF power is set low and tuned at the machine, so a second bag in view does not answer.
+
 ## 1. SparkFun's two pages disagree about the on-board antenna
 
 | Source | What it says about the on-board PCB antenna |

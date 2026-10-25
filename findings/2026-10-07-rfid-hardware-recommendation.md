@@ -28,6 +28,12 @@ measurement is the firmware build in §1.2.
 
 ## Current build (ruled 2026-10-14)
 
+> **Revised 2026-10-25: the external antenna is back.** Alex chose "External antenna
+> (Recommended)" (that session's option text, not his words) after SparkFun's hookup guide was
+> found to give the on-board antenna "only up to a few inches", not one to two feet, and the
+> printed V1 case was found to point the reader the same way as the LCD. See
+> `notes/2026-10-25-rfid-read-range-and-antennas.md`. The text below is kept as written.
+
 **Ruling.** In the coordinator's dialog, Alex chose **"Cheap tags, no antenna"** over "Cheap
 tags, keep antenna" (the recommended option), "As designed, HID tags" and "Integrated reader".
 The option was put to him as: *"$646. Reader's built-in antenna only, so the reader must sit
