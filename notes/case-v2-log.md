@@ -56,7 +56,7 @@ work), or **suggestion** (a session's inference, not his instruction). A suggest
   engineer"). If it stays on the tractor, it goes on the front guard, behind the loader and in front
   of the engine and intake. Source: `notes/2026-10-25-rfid-read-range-and-antennas.md` §6.
 
-### 6. Does the RFID read belong on the tractor at all? OPEN, and it gates inputs 3-5
+### 6. Does the RFID read belong on the tractor at all? ANSWERED: no
 
 - **Alex**, 2026-10-25, same dialog, his question and not a decision: the tag could be brought to a
   reader instead, maybe a handheld or an existing reader, with the PWA app tying tag to weight.
@@ -65,6 +65,14 @@ work), or **suggestion** (a session's inference, not his instruction). A suggest
   (inference). Settle this before the layout worker places them.
 - The background research is option 2 of `findings/2026-10-14-rfid-cots-alternatives.md` §2.
   `plc4-hardware-1025` is putting the question to him.
+
+- **Alex**, 2026-10-25, in `rfid-read-location-1025`'s dialog, picking none of the four routes
+  offered: *"Disconnect the reader from the plc4 hardware and create a pendant style reader"*.
+  Source: `notes/2026-10-25-rfid-read-location-ruling.md`.
+- So the V2 case does not carry the reader.
+- Entries 3-5 (external antenna, bulkhead hole, C610 on the front guard) were for a reader on the
+  tractor. They are **not retired**: whether any of them carries over to the pendant is his to say.
+- Not stated, so not decided: how the pendant connects, what is inside it, what powers it.
 
 ## When Alex says go
 
