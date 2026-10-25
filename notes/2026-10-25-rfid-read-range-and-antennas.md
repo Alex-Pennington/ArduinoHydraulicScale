@@ -197,3 +197,35 @@ Pigtail Cable Assembly," Rev 1.1. [Online]. Available: https://docs.rs-online.co
 
 [10] Pasternack, "LMR-195-UF Low Loss Flexible Outdoor Rated Coax Cable," datasheet. [Online].
 Available: https://www.pasternack.com/images/ProductPDF/LMR-195-UF.pdf
+
+## 5. Where the C610 mounts (working basis: bag on pallet forks)
+
+Alex answered "On pallet forks" to how a bag is carried at record time, then asked for the
+question again; the answer is used here as the working basis, not as settled. Everything in this
+section is **inference** unless cited. The M520's dimensions and the fork frame's shape were not
+read.
+
+**Mount the antenna with the loader, not the tractor.** The bag rides on the tines, so anything
+fixed to the loader's front end keeps the same distance and angle to it at every boom height.
+RF power is then tuned once.
+
+| Place | For | Against |
+|---|---|---|
+| **A. Loader side of the quick-attach**, above the fork carriage, facing forward along the tines | Stays on the loader when the forks come off; no connector rides the attachment | Must sit above the carriage's backrest so no steel is in front of the radome |
+| B. On the fork frame or backrest, facing forward | Closest to the bag; nothing in the way | Coax needs an SMA joint at the quick-attach, unplugged every time the forks come off |
+| C. On the tractor (grille guard, hood) | Coax never flexes | Distance to the bag changes with boom height and the tines may sit well over a metre out |
+
+**Recommended: A.** Steel *behind* a patch antenna is not a problem (it has its own ground plane);
+steel *in front* of it is.
+
+Coax route for A: from the antenna along the boom with the hydraulic lines, with a slack loop at
+the quick-attach pivot and another at the boom's tower pivot, every flexing bend at ≥ 51 mm
+radius [10], back to the case on the ROPS. Jumper length: measure that route and add slack; NOT
+DETERMINABLE here.
+
+**Setting it up at the machine:**
+
+1. Start at low RF power. Raise it in 0.5 dB steps [5] until a bag on the tines reads every time.
+2. With bags stacked nearby where they normally stand, check none of them reads. Back off if one
+   does.
+3. Keep people 21 cm or more from the antenna face [5].
