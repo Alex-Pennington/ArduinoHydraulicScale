@@ -8,7 +8,8 @@ Grove plug (S3 GPIO43/44); this plan moves it.
 Sources: LilyGO T-Deck repo, `images/c3_boot.jpg` (the header labels), `README.MD` Tips 3 (header
 order and how to flash the C3), `schematic/schematic.pdf` (C3 nets), and
 `examples/Keyboard_ESP32C3/Keyboard_ESP32C3.ino` (the stock keyboard firmware, MIT,
-© 2023 Shenzhen Xin Yuan Electronic Technology). **Inference** marks what no source states.
+© 2023 Shenzhen Xin Yuan Electronic Technology). **Inference** marks what no source states. Adversarially reviewed against those sources on
+2026-10-25; its corrections are folded in. Build core: espressif32 6.13.0, arduino-esp32 2.0.17.
 
 ## What the header is
 
@@ -21,8 +22,11 @@ order and how to flash the C3), `schematic/schematic.pdf` (C3 nets), and
 - GPIO20 and GPIO21 are not in the keyboard matrix (rows `{0,3,19,12,18,6,7}`, cols
   `{1,4,5,11,13}`, `Keyboard_ESP32C3.ino:33-36`), so UART0 is free for the reader once the
   firmware stops using it.
-- **The header's VCC voltage is NOT DETERMINABLE** from what was read. Inference: 3.3 V, the C3's
-  rail. The PN532 V3 takes 3.3–5 V (Elechouse V3 guide), so either works; measure before wiring.
+- **The header's VCC is the `V3V` net**, the same net as the C3's VDD3P3_CPU (schematic J1 pin 1,
+  per the review). Inference: 3.3 V. The PN532 V3 takes 3.3–5 V (Elechouse V3 guide). That rail's
+  current budget is NOT DETERMINABLE here.
+- **The header is 2.0 mm pitch** (schematic `6PIN_2.0`). Standard 2.54 mm Dupont leads may not
+  seat.
 
 ## Wiring
 
@@ -42,11 +46,17 @@ backlight and I2C commands `0x01`–`0x04` unchanged.
 
 - Add the PN532 on UART0, 115200 baud, pins RX 20 / TX 21.
 - **Take out every `Serial.print`.** The stock firmware prints debug text on `Serial` at 115200
-  (`:206-213`, `:239-268`, `:292-293`). Inference: on this board `Serial` is UART0, the header, so
-  that text would go straight into the reader.
-- Add one I2C command, proposed `0x05` ("tag"). The C3 answers the next read with a length byte
-  and up to 7 UID bytes, or `0x00` when there is no new tag. The key protocol does not change, so
-  the keyboard works as before.
+  (`:101`, `:106`, `:206-226`, `:239-268`, `:292-293`, `:367`, `:380-384`), some of it inside the
+  I2C callbacks. LilyGO builds it as "ESP32C3 Dev Module" with "USB CDC On Boot: Disabled"
+  (`images/c3.jpg`), so `Serial` is UART0, the header, and that text would go straight into the
+  reader. **Build the C3 image with no `ARDUINO_USB_CDC_ON_BOOT` flag**; the S3 spike's `=1` would
+  move `Serial` to USB.
+- **Poll the reader in `loop()` and cache the tag.** `readPassiveTargetID()` blocks for its timeout;
+  run from an I2C callback it would stall the bus and the matrix scan.
+- Add one I2C command, proposed `0x05` ("tag"). **One shot:** only the read straight after a
+  `0x05` write gets the tag reply (a length byte and up to 7 UID bytes, or `0x00` for no new tag),
+  and the flag clears on that read. Every other read stays the stock 1-byte key reply
+  (`Keyboard_ESP32C3.ino` `onRequest()`), so a latched tag can never be read as a keystroke.
 
 **S3 image (the spike).** Same screen and RECORD as now. It reads the tag from the C3 over I2C
 (`0x05`) instead of from `Serial1`. RECORD still sends nothing.
@@ -60,14 +70,18 @@ backlight and I2C commands `0x01`–`0x04` unchanged.
 - **Saga has no free adapter.** Its only USB serial device today is `usb-1a86_USB_Single_Serial_…`,
   which belongs to other work and is not touched. A 3.3 V USB-TTL adapter is needed, plugged into
   Saga.
-- **Undo:** LilyGO ships the stock keyboard image, `firmware/T-Keyboard_Keyboard_ESP32C3_250620.bin`.
-  Flashing it back restores the keyboard.
+- **Never connect the adapter's VCC while the T-Deck is powered**: it is the same `V3V` net. Use a
+  3.3 V adapter.
+- **Undo:** LilyGO ships the stock keyboard image, `firmware/T-Keyboard_Keyboard_ESP32C3_250620.bin`
+  (4,128,768 bytes). It is a merged image (bootloader, partitions, app), so it is written at
+  **offset 0x0**, chip ESP32-C3. Written anywhere else it would leave the keyboard dead.
 
 ## Risks (inference)
 
-- At reset the C3's ROM prints its boot log on U0TXD, so the PN532 sees noise on its RX.
-  `Adafruit_PN532::begin()` flushes the port and wakes the chip (library 1.3.4,
-  `Adafruit_PN532.cpp:162-173`). Expected harmless; not tested.
+- At reset the C3's ROM prints its boot log on U0TXD, so the PN532 sees noise on its RX. It cannot
+  be turned off without eFuse changes. `Adafruit_PN532::begin()` flushes only the C3's own receive
+  buffer before waking the chip (library 1.3.4, `Adafruit_PN532.cpp:162-173`); whether the noise
+  upsets the PN532's parser is UNVERIFIED until tested.
 - A bad C3 image leaves the keyboard dead until it is reflashed. The trackball still gives RECORD.
 - The UHF reader that comes later (the M5Stack U107 / JRD-4035 is the candidate) is also a UART
   part at 115200, so this wiring carries over, but its draw (about 180 mA, more at peak) and its
