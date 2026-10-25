@@ -94,6 +94,67 @@ $149, plus $57 for 12 ft of coax; Vulcan S9025PL, 132 mm square, 100° beam.
 little: a second bag in view forces a multi-tag refusal. RF power is set in 0.5 dB steps and
 would be turned down at the machine.
 
+## 4. Antenna choice, and the feed from the reader to it
+
+Alex asked for both on 2026-10-25, after the ruling above.
+
+### 4.1 Antennas compared
+
+| | RFMAX R9025-LPF-SSF [3] | Vulcan RFID C610 [6] | Vulcan RFID C912 [7], **unverified** |
+|---|---|---|---|
+| Size | 150 × 149.4 × 14.5 mm, 0.23 kg | 250 × 250 × 20 mm, 0.69 kg | not read |
+| Gain | 5 dBic typ | 6 dBiC | 9.4 dBiC (retailer page) |
+| Beam (3 dB) | 105° both planes | 70° both planes | "narrow" (datasheet excerpt) |
+| Front-to-back | 10 dB | 20 dB | "excellent" (datasheet excerpt) |
+| Polarisation | RHCP | circular | circular |
+| Connector | SMA female, side | SMA female, waterproof | not read |
+| Sealing | IP68 | IP67 | IP67 |
+| Operating temp | −30 to +65 °C | −40 to +70 °C | not read |
+| Mount | 100 mm VESA holes | 100 × 100 mm M4 VESA studs | 100 × 100 mm M6 VESA studs |
+| Price | $170.67 [4] | $149.00 read 2026-10-07; a search snippet on 2026-10-25 showed $129.00, page not readable | $172.00 (retailer page, not re-read) |
+
+C610 figures are from `findings/2026-10-07-rfid-hardware-recommendation.md` §3.1, read from its
+datasheet then; they were not re-read today.
+
+**Inference, for choosing:**
+
+- **Too much range is the risk, not too little.** A second bag in view forces a multi-tag refusal
+  (`notes/rfid-inventory-discussion.md`, "Several tags"). The C610's 70° beam and 20 dB
+  front-to-back read less of what is beside and behind it than the R9025's 105° and 10 dB.
+- **A 70° beam is wide enough at this distance.** Its 3 dB footprint is about 1.4 × the distance
+  across: about 0.7 m wide at 0.5 m, 1.4 m at 1 m. One bag fits.
+- **The C912 column is unverified.** Its datasheet could not be read, and search listings disagree
+  with each other (5.5 vs 9.4 dBic, LHCP, differing beams and sizes). It is set aside for that
+  reason, not on its figures.
+- **The R9025's case is size and weight.** It is about a third of the C610's area and a third of
+  its weight, which matters on a loader if the place it must go is tight. Its −30 °C floor is
+  10 °C short of the C610's.
+- **Licensing.** All three are circular patches. By the guide's rule (§ above, [5] §5.8) the R9025
+  and C610 sit at or under the listed MTI-242043 (up to 9.5 dBiC), the C912 just under it. The
+  FCC filing itself was not read.
+
+### 4.2 The feed: reader → wall → coax → antenna
+
+| Link | Part | Why |
+|---|---|---|
+| Reader U.FL to the case wall | **Siretta ASMG010XD113S11** or **ASMG015XD113S11**: I-PEX MHF I (U.FL-compatible) to SMA female rear-mount bulkhead, O-ring, IP67, 1.13 mm coax, 100 or 150 mm [8] | The 10-07 finding's Taoglas CAB.011 states no sealing; this one states IP67 and comes with its O-ring. **Order the `XD` (standard SMA), not the `YD` (reverse-polarity) [9]**: the antennas above are plain SMA |
+| Through the wall | Hole **Ø6.5 mm min with a 6 mm flat** (D-hole), 1/4-36 UNS-2A thread, 8 mm hex nut [8] | From the XD drawing. (The YD drawing gives a 6.1 mm flat [9].) |
+| Wall to antenna | **SMA male to SMA male, Times LMR-195-UF** (ultra-flex) jumper, shortest that reaches | 0.43 dB/m at 900 MHz; repeated bend radius 51 mm, install 12.7 mm; −40 to +85 °C; TPE jacket, outdoor rated [10] |
+
+Losses (inference, arithmetic on the datasheets): the 1.13 mm pigtail is 2.2 dB/m at 1 GHz [9],
+about 0.3 dB for 150 mm; 3 m of LMR-195-UF is about 1.3 dB. Neither matters at a metre, where RF
+power is being turned down anyway.
+
+**Fitting notes (inference):**
+
+- Put the bulkhead in the **bottom wall** with the glands, so water runs off the joint rather
+  than into it. Wrap the mated SMA joint at the antenna in self-amalgamating tape.
+- Tie the 1.13 mm pigtail to the board near the U.FL so vibration never pulls on the U.FL.
+- Across the boom pivot, run the LMR-195-UF along the hydraulic hoses with a slack loop, and keep
+  every bend that flexes at 51 mm radius or more [10]. No flex-cycle rating was found.
+- The reader no longer needs the lid. In V2 it can sit near the bulkhead so the 100–150 mm
+  pigtail reaches.
+
 ## References
 
 [1] SparkFun Electronics, "SparkFun Simultaneous RFID Reader – M7E Hecto, WRL-24738," product
@@ -110,3 +171,19 @@ https://www.barcodefactory.com/rfmax/antennas/r9025/r9025-lpf-ssf
 
 [5] JADAK (Novanta), "ThingMagic M7E-HECTO User Guide," Rev. 1.2, §5.1.2, §5.7, §5.8, Table 5.
 [Online]. Available: https://cdn.sparkfun.com/assets/8/5/2/4/d/M7E_HECTO_User_Guide.pdf
+
+[6] Vulcan RFID, "C610 Outdoor RFID Antenna, VUL-C610-FCC," product spec sheet v5. [Online].
+Available: https://rfid.atlasrfidstore.com/hubfs/1_Tech_Spec_Sheets/Vulcan%20RFID%E2%84%A2/Vulcan%20RFIDTM%20C610%20Antenna%20Datasheet%20v5.pdf
+
+[7] atlasRFIDstore, "Vulcan RFID C912 Outdoor RFID Antenna (FCC)," product page and price, and
+"Vulcan RFID C912 Antenna Datasheet v6." [Online]. Available:
+https://www.atlasrfidstore.com/vulcan-rfid-c912-outdoor-rfid-antenna-fcc/
+
+[8] Siretta, "ASMGxxxXD113S11, I-PEX MHF I to SMA Female Rear Mount Bulkhead with O-ring,"
+datasheet. [Online]. Available via https://docs.rs-online.com/d3d1/A700000015827780.pdf
+
+[9] Siretta, "ASMGxxxYD113S11, I-PEX MHF I to RP-SMA Female Rear Mount Bulkhead with O-ring
+Pigtail Cable Assembly," Rev 1.1. [Online]. Available: https://docs.rs-online.com/1a6f/A700000015827842.pdf
+
+[10] Pasternack, "LMR-195-UF Low Loss Flexible Outdoor Rated Coax Cable," datasheet. [Online].
+Available: https://www.pasternack.com/images/ProductPDF/LMR-195-UF.pdf
