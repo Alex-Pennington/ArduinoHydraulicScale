@@ -95,3 +95,16 @@ He chose **"Not decided"**: *"Design so either works."*
 How the pendant reaches the board (WiFi to the broker, WiFi to the app server, LoRa, or other),
 which reader goes inside, how it is powered and charged, read range, and how tally and moisture
 content are chosen on it.
+
+### After the T-Deck test (2026-10-26)
+
+The test passed on hardware (`spikes/tdeck-nfc/README.md`, *Result on hardware*): PN532 firmware
+1.6, card `64:72:07:CA` read, RECORD fired and sent nothing. Then he chose:
+
+- **"In ~/mesh"** for where the real pendant firmware lives. That repo is the mesh coordinator's;
+  nothing in it is edited from here. What the work would need is in
+  `notes/2026-10-26-rfid-pendant-handoff.md`.
+- **"Leave it"** for the T-Deck's 16 MB Meshtastic backup: it stays in this worktree's
+  `spikes/tdeck-nfc/backup/`, not in git, and goes when the worktree is removed.
+- **"Keep the test"** on the T-Deck for now.
+- **"Not yet"** for a UHF reader: stay on NFC for now.
