@@ -50,4 +50,29 @@ TMPDIR=$CLAUDE_JOB_DIR/tmp ~/.platformio/penv/bin/pio run
 The T-Deck enumerates as Espressif USB JTAG/serial (303a:1001, LilyGO `boards/T-Deck.json`).
 Confirm `/dev/serial/by-id` names it before uploading; never upload to anything else.
 Built 2026-10-25 on Saga with espressif32 6.13.0 (arduino-esp32 2.0.17): RAM 6.4 %, flash 5.8 %.
-Not run on hardware yet.
+
+## Result on hardware (2026-10-26, Saga)
+
+Flashed be62ec4's build to Alex's original T-Deck (MAC 30:30:F9:6E:DB:D4), PN532 V3 on the Grove
+plug in HSU mode. Serial log after a normal power-on:
+
+```
+PN532 firmware 1.6
+SCAN 64:72:07:CA
+RECORD (not sent) tag=64:72:07:CA
+```
+
+So the T-Deck talks to the reader on GPIO43/44, a 13.56 MHz card reads, and RECORD fires on the
+pendant side. The one boot error, `__pinMode(): Invalid pin selected`, is the library being given
+no reset pin (255), as intended.
+
+**Flashing this T-Deck:** its download mode took several tries (power off, trackball held, power
+on). Most tries came up as Espressif's USB JTAG/serial unit but every write timed out, which
+matches LilyGO T-Deck issue #62 (GPIO46 held high by the keyboard ESP32-C3). A reset from esptool
+returns it to download mode; a power cycle with the switch starts the app.
+
+**Backup of what was on it before** (Meshtastic, DeviceUI, its settings):
+`backup/tdeck-3030F96EDBD4-full-20261026.bin`, 16,777,216 bytes, SHA-256
+`ff08d8df0cf90ebbef642f148f4b809014b71d169896c11caf5a1df6fe0c59b1`, verified against the chip
+(`verify_flash`, digest matched) before anything was written. Not in git (`.gitignore`). Restore
+by writing it whole at `0x0` in download mode.
