@@ -370,6 +370,7 @@ struct PanelTally {
   bool delivery;
   bool selected;
   bool haveN;
+  bool named;                    // label came from customer_name, which outranks `label`
   int32_t n;
 };
 
@@ -475,7 +476,18 @@ inline void panelStateOn(void *ctx, const JsonPath &p, JsonEv ev, const char *v)
     if (p.depth != 4) return;
     PanelTally &t = s.t[i];
     if (p.keyIs(3, "tally") && ev == JSON_STR) { strncpy(t.id, v, sizeof(t.id) - 1); t.id[sizeof(t.id) - 1] = '\0'; }
-    if (p.keyIs(3, "label") && ev == JSON_STR) panelCopyLabel(t.label, v, sizeof(t.label));
+    // The panel's label for a delivery is "DELIVERY <picking_name> <customer_name>"
+    // (simple_tally.py:162-169), which cut to a 20-column row reads "DELIVERY WH/O" for
+    // every one. The open tally carries its delivery fields beside the label, so the
+    // customer is shown where there is one, else the label without its "DELIVERY ".
+    if (p.keyIs(3, "label") && ev == JSON_STR && !t.named) {
+      const char *l = (strncmp(v, "DELIVERY ", 9) == 0 && v[9]) ? v + 9 : v;
+      panelCopyLabel(t.label, l, sizeof(t.label));
+    }
+    if (p.keyIs(3, "customer_name") && ev == JSON_STR && v[0]) {
+      panelCopyLabel(t.label, v, sizeof(t.label));
+      t.named = true;
+    }
     if (p.keyIs(3, "attr") && ev == JSON_STR) t.delivery = strcmp(v, "delivery") == 0;
     if (p.keyIs(3, "selected")) t.selected = (ev == JSON_TRUE);
     if (p.keyIs(3, "n") && ev == JSON_NUM) {

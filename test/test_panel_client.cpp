@@ -194,6 +194,17 @@ int main() {
     check("last_record age 50.3 s", s.lastHaveAge && s.lastAgeTenths == 503);
     check("last_record not emptied, 1834 lb", s.lastHaveEmptied && !s.lastEmptied && s.lastHaveW && s.lastW == 1834);
 
+    PanelState dl; memset(&dl, 0, sizeof(dl));
+    j.reset(panelStateOn, &dl);
+    const char *lab = "{\"simple_tally\":{\"open\":[{\"attr\":\"delivery\",\"label\":\"DELIVERY WH/OUT/04411 Smith\","
+                      "\"customer_name\":\"Smith\",\"picking_name\":\"WH/OUT/04411\"},"
+                      "{\"customer_name\":\"Jones\",\"attr\":\"delivery\",\"label\":\"DELIVERY WH/OUT/04415 Jones\"},"
+                      "{\"attr\":\"delivery\",\"label\":\"DELIVERY WH/OUT/04416\"}]}}";
+    for (const char *p = lab; *p; p++) j.feed(*p);
+    check_str("delivery: the customer, not the panel's long label", dl.t[0].label, "SMITH");
+    check_str("customer_name before label: still the customer", dl.t[1].label, "JONES");
+    check_str("no customer: the label without DELIVERY", dl.t[2].label, "WH/OUT/04416");
+
     PanelState r; memset(&r, 0, sizeof(r));
     j.reset(panelStateOn, &r);
     const char *rf = "{\"rfid\":{\"tallies\":[],\"enabled\":true},\"simple_tally\":null}";
