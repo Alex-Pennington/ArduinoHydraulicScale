@@ -23,6 +23,29 @@
 #include "j1939_can.h"   // issue #24: the tractor's J1939 bus, decoded in a timer ISR
 
 // ---------------------------------------------------------------------------
+// The on-board NFC reader, lid buttons, menus and panel client.
+// docs/design/2026-10-29-onboard-rfid-buttons-menus.md, FW-1 to FW-8.
+//
+// The panel's URL, PLC4_PANEL_URL, is defined ONCE, in include/panel_client.h: the
+// pendant's default PLC4_PWA_URL (mesh Plc4Operator.h:32-34), the same host as the broker.
+// A build overrides it with -DPLC4_PANEL_URL=... .
+// Build order, design §4.2: 0 flashes part (a) only -- HOME, TAG and the result screens,
+// OK and BACK, one POST /api/cmd per RECORD. 1 adds part (b), the rest of the pendant set.
+#ifndef PLC4_HMI_FULL
+#define PLC4_HMI_FULL 1
+#endif
+// FW-8, moisture entry on TAG (part (b) only). 0 leaves it out.
+#ifndef PLC4_HMI_MC
+#define PLC4_HMI_MC 1
+#endif
+#include "pn532.h"         // FW-1
+#include "hmi_buttons.h"   // FW-2
+#include "cmd_id.h"        // FW-5
+#include "mc_value.h"      // FW-8
+#include "panel_client.h"  // FW-4
+#include "hmi_menu.h"      // FW-3, FW-6
+
+// ---------------------------------------------------------------------------
 // Console: the HC-05 on Serial1 (D0/D1) is the field interface, but the board
 // also has a USB port and a technician with a laptop will plug into it. Mirror
 // output to both and accept commands from either.
@@ -100,18 +123,106 @@ String inputString = "";         // a String to hold incoming data
 bool stringComplete = false;  // whether the string is complete
 
 // ---------------------------------------------------------------------------
-// HMI. A 20x4 LCD behind a clear coverplate, and nothing else.
+// HMI. A 20x4 LCD behind a clear coverplate, four sealed buttons and an NFC
+// reader on the lid.
 //
-// The five discrete buttons are GONE -- the outdoor enclosure needs no extra
-// holes for them. Every operator action now arrives over MQTT from the phone
-// app and is executed through the console's own command handler. The LCD costs
-// no hole, so it stays: one always-on readout, with no screens, no menu and no
-// deferred feedback. The operator's answer to an action comes back as an ack on
-// plc4/jd5055e/ack, not as a toast on a display they may not be standing at.
+// The old five-button keypad is gone; Alex's 2026-10-29 instruction brought back
+// four IP65 buttons (BACK UP DOWN OK on D2-D5) and a PN532 on the header I2C bus,
+// so an operator at the tractor can scan a tag and record (design §1, §3). The
+// phone app's MQTT commands are unchanged and still run through the console's
+// own command handler. The buttons do NOT publish to the board: like the
+// pendant, they ask the panel (POST /api/cmd), and the panel publishes the
+// command the board then runs through that same handler (design §5.1).
 //
 // The serial and Bluetooth console keeps every verb it had. It is the service
 // and recovery path, and it is the only one that works with no broker in reach.
 // ---------------------------------------------------------------------------
+// BACK, UP, DOWN, OK, design §3.4. Each has 4.7 k to +5 V and 100 nF to GND at the
+// board end. INPUT_PULLUP as well, deliberately: the design says not to RELY on the
+// weak internal pull-up, and nothing here does -- the 4.7 k dominates it. It is set so
+// that a board flashed before the buttons are wired reads four released buttons
+// instead of four floating pins, which on part (b) could walk a phantom press into
+// MENU -> TARE -> OK.
+const uint8_t BTN_PINS[BTN_COUNT] = {2, 3, 4, 5};
+ButtonPad buttons;
+FspTimer btnTimer;
+bool btnTimerOn = false;
+unsigned long lastBtnPollMs = 0;
+
+static uint8_t readButtons() {
+  uint8_t m = 0;
+  for (uint8_t i = 0; i < BTN_COUNT; i++)
+    if (digitalRead(BTN_PINS[i]) == LOW) m |= (uint8_t)(1u << i);   // NO contact to GND: pressed is low
+  return m;
+}
+
+// 200 Hz, design §3.5: sampled in a timer so a press made while loop() is inside a
+// 23 s WiFi reconnect is still caught and queued.
+static void btnSampleISR(timer_callback_args_t *) {
+  buttons.sample(readButtons(), millis());
+}
+
+// The PN532 on Wire (A4/A5) at 0x24, design §2.2. One I2C transaction per driver step.
+// Wire's own transaction timeout is 100 ms (Wire.h:36 WIRE_DEFAULT_TIMEOUT_US), and
+// Wire.begin() enables the RA4M1 pull-ups on SDA/SCL (Wire.cpp:255-256), so with no
+// reader fitted a probe NACKs at once rather than waiting.
+struct NfcWireBus {
+  bool write(const uint8_t *d, size_t n) {
+    Wire.beginTransmission(PN532_I2C_ADDR);
+    Wire.write(d, n);
+    return Wire.endTransmission() == 0;
+  }
+  bool read(uint8_t *d, size_t n) {
+    if (Wire.requestFrom(PN532_I2C_ADDR, n) != n) return false;
+    for (size_t i = 0; i < n; i++) d[i] = (uint8_t)Wire.read();
+    return true;
+  }
+};
+NfcWireBus nfcBus;
+Pn532Driver<NfcWireBus> nfc(nfcBus);
+TagTracker tagTracker;
+char nfcLastTag[TAG_HEX_LEN] = "";
+
+// The panel client's own socket, beside the MQTT one (design §5.1: a second socket on the
+// WiFi coprocessor; whether WiFiS3 holds both is for a bench run to show). NOTE its
+// constructor heap-allocates a 1024-byte receive FIFO (WiFiClient.h:253 RX_BUFFER_DIM),
+// which the build's global-RAM figure does not count.
+WiFiClient panelWifi;
+struct PanelTransport {
+  int connect(const char *h, uint16_t p) { return panelWifi.connect(h, p); }
+  size_t write(const uint8_t *b, size_t n) { return panelWifi.write(b, n); }
+  int read(uint8_t *b, size_t n) { return panelWifi.read(b, n); }
+  void stop() { panelWifi.stop(); }
+};
+PanelTransport panelTransport;
+PanelHttp<PanelTransport> panel(panelTransport);
+uint16_t panelSeq = 0;   // the menu's sequence number for the request in flight
+
+// FW-5. The session counter's slot: absolute EEPROM address 1024, the first byte of the
+// data flash's SECOND 1 KB erase block (pins_arduino.h:176-177, FLASH_TOTAL_SIZE 0x2000,
+// FLASH_BLOCK_SIZE 0x400). The calibration and tally block is addr(10)..+233, all in the
+// first erase block (the EEPROM map below). EEPROM.put() erases the whole block it writes
+// (see the note above tallySaveIndex()), so a separate block keeps this once-per-boot
+// write from ever erasing and rewriting the block that holds the calibration and the
+// operator's tally. The design left the slot to this change (§6 FW-5).
+const int CMD_ID_EEPROM_ADDR = 1024;
+static bool cmdIdLoad(CmdIdStore &o) { EEPROM.get(CMD_ID_EEPROM_ADDR, o); return true; }
+static void cmdIdSave(const CmdIdStore &i) { EEPROM.put(CMD_ID_EEPROM_ADDR, i); }
+CmdIdMinter cmdIds;
+HmiMenu hmi;
+
+// A verb the menu asked to run locally (TARE with no panel, design §5.5), through the same
+// handler as the console. The console's half-typed line is parked here meanwhile, as the
+// MQTT path parks it in consoleSaved.
+bool localCmdPending = false;
+char localSaved[65] = "";
+
+// What setup() could and could not allocate (review item 4). The RA4M1 has 32 interrupt
+// slots and the build is near them, so a timer or the Wire controller can fail to get one.
+// Each failure is printed at boot and published as `hw_fail` on status.
+bool hbTimerOn = false;   // the heartbeat watchdog refresher
+bool wireUp    = false;   // Wire.begin() has run (after the heartbeat and CAN timers)
+bool wireOk    = false;   // ...and the controller looks initialised, see wireLooksInitialised()
 // Set by a verb that REFUSED, cleared immediately before each command runs.
 // The MQTT ack cannot read the outcome at the point the verb is queued -- the
 // handler runs later in the same loop pass -- so this is how the verdict gets
@@ -193,6 +304,8 @@ const uint32_t TALLY_SIGNATURE  = 0x544C5934;   // 'TLY4'
 // EEPROM map, all relative to addr(10):
 //   +0  calFactor   +4  tareValue   +8  alpha   +12 EEPROM_SIGNATURE
 //   +16 TALLY_SIGNATURE   +20 rTindex   +24 rT[rTsize]
+// and, ABSOLUTE and in the next erase block: 1024 the command-id session record
+// (CMD_ID_EEPROM_ADDR, include/cmd_id.h).
 bool calibrationDefaulted = false;
 
 const uint32_t WDT_TIMEOUT_MS            = 5000;   // ceiling on this part is 5592
@@ -255,6 +368,8 @@ const unsigned long INA_POLL_MS = 2000;
 int wifiIndex = 0;
 
 const char broker[] = SECRET_MQTT_BROKER;   // LAN form: 192.168.10.99
+// The panel the lid buttons ask, PLC4_PANEL_URL, is defined in include/panel_client.h.
+// Same host as the broker, port 8081.
 const int  port     = 1883;
 const char mqttUser[] = SECRET_MQTT_USER;
 const char mqttPass[] = SECRET_MQTT_PASS;
@@ -471,9 +586,13 @@ static bool publishWeight(int32_t w, uint32_t ageMs, bool backlog) {
 // boot, and a board in a reset loop would then wear the flash out while failing.
 // Uptime plus the hardware reset cause tell the same story without that risk.
 // ---------------------------------------------------------------------------
+unsigned long statusTooLong = 0;   // status payloads that did not fit even without optional keys
+
 static void publishStatus(unsigned long now) {
   lastStatusMs = now;
-  char payload[448];
+  // 448 -> 512 for `nfc`, `nfc_fw` and `hw_fail`. Sized, streamed beginMessage below, so the
+  // only limit is this buffer.
+  char payload[512];
   // `stale` is a bare JSON boolean, not a string, and sits right after
   // `sensor` -- same form and placement as the telemetry payload, so the
   // two agree. This message is RETAINED: a subscriber that connects after
@@ -483,6 +602,13 @@ static void publishStatus(unsigned long now) {
   // failed, never 0 -- a real zero volts and an unread sensor are different
   // facts, the same rule `psi` already follows.
   char vbusField[14], shuntField[14];
+  // FW-7: the reader, "ok" with its firmware ("1.6") or "none" with null. A silent reader
+  // is not a scale fault and never reaches the fault row (design §4.12).
+  char nfcFwField[12];
+  if (nfc.health() == NFC_OK)
+    snprintf(nfcFwField, sizeof(nfcFwField), "\"%u.%u\"", (unsigned)nfc.fwVer(), (unsigned)nfc.fwRev());
+  else
+    snprintf(nfcFwField, sizeof(nfcFwField), "null");
   if (inaOk) {
     snprintf(vbusField,  sizeof(vbusField),  "%.3f", (double)inaBusVolts);
     snprintf(shuntField, sizeof(shuntField), "%.3f", (double)inaShuntMv);
@@ -491,11 +617,36 @@ static void publishStatus(unsigned long now) {
     snprintf(shuntField, sizeof(shuntField), "null");
   }
 
-  snprintf(payload, sizeof(payload),
+  // `hw_fail` (review item 4): what setup() could not allocate, comma-separated, and the
+  // key is present only when something failed.
+  char hwFail[48] = "";
+  {
+    size_t k = 0;
+    const char *parts[4] = {hbTimerOn ? nullptr : "hb_timer", canTimerOn ? nullptr : "can_timer",
+                            btnTimerOn ? nullptr : "btn_timer", (wireUp && !wireOk) ? "wire" : nullptr};
+    for (const char *p : parts) {
+      if (!p) continue;
+      const int w = snprintf(hwFail + k, sizeof(hwFail) - k, "%s%s", k ? "," : "", p);
+      if (w > 0 && (size_t)w < sizeof(hwFail) - k) k += (size_t)w;
+    }
+  }
+  char opt[96] = "";
+  snprintf(opt, sizeof(opt), "\"nfc\":\"%s\",\"nfc_fw\":%s,%s%s%s",
+           nfc.health() == NFC_OK ? "ok" : "none", nfcFwField,
+           hwFail[0] ? "\"hw_fail\":\"" : "", hwFail, hwFail[0] ? "\"," : "");
+
+  // A truncated status is invalid JSON and every consumer drops the whole retained message
+  // -- the defect the sized beginMessage below was added for. So the return is CHECKED
+  // (review item 5): if the payload does not fit, it is built again without the optional
+  // keys (`nfc`, `nfc_fw`, `hw_fail`), and if even that does not fit nothing is published.
+  int pn = -1;
+  for (int pass = 0; pass < 2; pass++) {
+    pn = snprintf(payload, sizeof(payload),
     "{\"up\":true,\"cal\":\"%s\",\"sensor\":\"%s\",\"stale\":%s,\"tare\":%d,\"cf\":%.5f,"
     "\"n\":%d,\"total\":%ld,\"q\":%d,\"dropped\":%lu,\"uptime_s\":%lu,\"rssi\":%d,"
     "\"overrange\":%lu,\"overrange_max\":%d,\"underrange\":%lu,\"i2c_err\":%lu,"
     "\"vbus\":%s,\"shunt_mv\":%s,\"ina_err\":%lu,"
+    "%s"
     "\"build\":\"%s\",\"reset\":\"%s\",\"id\":\"%s\"}",
     calibrationDefaulted ? "DEFAULT" : "ok",
     sensorStateName(), readingFresh() ? "false" : "true", tareValue, calFactor,
@@ -504,7 +655,11 @@ static void publishStatus(unsigned long now) {
     overRangeCount, overRangeMaxCounts, underRangeCount,
     (unsigned long)mcpFailCount(),
     vbusField, shuntField, (unsigned long)inaFailCount(),
+    pass == 0 ? opt : "",
     BUILD_PROVENANCE, resetCause, CLIENT_ID);
+    if (pn > 0 && (size_t)pn < sizeof(payload)) break;
+  }
+  if (pn <= 0 || (size_t)pn >= sizeof(payload)) { statusTooLong++; return; }
   char topic[64];
   if (!buildTopic("status", topic, sizeof(topic))) return;
   if (!mqttClient.beginMessage(topic, (unsigned long)strlen(payload), true, 1)) return;   // retained, QoS 1, STREAMED not buffered
@@ -1149,6 +1304,12 @@ static void cmdRunCapture(int slot) {
     cmdDuplicate++;
     cmdAck(cmdRing[seen].id, cmdRing[seen].verb, cmdRing[seen].ok,
            cmdRing[seen].detail, true, false);
+    // A resend of an id the board minted (NO ANSWER -> OK, design §4.5) is answered here
+    // from the ring, not re-run. The screen takes the stored verdict. The weight shown is
+    // the tally's last entry, which is the replayed record's unless more were taken since.
+    if (cmdIdIsBoards(cmdRing[seen].id))
+      hmi.onVerdict(cmdRing[seen].id, cmdRing[seen].ok, cmdRing[seen].detail,
+                    rTindex > 0 ? (long)rT[rTindex - 1] : 0L, hmiContext());
     return;
   }
 
@@ -1403,7 +1564,8 @@ static void netPoll() {
 // an address the driver does not expect, or a device answering but misbehaving.
 // The MCP3421 in particular ships as A0-A7 with addresses 0x68-0x6F, so a part
 // from a different reel answers at an address this firmware never asks about.
-// Expected here: 0x27 (LCD2004) and 0x68 (MCP3421A0).
+// Expected here: 0x27 (LCD2004) and 0x68 (MCP3421A0) behind the mux on Wire1, and
+// 0x24 (PN532) alone on Wire, the header bus (FW-7).
 // The mux address, the channel map and the select helper live in
 // include/i2c_mux.h, beside the drivers that depend on them.
 static int i2cScanRange(uint8_t skip) {
@@ -1453,6 +1615,43 @@ static void i2cScan() {
   // longer describes the hardware. Clear it or the next select is skipped as a
   // no-op and that transfer lands on channel 7, whatever it was meant for.
   i2cMuxInvalidate();
+
+  i2cScanWire();
+}
+
+// Whether Wire's controller initialised. TwoWire::init_ok is private, and when it is false
+// write_to() returns END_TX_OK for ANY address without touching the bus (Wire.cpp:497-530,
+// rv is initialised to END_TX_OK and only set inside `if (init_ok)`). Nothing on this bus
+// answers at both 0x08 (reserved) and 0x77, so both "answering" means the controller is not
+// running -- an IRQ slot it did not get, say. Inference from the core's source, not measured.
+static bool wireLooksInitialised() {
+  Wire.beginTransmission(0x08);
+  const bool a = Wire.endTransmission() == 0;
+  Wire.beginTransmission(0x77);
+  const bool b = Wire.endTransmission() == 0;
+  return !(a && b);
+}
+
+// The header bus, Wire (A4/A5): the PN532 at 0x24 and nothing else (design §2.2, FW-7).
+// Only once setup() has started it, after the heartbeat and CAN timers. A probe can land
+// between a command and its answer, so the reader driver starts over afterwards.
+static void i2cScanWire() {
+  if (!wireUp) return;
+  if (!wireOk) { Console.println("i2c Wire: NOT INITIALISED (no IRQ slot?)"); return; }
+  Console.print("i2c Wire:");
+  int hdr = 0;
+  for (uint8_t a = 0x08; a <= 0x77; a++) {
+    Wire.beginTransmission(a);
+    if (Wire.endTransmission() == 0) {
+      Console.print(" 0x");
+      if (a < 0x10) Console.print("0");
+      Console.print(a, HEX);
+      hdr++;
+    }
+  }
+  if (!hdr) Console.print(" NOTHING FOUND");
+  Console.println();
+  nfc.restart(millis());
 }
 
 void setup() {
@@ -1566,7 +1765,7 @@ void setup() {
   // but it is back to resetting during network calls — so say so rather than fail quiet.
   uint8_t timerType;
   int8_t timerCh = FspTimer::get_available_timer(timerType);
-  bool hb = false;
+  bool hb = false;   // copied to hbTimerOn below
   if (timerCh >= 0) {
     hb = wdtTimer.begin(TIMER_MODE_PERIODIC, timerType, (uint8_t)timerCh,
                         2.0f, 0.0f, wdtHeartbeatISR)
@@ -1576,6 +1775,7 @@ void setup() {
   }
   Console.print("heartbeat wdt = ");
   Console.println(hb ? "on" : "UNAVAILABLE - resets during network calls");
+  hbTimerOn = hb;
 
   // CAN AFTER the heartbeat timer, so the watchdog gets the first free timer and
   // CAN can never be the reason it has none. Filter OFF at boot: it has never run
@@ -1585,6 +1785,45 @@ void setup() {
   Console.print(canUp ? "up 250k D10/D13" : "BEGIN FAILED");
   Console.print(", drain ");
   Console.println(canTimerOn ? "timer 200 Hz" : "loop (NO TIMER - frames lost during network calls)");
+
+  // FW-1: Wire, the reader's bus. Begun HERE, after the heartbeat and CAN timers, never in
+  // the boot i2cScan() above: Wire takes interrupt slots, and a shortage must never cost the
+  // watchdog its timer (review item 4).
+  Wire.begin();
+  wireUp = true;
+  wireOk = wireLooksInitialised();
+  i2cScanWire();
+  Console.print("nfc = PN532 on Wire 0x24");
+  Console.println(wireOk ? "" : " -- Wire NOT INITIALISED, reader off");
+
+  // FW-2: the lid buttons. Their timer comes AFTER the heartbeat's and CAN's, so neither
+  // can lose its timer to them. Whether a third is free is for the boot banner to say
+  // (design §3.5); the core has 8 GPT and 2 AGT channels (pins_arduino.h:146-149).
+  for (uint8_t i = 0; i < BTN_COUNT; i++) pinMode(BTN_PINS[i], INPUT_PULLUP);
+  {
+    uint8_t bt;
+    const int8_t bch = FspTimer::get_available_timer(bt);
+    if (bch >= 0) {
+      btnTimerOn = btnTimer.begin(TIMER_MODE_PERIODIC, bt, (uint8_t)bch, 200.0f, 0.0f, btnSampleISR)
+                   && btnTimer.setup_overflow_irq()
+                   && btnTimer.open()
+                   && btnTimer.start();
+    }
+  }
+  Console.print("buttons = D2-D5, ");
+  Console.println(btnTimerOn ? "timer 200 Hz" : "loop (NO TIMER - presses lost during network calls)");
+
+  // FW-4, FW-5, FW-3.
+  const bool urlOk = panel.setUrl(PLC4_PANEL_URL);
+  Console.print("panel = ");
+  Console.println(urlOk ? PLC4_PANEL_URL : "BAD PLC4_PANEL_URL - buttons cannot record");
+  cmdIds.load = cmdIdLoad;
+  cmdIds.save = cmdIdSave;
+  hmi.minter = &cmdIds;
+  hmi.full = (PLC4_HMI_FULL != 0);
+  hmi.mcFeature = (PLC4_HMI_MC != 0);
+  Console.print("hmi = ");
+  Console.println(hmi.full ? (hmi.mcFeature ? "full set + mc" : "full set") : "part (a): scan and record");
 
   // Seeds the freshness clock so the first READING_STALE_MS after boot is not
   // reported stale before any sample cycle has completed.
@@ -1660,17 +1899,32 @@ static void hmiRenderFaultRow() {
   // mcpFailCount() is a LIFETIME counter (include/mcp3421.h:24) that never
   // resets, so it sits LAST: a single transient I2C error at any point since
   // boot would otherwise latch "I2C ERR" over row 3 for the rest of the power
-  // cycle and hide everything above it. The KEY STUCK branch that used to rank
-  // above it left with the buttons.
+  // cycle and hide everything above it. KEY STUCK is back with the buttons and
+  // ranks where the old keypad's branch did, above I2C ERR (design §3.5): a
+  // button held 10 s is ignored until released, and this says why it is.
+  noInterrupts();
+  const bool stuck = buttons.keyStuck();
+  interrupts();
   if (!readingTrustworthy())         snprintf(l3, sizeof(l3), "%-20s", displayStateName());
   else if (calibrationDefaulted)     snprintf(l3, sizeof(l3), "%-20s", "CAL NOT SET!");
+  else if (stuck)                    snprintf(l3, sizeof(l3), "%-20s", "KEY STUCK");
   else if (mcpFailCount() > 0)       snprintf(l3, sizeof(l3), "I2C ERR %-12lu", (unsigned long)mcpFailCount());
   else                               snprintf(l3, sizeof(l3), "%-20s", "");
   lcdLine(3, l3);
 }
 
-static void hmiDrawHome() {
-  char l0[21], l1[21], l2[21];
+// Today's link words, shared by HOME's row 2 and the NO PANEL screen (design §4.5).
+// netState, NOT WiFi.status(): see the note in hmiDrawHome().
+static const char *linkText() {
+  if (netState == NET_ONLINE)  return "link mqtt up";
+  if (netState == NET_WIFI_UP) return "link wifi only";
+  return "link none";
+}
+
+// Row 0 is the weight row on EVERY screen, unchanged (design §4.1): the operator taring
+// or recording always sees the weight they act on.
+static void hmiDrawWeightRow() {
+  char l0[21];
   // Row 0: the weight, blanked when the loop is not measuring (DEAD,
   // FAULT_HIGH). Row 3 (hmiRenderFaultRow) names the fault on every screen,
   // but that does not make this guard unnecessary: without it, a frozen
@@ -1684,6 +1938,12 @@ static void hmiDrawHome() {
     snprintf(l0, sizeof(l0), "W %8d lb  n%-4d", outputValue, rTindex);
   else
     snprintf(l0, sizeof(l0), "%-20s", displayStateName());
+  lcdLine(0, l0);
+}
+
+static void hmiDrawHome() {
+  char l1[21], l2[21];
+  hmiDrawWeightRow();
 
   // Row 1: psi and mA, when the loop is actually measuring.
   if (readingTrustworthy())
@@ -1703,21 +1963,126 @@ static void hmiDrawHome() {
   // netState, NOT WiFi.status(): the latter is a modem round trip on every
   // render, and netPoll() already derives netState from it once per pass. It
   // also says more -- "wifi only" is a broker problem, "no link" is a radio one.
-  else if (netState == NET_ONLINE)
-                               snprintf(l2, sizeof(l2), "%-20s", "link mqtt up");
-  else if (netState == NET_WIFI_UP)
-                               snprintf(l2, sizeof(l2), "%-20s", "link wifi only");
-  else                         snprintf(l2, sizeof(l2), "%-20s", "link none");
+  else                         snprintf(l2, sizeof(l2), "%-20s", linkText());
 
-  lcdLine(0, l0); lcdLine(1, l1); lcdLine(2, l2);
+  lcdLine(1, l1); lcdLine(2, l2);
 }
 
-// One screen, rendered every pass. hmiRenderFaultRow() is called
-// UNCONDITIONALLY and last: the fault row belongs to the display layer, not to
-// any screen, and nothing may opt out of it.
+// Everything the menu reads from the rest of the board, at this instant.
+static HmiContext hmiContext() {
+  HmiContext c;
+  c.now = millis();
+  c.online = (netState == NET_ONLINE);
+  c.linkText = linkText();
+  c.lastEntryW = rTindex > 0 ? (long)rT[rTindex - 1] : 0L;
+  c.entries = rTindex;
+  c.nfc = nfc.health();
+  c.nfcVer = nfc.fwVer();
+  c.nfcRev = nfc.fwRev();
+  c.build = BUILD_PROVENANCE;
+  c.haveEpoch = panel.epochMs(c.now, c.epochMs);
+  return c;
+}
+
+// FW-1: one reader step (at most one Wire transaction), then hand any NEW scan to the
+// menu. TagTracker decides what is new (design §4.4: kGoneMs).
+static void nfcPoll() {
+  if (!wireOk) return;   // no controller: every "transaction" would be a false success
+  const uint32_t now = millis();
+  nfc.step(now);
+  if (nfc.takeEmpty()) tagTracker.empty(now);
+  char hex[TAG_HEX_LEN];
+  if (nfc.takeUid(hex, sizeof(hex)) && tagTracker.seen(hex, now)) {
+    snprintf(nfcLastTag, sizeof(nfcLastTag), "%s", hex);
+    Console.print("nfc tag ");
+    Console.println(hex);
+    hmi.onTag(hex, hmiContext());
+  }
+}
+
+// The screens, rendered every pass. Row 0 and row 3 are the display layer's: row 0 is
+// drawn on every screen, and hmiRenderFaultRow() is called UNCONDITIONALLY and last --
+// the fault row belongs to the display layer, not to any screen, and nothing may opt
+// out of it. On HOME, rows 1 and 2 are today's home rows, unchanged (design §4.3).
 static void hmiPoll() {
-  hmiDrawHome();
+  // Buttons. With no free timer they are sampled here instead, every 5 ms at most, and a
+  // press made during a network stall is lost (design §3.5).
+  if (!btnTimerOn && millis() - lastBtnPollMs >= 5) {
+    lastBtnPollMs = millis();
+    buttons.sample(readButtons(), lastBtnPollMs);
+  }
+  HmiContext c = hmiContext();
+  for (;;) {
+    BtnEvent e;
+    noInterrupts();
+    const bool got = buttons.pop(e);
+    interrupts();
+    if (!got) break;
+    hmi.onButton(e, c);
+  }
+  hmi.tick(c);
+
+  // A local TARE the menu asked for runs through the console's handler in THIS pass, the
+  // way cmdRunCapture() queues a phone command. Only when nothing else holds the handler:
+  // otherwise the menu's request waits for a later pass.
+  const char *lv = nullptr;
+  if (!stringComplete && !ackPending && !localCmdPending && hmi.takeLocal(lv)) {
+    snprintf(localSaved, sizeof(localSaved), "%s", inputString.c_str());
+    inputString = lv;
+    stringComplete = true;
+    verbRefused = false;
+    verbRefusedReason[0] = '\0';
+    localCmdPending = true;
+  }
+
+  if (hmi.isHome()) {
+    hmiDrawHome();
+  } else {
+    char r1[21], r2[21];
+    hmiDrawWeightRow();
+    hmi.render(r1, r2, c);
+    lcdLine(1, r1);
+    lcdLine(2, r2);
+  }
   hmiRenderFaultRow();
+}
+
+// FW-4, design §5.2: the panel client. Settles a finished request, starts the menu's next
+// one, then runs AT MOST ONE WiFiClient stage -- and only while online and under
+// PANEL_PASS_BUDGET_MS (2000 ms) into this pass. Called LAST in loop(): nothing in the
+// pass follows the stage, so its worst case (20 s for OPEN, 10 s for any other) is the
+// whole of the pass's remaining time, against the 30 s heartbeat tolerance.
+static void panelPoll() {
+  PanelOutcome o;
+  int status = 0;
+  if (panel.takeResult(o, status)) {
+    const PanelKind k = panel.kind();
+    if (o != PO_HTTP) {
+      Console.print("panel: "); Console.print(panelKindPath(k));
+      Console.println(o == PO_FAIL_CONNECT ? " connect failed" : o == PO_FAIL_SEND ? " send failed"
+                      : o == PO_FAIL_DEADLINE ? " deadline (8 s)" : " bad answer");
+    } else if (status >= 400) {
+      Console.print("panel: "); Console.print(panelKindPath(k)); Console.print(" ");
+      Console.print(status); Console.print(" "); Console.println(panel.reply.error);
+    }
+    hmi.onPanelResult(panelSeq, k, o, status, panel.wrote(), panel.state, panel.deliveries, panel.reply,
+                      hmiContext());
+  }
+  if (!panel.busy()) {
+    PanelKind k;
+    char body[PANEL_BODY_MAX];
+    uint16_t seq = 0;
+    if (hmi.takeRequest(k, body, sizeof(body), seq)) {
+      panelSeq = seq;
+      if (!panel.start(k, body, millis())) {
+        // Never left in the air: a request that cannot be started fails at once.
+        hmi.onPanelResult(seq, k, PO_FAIL_SEND, 0, false, panel.state, panel.deliveries, panel.reply,
+                          hmiContext());
+      }
+    }
+  }
+  const uint32_t used = (uint32_t)(millis() - loopHeartbeatMs);
+  panel.step(millis(), panelStageGate(netState == NET_ONLINE, used));
 }
 
 void loop() {
@@ -1803,6 +2168,10 @@ void loop() {
 
     // The weight is drawn by hmiDrawHome(); nothing else writes to the LCD here.
   }
+
+  // The NFC reader: one Wire transaction at most. Wire is not the modem, so it is not
+  // part of the §5.2 count, but it is inside the pass the panel gate measures.
+  nfcPoll();
 
   netPoll();
 
@@ -1959,6 +2328,41 @@ void loop() {
       // says whether the LCD and the ADC are actually answering, and at what
       // address, which "NO ADC" on its own cannot.
       i2cScan();
+    }
+    else if (inputString == "nfc") {
+      // FW-7. The reader, the buttons and the panel client, on the interface that works
+      // with no broker in reach. CONSOLE ONLY, like `i2c`: it is not on the MQTT
+      // allowlist (cmdAllowed()), and no allowlisted verb plus argument spells it.
+      Console.print("nfc = ");
+      Console.println(nfc.health() == NFC_OK ? "ok" : nfc.health() == NFC_STARTING ? "starting" : "NOT ANSWERING");
+      Console.print("nfc_fw = ");
+      if (nfc.health() == NFC_OK) { Console.print(nfc.fwVer()); Console.print("."); Console.println(nfc.fwRev()); }
+      else Console.println("--");
+      Console.print("nfc_polls = "); Console.println(nfc.polls());
+      Console.print("nfc_reads = "); Console.println(nfc.reads());
+      Console.print("nfc_fails = "); Console.println(nfc.fails());
+      Console.print("nfc_last = ");  Console.println(nfcLastTag[0] ? nfcLastTag : "--");
+      noInterrupts();
+      const bool stuck = buttons.keyStuck();
+      const uint32_t lost = buttons.dropped;
+      interrupts();
+      Console.print("buttons = ");   Console.print(btnTimerOn ? "timer" : "loop");
+      Console.println(stuck ? " KEY STUCK" : "");
+      Console.print("btn_lost = ");  Console.println(lost);
+      Console.print("hmi = ");       Console.print(hmi.full ? "full" : "part a");
+      Console.print(" screen ");     Console.println((int)hmi.screen());
+      Console.print("panel = ");     Console.println(PLC4_PANEL_URL);
+      Console.print("hb_timer = ");  Console.println(hbTimerOn ? "on" : "FAILED");
+      Console.print("can_timer = "); Console.println(canTimerOn ? "on" : "FAILED");
+      Console.print("wire = ");      Console.println(!wireUp ? "not started" : wireOk ? "ok" : "NOT INITIALISED");
+      Console.print("status_too_long = "); Console.println(statusTooLong);
+      Console.print("panel_req = "); Console.println(panel.requests);
+      Console.print("panel_fail = "); Console.println(panel.failures);
+      Console.print("panel_calls = "); Console.println(panel.calls);
+      Console.print("panel_last = ");
+      Console.println(hmi.lastAnswer() == 1 ? "answered" : hmi.lastAnswer() == 2 ? "FAILED" : "--");
+      if (hmi.lastError_[0]) { Console.print("panel_err = "); Console.println(hmi.lastError_); }
+      Console.print("id_session = "); Console.println(cmdIds.started ? (unsigned long)cmdIds.session : 0UL);
     }
     else if (inputString == "pwr") {
       // Supply diagnostics, deliberately separate from `read`. Nothing here is
@@ -2242,6 +2646,24 @@ void loop() {
     // never reached the phone -- that is the case the repeat exists for.
     cmdRemember(ackId, ackVerb, ok, detail);
     cmdAck(ackId, ackVerb, ok, detail, false, ok && strcmp(ackVerb, "+") == 0);
+
+    // FW-5's local verdict, design §5.3: a command the board minted for its own screen
+    // came back from the panel and ran through this handler. The screen shows RECORDED or
+    // NOT RECORDED from THIS verdict, never from the panel's 202.
+    if (cmdIdIsBoards(ackId))
+      hmi.onVerdict(ackId, ok, detail,
+                    (ok && strcmp(ackVerb, "+") == 0 && rTindex > 0) ? (long)rT[rTindex - 1] : 0L,
+                    hmiContext());
+  }
+
+  // The menu's local TARE (no panel), run through the handler above in this pass.
+  if (localCmdPending) {
+    localCmdPending = false;
+    inputString = localSaved;
+    localSaved[0] = '\0';
+    const bool ok = !verbRefused;
+    hmi.onLocalVerdict(ok, ok ? "" : (verbRefusedReason[0] ? verbRefusedReason : displayStateName()),
+                       hmiContext());
   }
 
   // Engine data LAST in the pass, after any command has run and been acked. A
@@ -2253,6 +2675,11 @@ void loop() {
     publishEngine();         // takes the windows on schedule even offline; publishes only online
   }
   publishNextDtc();          // faults go out on change, rate-limited
+
+  // The panel client's one WiFiClient stage, LAST, after everything else in the pass
+  // (design §5.2 point 2). Nothing may be added below this line: the stage's worst case
+  // is budgeted as the remainder of the pass.
+  panelPoll();
 }
 
 void printDebug()
