@@ -10,6 +10,13 @@ no source states. **NOT DETERMINABLE** marks a fact no source reached here settl
 would settle it. **Pending gleipnir** marks a claim relayed from the gleipnir coordinator that this
 design has not checked against source. Nothing in this document was measured on hardware.
 
+**This reader cannot read the bag tags.** The PN532 reads only 13.56 MHz NFC tags: ISO/IEC 14443
+type A, MIFARE, FeliCa and Jewel [1], [3]. The face-cord bag tags in this repo's notes are UHF EPC
+Gen2 (`notes/rfid-inventory-discussion.md:7, 19`; `notes/2026-10-26-rfid-pendant-handoff.md:47`).
+Held to this box, a UHF tie tag reads as nothing: no UID, no scan, no TAG screen. Every tag this
+design scans is a 13.56 MHz NFC tag, such as the MIFARE card the T-Deck spike read
+(`spikes/tdeck-nfc/README.md:59-63`). The pendant has the same limit, because it uses the same chip.
+
 ## 1. The instruction in force
 
 Alex, 2026-10-29, to the PLC #4 coordinator:
@@ -62,9 +69,9 @@ the instruction's *"an operator at the tractor can scan a rfid tag"*. It is not 
 **Consequence:** the PN532 floor of −30 °C [2] becomes the enclosure's cold limit. The UNO R4 WiFi
 is rated to −40 °C [4] §2.
 
-The PN532 is a 13.56 MHz reader. It cannot read UHF EPC Gen2 tie tags. That was already true of
-the pendant (`notes/2026-10-26-rfid-pendant-handoff.md:47`), and Alex chose *"Not yet"* for UHF on
-2026-10-26 (`notes/2026-10-25-rfid-pendant-rulings.md:110`).
+The PN532 cannot read the UHF EPC Gen2 bag tags; see the paragraph after *How to read the claims*.
+Alex chose *"Not yet"* for a UHF reader on 2026-10-26
+(`notes/2026-10-25-rfid-pendant-rulings.md:110`).
 
 ### 2.2 Bus: the header I2C bus, `Wire`, on A4/A5
 
@@ -169,7 +176,7 @@ case log's dispatched layout worker carries them (`notes/case-v2-log.md:77-80`).
 
 ## 3. The buttons
 
-### 3.1 Count: four
+### 3.1 Count: two for the minimum, four with pendant parity
 
 **BACK, UP, DOWN, OK.** Four is the smallest set where every screen in §4 has a one-press cancel
 and needs no "back" entry in a list:
@@ -182,6 +189,11 @@ Three buttons would save a hole, but every confirmation would then need a "NO" i
 operator scrolls to. The mesh pendant case has four push buttons plus an encoder
 (`notes/2026-10-25-rfid-pendant-rulings.md:14-17`). The baseline keypad had five
 (`BRIEF.md:191-192`).
+
+**The count follows the scope split in §4.2.** The minimum flow, scan → record, uses only **OK and
+BACK**: two buttons and two holes, at the OK and BACK positions in §3.3. UP and DOWN exist only
+for the pendant-parity menus, part (b), which is a scope choice for Alex. Each hole is a water
+path (`BRIEF.md:191-193`), so the count is part of that choice.
 
 ### 3.2 Part
 
@@ -256,7 +268,8 @@ the RA4M1's RU is 10–50 kΩ [8], weak for a 30 cm run on a tractor (inference)
 which filters spikes and costs nothing against 20 ms debounce. A pressed button draws about 1 mA.
 
 Run five conductors (GND plus four signals) from the lid with a service loop. Put a 5-pin connector
-at the board end. Leave NC and the LED leads insulated. D6-D9, D11, D12 and A0-A3 stay free.
+at the board end. Part (a) alone fits BACK and OK on D2 and D5 and runs three conductors. Keep the
+5-pin connector, so adding (b) means fitting buttons, not rewiring. Leave NC and the LED leads insulated. D6-D9, D11, D12 and A0-A3 stay free.
 
 ### 3.5 Debounce
 
@@ -289,14 +302,66 @@ at the board end. Leave NC and the LED leads insulated. D6-D9, D11, D12 and A0-A
 - **Text is plain ASCII.** The cursor is `>`, and more items above or below are `^` or `v` in
   column 20. No CGRAM characters.
 - **Timeouts:** a menu returns to HOME after 30 s with no press. TAG returns after 120 s
-  (§4.3). A result screen returns after 3 s or on any press.
+  (§4.4). A result screen returns after 3 s or on any press.
 - **One rule for a scan:** a new tag opens TAG from any screen except one that is waiting on the
-  panel (§4.4). There the tag is held and TAG opens when the wait ends.
+  panel. There the tag is held and TAG opens when the wait ends.
 
 Every screen below is shown in full, 20 columns by 4 rows, between `|` marks. The weight, counts
 and labels are examples.
 
-### 4.2 HOME (today's screen, unchanged)
+### 4.2 Scope: (a) the minimum, and (b) pendant parity
+
+**(a) The minimum for scan → record.** This is what Alex asked for: *"an operator at the tractor
+can scan a rfid tag"*, plus the buttons and menus that needs. Part (a) is HOME (today's screen,
+unchanged), TAG, and the result screens, §4.3–§4.5. It uses:
+
+- OK and BACK only;
+- one HTTP request per record: `POST /api/cmd` with `"into":"daily_log"`;
+- a board-minted command id (§5.2).
+
+**(b) Pendant parity. A scope choice for Alex, not what he asked for.** These extras give the board
+what the mesh pendant offers (`notes/2026-10-25-rfid-pendant-rulings.md:66-74`). They are
+designed here so the choice can be made on a full picture. None of them is needed to scan a tag
+and record it.
+
+| (b) item | Section |
+|---|---|
+| UP and DOWN buttons (two more holes) | §3.1, §3.3 |
+| Choosing the destination tally on TAG, and so the delivery RECORD (a tally select, then `+` without `into`) | §4.6 |
+| DUP WARN, the 15-minute duplicate warning, on the board | §4.6 |
+| MENU, with RECORD NO TAG, TARE, UNDO LAST, CLEAR BOARD | §4.7, §4.8 |
+| Local TARE when the panel does not answer | §5.4 |
+| TALLIES and TALLY: select, end, start a daily log | §4.9, §4.10 |
+| DELIVERIES: start a delivery from the director list | §4.11 |
+| INFO | §4.12 |
+| The RFID BUILD screen and button lock-out, read from `/api/state` | §4.13 |
+| `nfc` on `status`, the `nfc` console verb, `i2c` scanning `Wire` | §6 FW-7 |
+| MC entry (deferred in any case) | §4.14 |
+
+**One item the review placed in (b) stays in (a): the EEPROM session counter behind the command
+id (§5.2).** Part (a) still sends `+` under an id the board mints. That id must not repeat across
+reboots, for three reasons:
+
+- The panel pins the tag to the id and answers 409 to the same id with a different tag
+  (`simple_tally.py:424-435`).
+- The board's dedup ring replays a repeated id instead of running it
+  (`references/03_mqtt_contract.md:380-381`).
+- The consumer joins on `cmd_id` (migration 129 [20]).
+
+A RAM-only counter repeats after every reboot. The 2026-10-07 contract's host test shows that
+collision (`notes/2026-10-07-rfid-record-contract.md:262-263`). Some cross-boot unique source is
+part of (a). The lazy counter is this design's choice of source. A random 32-bit value at boot,
+the pendant's `boot` field in `mintId()` [14], is the alternative. This repo states no entropy
+source on the R4, which makes that NOT DETERMINABLE here.
+
+**Why (a) sends `into`.** In the panel's RFID build, `into` is refused with 400 at
+`api/app.py:280-282`. That check runs before the tag is touched, so an (a) RECORD can never put an
+NFC UID into the RFID build's ledger (§4.13). The cost: an (a) RECORD always goes into the open
+daily log, and the panel selects that log as a side effect (`simple_tally.py:505-527`). With no
+daily log open, the panel refuses with 409, `OPEN_DAILY_FIRST` (`simple_tally.py:522-524`). In (a),
+a delivery is recorded from the phone or the pendant.
+
+### 4.3 (a) HOME — today's screen, unchanged
 
 ```
 |W     1834 lb  n12  |
@@ -305,9 +370,9 @@ and labels are examples.
 |                    |
 ```
 
-OK opens MENU (§4.7). A scan opens TAG. BACK, UP and DOWN do nothing.
+A scan opens TAG. In (a), OK and BACK do nothing here. In (b), OK opens MENU (§4.7).
 
-### 4.3 TAG — a tag is armed
+### 4.4 (a) TAG — a tag is armed
 
 A new scan arms the tag. These rules match the pendant's `RfidTag.h` [15]:
 
@@ -330,37 +395,13 @@ armed state.
 - Row 1 is the screen form the pendant uses, `hexShown()` with colons [15]. A 4-byte UID fits
   after `TAG `. A 7-byte UID is 20 characters alone, so `TAG ` drops. A 10-byte UID, 29 characters
   with colons, shows as 20 bare hex characters, the wire form.
-- Row 2 is the destination: the open tally the record goes into. It defaults to the panel's
-  selected tally. UP and DOWN step through the open tallies the panel lists. A delivery shows its
-  panel label cut to 13 characters:
+- Row 2 in (a) is fixed: the record goes into the open daily log (§4.2).
+- OK sends `POST /api/cmd` with `"into":"daily_log"` and the tag (§5.1), then shows SENDING.
 
-```
-|W     1834 lb  n12  |
-|TAG 64:72:07:CA     |
-|SMITH #4411   OK=REC|
-|                    |
-```
+### 4.5 (a) Result screens
 
-- With no tally open, row 2 reads `NO TALLY      OK=REC`. The record then goes to the board's
-  tally only, as a panel RECORD does with none open (greybeard-plc4-pwa `api/app.py:353-354` [18]).
-- OK records with the tag into the destination shown (§5). If the panel's last credited bag is
-  under 15 min old and not emptied, DUP WARN comes first (§4.4).
-
-### 4.4 Record flow screens
-
-**DUP WARN.** Alex ruled this warning for the panel and the handhelds after one bag was recorded
-twice from two handhelds 50 s apart. He chose *"Yes, PWA + handhelds"* and set the window: *"under
-15 min old"* (mesh merge commit of `feat/dup-record-warning` [14]). Applying it to the board, a
-third client, is this design's reading of that ruling.
-
-```
-|W     1834 lb  n12  |
-|LAST 1834 LB 50S AGO|
-|OK=AGAIN  BACK=STOP |
-|                    |
-```
-
-**SENDING.** This is drawn before the HTTP call, because the call blocks `loop()`.
+**SENDING.** This shows while the request runs. The request is spread across `loop()` passes,
+one modem call per pass (§5.2), so the screen stays live and the weight on row 0 keeps updating.
 
 ```
 |W     1834 lb  n12  |
@@ -369,7 +410,7 @@ third client, is this design's reading of that ruling.
 |                    |
 ```
 
-**RECORDED.** The board's own handler ran the `+` under the id it minted (§5.2).
+**RECORDED.** The board's own handler ran the `+` under the id it minted (§5.3).
 
 ```
 |W     1834 lb  n13  |
@@ -381,8 +422,10 @@ third client, is this design's reading of that ruling.
 **NOT RECORDED.** Row 2 is the refusal reason:
 
 - the board's ack detail, at most 20 characters (`src:2228-2238`); or
-- the panel's own state name on a 409 (`api/app.py:339`, the `state_name` in the gate's answer [18]); or
-- `PANEL 400` or `PANEL 409` for any other panel refusal. The full error text goes to the console.
+- the panel's own state name on a 409 (`api/app.py:339`, the `state_name` in the gate's answer
+  [18]); or
+- `PANEL 400` or `PANEL 409` for any other panel refusal, `OPEN_DAILY_FIRST` included. The full
+  error text goes to the console.
 
 OK tries again under a **new** id: a repeat of the old id would replay the refusal
 (`references/03_mqtt_contract.md:380-381`). BACK returns to TAG with the tag still armed.
@@ -395,9 +438,9 @@ OK tries again under a **new** id: a repeat of the old id would replay the refus
 ```
 
 **NO ANSWER.** The panel took the command (HTTP 202), but the board's handler did not run it within
-10 s. OK resends under the **same** id. The panel pins the tag to the id
-(`simple_tally.py` `_check_tag()` [18]), and the board's dedup ring replays rather than weighing
-twice (`references/03_mqtt_contract.md:380-381`). The 10 s matches the app's resend wait in
+10 s. OK resends under the **same** id. The panel pins the tag to the id (`simple_tally.py`
+`_check_tag()` [18]), and the board's dedup ring replays rather than weighing twice
+(`references/03_mqtt_contract.md:380-381`). The 10 s matches the app's resend wait in
 `notes/2026-10-07-rfid-record-contract.md:473-476`.
 
 ```
@@ -407,9 +450,9 @@ twice (`references/03_mqtt_contract.md:380-381`). The 10 s matches the app's res
 |                    |
 ```
 
-**NO PANEL.** The HTTP call failed. Row 2 is today's link text (`src:1704-1709`). OK retries.
-Nothing records without the panel; that is the 2026-10-07 range-only ruling
-(`notes/2026-10-07-rfid-record-contract.md:24-25`).
+**NO PANEL.** The request failed or missed its deadline (§5.2). Row 2 is today's link text
+(`src:1704-1709`). OK retries. Nothing records without the panel; that is the 2026-10-07
+range-only ruling (`notes/2026-10-07-rfid-record-contract.md:24-25`).
 
 ```
 |W     1834 lb  n12  |
@@ -418,18 +461,42 @@ Nothing records without the panel; that is the 2026-10-07 range-only ruling
 |                    |
 ```
 
-**RFID BUILD.** The panel answers with its RFID build. The board's tag on `+` is refused there
-(`api/app.py:299`), and the pendant switches its PLC #4 buttons off in the same case
-(`notes/2026-10-26-rfid-pendant-handoff.md:26-27`). So does the board.
+### 4.6 (b) TAG with a chosen destination, and DUP WARN
+
+In (b), row 2 of TAG is the destination: the open tally the record goes into. It defaults to the
+panel's selected tally. UP and DOWN step through the open tallies listed in `/api/state`. A
+delivery shows its panel label cut to 13 characters:
 
 ```
 |W     1834 lb  n12  |
-|PANEL IS RFID BUILD |
-|BUTTONS OFF         |
+|TAG 64:72:07:CA     |
+|SMITH #4411   OK=REC|
 |                    |
 ```
 
-### 4.5 MENU
+- With no tally open, row 2 reads `NO TALLY      OK=REC`. The record then goes to the board's
+  tally only, as a panel RECORD does with none open (greybeard-plc4-pwa `api/app.py:353-354`
+  [18]).
+- OK on the daily log is the (a) request.
+- OK on a delivery posts `/api/tally/select`, then `/api/cmd` without `into`. That is the panel
+  README's "delivery RECORD after a tally select" (`README.md:333-337` [18]).
+- With the panel's RFID build, none of this runs (§4.13).
+
+**DUP WARN.** Before a RECORD, if the panel's `last_record` is under 15 min old and not emptied,
+this screen comes first. Alex ruled the warning for the panel and the handhelds after one bag was
+recorded twice from two handhelds 50 s apart. He chose *"Yes, PWA + handhelds"* and set the window:
+*"under 15 min old"* (mesh merge commit of `feat/dup-record-warning` [14]). Applying it to the
+board, a third client, is this design's reading of that ruling, and so it sits in (b). It needs a
+`GET /api/state` before the RECORD.
+
+```
+|W     1834 lb  n12  |
+|LAST 1834 LB 50S AGO|
+|OK=AGAIN  BACK=STOP |
+|                    |
+```
+
+### 4.7 (b) MENU
 
 ```
 |W     1834 lb  n12  |
@@ -451,12 +518,12 @@ left off the buttons. The phone and the console keep it (`references/06_operatin
 |                    |
 ```
 
-- `RECORD NO TAG` opens TAG's flow with no tag: SENDING, then a result.
+- `RECORD NO TAG` sends the (a) request with no `tag`, then shows the (a) result screens.
 - `TARE`, `UNDO LAST` and `CLEAR BOARD` open a CONFIRM.
 - `TALLIES` opens TALLIES.
 - `INFO` opens INFO.
 
-### 4.6 CONFIRM
+### 4.8 (b) CONFIRM
 
 The pendant confirms the same four actions (mesh `Plc4Operator.cpp`, `confirmText()` [14]).
 
@@ -489,10 +556,10 @@ The weight is the board tally's last entry, `rT[rTindex-1]` (`src:1934-1955`).
 `b` clears immediately and without confirmation on the console
 (`references/06_operating_card.md:40`). The button path confirms.
 
-OK sends the verb through the panel (§5.4). The result shows as `TARED`, `REMOVED` or `CLEARED`,
+OK sends the verb through the panel (§5.5). The result shows as `TARED`, `REMOVED` or `CLEARED`,
 or as NOT RECORDED's refusal form with the verb's own reason.
 
-### 4.7 TALLIES
+### 4.9 (b) TALLIES
 
 The panel's open tallies, then the starts it allows. `*` marks the selected tally. The count is
 the panel's `n` for that tally, read from `/api/state` the same way the pendant reads it
@@ -517,7 +584,7 @@ the panel's `n` for that tally, read from `/api/state` the same way the pendant 
 - `+ DELIVERY` opens DELIVERIES.
 - OK on a tally opens TALLY.
 
-### 4.8 TALLY
+### 4.10 (b) TALLY
 
 Row 1 names the tally. Row 2 is a one-line chooser that UP and DOWN step through.
 
@@ -539,7 +606,7 @@ Row 1 names the tally. Row 2 is a one-line chooser that UP and DOWN step through
 `/api/tally/end`. Both are app-only on the panel, with no MQTT (`api/app.py` `tally_select()` and
 `tally_end()` [18]).
 
-### 4.9 DELIVERIES
+### 4.11 (b) DELIVERIES
 
 Today's and tomorrow's booked deliveries, from the panel's `/api/deliveries`, which reads the
 director's loader schedule (`api/app.py` `delivery_list()` [18]). `T` in column 20 marks tomorrow.
@@ -555,7 +622,7 @@ OK opens CONFIRM `START SMITH #4411?`, then posts `/api/tally/start` with that `
 typed delivery (order reference and customer, `api/app.py` `_delivery()` [18]) needs text entry. It
 stays on the phone.
 
-### 4.10 INFO
+### 4.12 (b) INFO
 
 ```
 |W     1834 lb  n12  |
@@ -568,7 +635,35 @@ Row 1 is the reader and its firmware, or `NFC NOT ANSWERING`. Row 2 is the panel
 the first 8 characters of `build` (`references/03_mqtt_contract.md:250`). A silent reader stays off
 the fault row: it does not make the weight untrustworthy, and `RECORD NO TAG` still works.
 
-### 4.11 MC — moisture entry (designed, deferred)
+### 4.13 (b) RFID BUILD — buttons off
+
+**The RFID-build panel does not refuse a tag; it takes it as an EPC.** In RFID mode the pendant-tag
+check is skipped: it runs only `if not rfid_mode` (`api/app.py:299`). The body's `tag` goes to
+`bridge.rfid_command(..., tag=body.get("tag"))` (`api/app.py:350-351`) as the RFID build's chosen
+EPC. That path's only test is `valid_epc()` (`api/commands.py:234-236`): upper-case hex, whole
+16-bit words, 4–32 characters (`:183-185`). So a 4-byte UID (8 hex characters, such as
+`647207CA`) and a 10-byte UID (20) both pass. A 7-byte UID (14) fails.
+
+**This is harmless only because the board disables its buttons in that mode.** The pendant does
+the same: it reads the `rfid` key of `/api/state` (mesh `Plc4Operator.cpp:625` [14]) and turns its
+PLC #4 buttons off (`notes/2026-10-26-rfid-pendant-handoff.md:26-27`). In (b) the board reads the
+same key on each `/api/state` fetch, and while it is present every button action is refused
+locally and this screen shows:
+
+```
+|W     1834 lb  n12  |
+|PANEL IS RFID BUILD |
+|BUTTONS OFF         |
+|                    |
+```
+
+(a) never fetches `/api/state`. It is safe in RFID mode by a different route: every (a) request
+carries `into`, which the RFID build refuses with 400 before it reads `tag` (`api/app.py:280-282`).
+The (a) board shows `PANEL 400` and records nothing. **Any (b) request without `into` (a delivery
+RECORD) would reach `rfid_command` with the tag.** So the (b) lock-out is not optional once (b)
+is built.
+
+### 4.14 (b) MC — moisture entry (designed, deferred)
 
 The panel takes `mc` on a `+` as a string of tenths in 5.0–60.0
 (`api/moisture.py:49-50, 70-78`; `api/app.py:258-263` [18]). The pendant's `mc` entry is on the
@@ -598,58 +693,101 @@ The consumer stores it from the command topic into `plc4_cmd.tag` and joins it t
 through `cmd_id = plc4_ack.cmd_id` (migration 129 [20]; `consumer/plc1_consumer.py:4716-4730`).
 Today's board ignores the key: it reads only `id`, `verb` and `arg` (`src:1141, 1158, 1186`).
 
-So **the board sends the same HTTP request the pendant sends**:
+So **the board sends the same HTTP request the pendant sends**. For (a), it is always this:
 
 ```
 POST http://192.168.10.99:8081/api/cmd
 {"id":"p4-0000002a-7","verb":"+","into":"daily_log","tag":"647207CA"}
 ```
 
-This is the pendant's `cmdBody()` shape (mesh `Plc4Operator.cpp:355-372` [14]) and the panel
-README's RECORD (`README.md:330-338` [18]). The URL is the pendant's default `PLC4_PWA_URL`
-(mesh `Plc4Operator.h:32-34` [14]), the same host as the board's broker (`BRIEF.md:197`).
+This is the pendant's `cmdBody()` shape for its main RECORD (mesh `Plc4Operator.cpp:355-372` [14])
+and the panel README's bucket RECORD (`README.md:330-338` [18]). The URL is the pendant's default
+`PLC4_PWA_URL` (mesh `Plc4Operator.h:32-34` [14]), the same host as the board's broker
+(`BRIEF.md:197`).
 
 | Step | Who | What |
 |---|---|---|
-| 1 | Board | OK on TAG. GET `/api/state` for the destination list and the DUP WARN check |
-| 2 | Board | For a delivery destination: POST `/api/tally/select`. Then POST `/api/cmd` without `into`. That is the panel README's "delivery RECORD after a tally select" (`README.md:333-337` [18]). For the daily log, POST `/api/cmd` with `"into":"daily_log"` |
-| 3 | Panel | Validates, pins `tag` (and `mc`) to the id, picks the tally, publishes the `+` on `plc4/jd5055e/cmd`, and answers 202 (`api/app.py:221-380` [18]) |
-| 4 | Board | Receives its own command over MQTT, runs it through the one handler (`src:1902-1932`), and acks it as it acks any command |
-| 5 | Board | Matches the id it minted and shows RECORDED or NOT RECORDED from that verdict. It does not wait on the panel |
-| 6 | Consumer | Stores the command with `tag`, and the ack. Both are unchanged |
-| 7 | Panel | Credits the record from the ack and builds the bag reading: command id, tag, weight, mc, grade, `picking_id`. **Pending gleipnir** for the field list and the Director and Odoo leg (§7) |
+| 1 | Board | OK on TAG. **(a):** one request, `POST /api/cmd` with `into`. **(b) adds**, as separate requests before it: `GET /api/state` (destination list, DUP WARN, RFID check); for a delivery, `POST /api/tally/select`, then `/api/cmd` without `into` |
+| 2 | Panel | Validates, pins `tag` (and `mc`) to the id, picks the tally, publishes the `+` on `plc4/jd5055e/cmd`, and answers 202 (`api/app.py:221-380` [18]) |
+| 3 | Board | Receives its own command over MQTT, runs it through the one handler (`src:1902-1932`), and acks it as it acks any command |
+| 4 | Board | Matches the id it minted and shows RECORDED or NOT RECORDED from that verdict (§5.3). It does not wait on the panel |
+| 5 | Consumer | Stores the command with `tag`, and the ack. Both are unchanged |
+| 6 | Panel | Credits the record from the ack and builds the bag reading: command id, tag, weight, mc, grade, `picking_id`. **Pending gleipnir** for the field list and the Director and Odoo leg (§7) |
 
 **Why this route:**
 
 - **No other repo has to change for scan → record.** The panel, the consumer and the bag reading
   already handle a pendant `+` with a tag. A board `+` with a tag is the same request from a
   different client.
-- **The tag pin, the 409 on a changed tag, the dup warning and the bag reading all see the board's
-  tag**, because it enters at the one door gleipnir names.
+- **The tag pin, the 409 on a changed tag and the bag reading all see the board's tag**, because it
+  enters at the one door gleipnir names.
 - **The board needs no MQTT contract change for it.** The `+` the board receives is today's `+`
   with keys it already ignores.
 
 **Consequences:**
 
-- **The board gains an HTTP client.** Each call blocks `loop()`: the sampler, the LCD and the CAN
-  window all wait. The TCP connect cannot be bounded on this core: `setConnectionTimeout()` breaks
-  the connect (`src:1537-1551`). The heartbeat watchdog covers a hung call (`src:221`), as it covers
-  MQTT. On the LAN, to the broker's own host, a call should be tens of milliseconds (inference).
-  That is NOT DETERMINABLE until timed on the board.
+- **The board gains an HTTP client, with its blocking held to one modem call per `loop()` pass**
+  (§5.2).
 - **A second socket on the WiFi coprocessor** beside the MQTT one. Whether WiFiS3 holds both is
-  NOT DETERMINABLE here (inference: the modem indexes sockets). A bench run answers it.
-- **`/api/state` is parsed by a streaming key scan into fixed buffers**, not into a JSON tree:
-  32 KB of RAM, about 15 KB free on 2026-10-07 (`notes/2026-10-07-rfid-record-contract.md:368-371`).
-  Its size on the live panel is NOT DETERMINABLE here. Keep at most 6 tallies, 6 deliveries and
-  `last_record`. The board fetches it only on entering TAG, TALLIES, DELIVERIES or a RECORD, never
-  on a timer.
+  NOT DETERMINABLE here (inference: the modem indexes sockets, `WiFiClient.cpp:29-44` [9]). A
+  bench run answers it.
+- **In (b), `/api/state` is parsed by a streaming key scan into fixed buffers**, not into a JSON
+  tree: 32 KB of RAM, about 15 KB free on 2026-10-07
+  (`notes/2026-10-07-rfid-record-contract.md:368-371`). Its size on the live panel is NOT
+  DETERMINABLE here. Keep at most 6 tallies, 6 deliveries and `last_record`. Fetch it only on
+  entering TAG, TALLIES, DELIVERIES or a RECORD, never on a timer.
 - **A lost ack still loses the credit.** The ack is QoS 0, and the panel credits from it
   (`api/app.py:59-61` [18]). The board shows RECORDED from its own handler, and the panel may never
   credit it. The pendant path has the same property.
 - **Nothing records when the panel does not answer** (NO PANEL). The console still records as
   today.
 
-### 5.2 Command ids the board mints
+### 5.2 HTTP as a state machine: one modem call per `loop()` pass
+
+**The risk the review found.** A WiFiS3 modem command can block for `MODEM_TIMEOUT`, 10000 ms
+(`WiFiS3/src/Modem.h:12` [9]). The TCP connect cannot be bounded on this core, because
+`setConnectionTimeout()` breaks it (`src:1537-1551`). A (b) delivery RECORD makes three requests.
+Run back to back in one pass, those requests are several such commands, about 30 s or more
+against the 30000 ms heartbeat tolerance (`src:221`). The watchdog would reset the board.
+
+**The design.** It follows netPoll's split of association and broker connect into separate passes
+(`src:1281-1297`): *"everything netPoll does accumulates against a single heartbeat"*.
+
+1. **One `WiFiClient` call per pass, at most.** Every request runs as stages, one stage per pass:
+
+| Stage | The one call | Modem commands | Worst case |
+|---|---|---|---|
+| OPEN | `connect(host, port)` on a closed client. CLOSE leaves `_sock == -1`, so `getSocket()` skips its `connected()` and `stop()` | `_BEGINCLIENT`, then `_CLIENTCONNECTNAME` (`WiFiClient.cpp:29-44, 53-71` [9]) | 2 × 10000 = **20000 ms** |
+| SEND | one `write()` of the whole request, at most 256 B | `_CLIENTSEND` (`write_nowait`) and the passthrough (`WiFiClient.cpp:80-90` [9]) | **10000 ms** (inference: the passthrough waits on the modem's answer under `MODEM_TIMEOUT`) |
+| READ | one `read(buf, n)`. `available()` is never called on its own | at most one `_CLIENTRECEIVE` (`_read()`, `WiFiClient.cpp:117-150, 165-170` [9]) | **10000 ms** |
+| CLOSE | `stop()` | `_CLIENTCLOSE` (`WiFiClient.cpp:207-213` [9]) | **10000 ms** |
+
+2. **A stage runs last in `loop()`**, after the engine and fault-code block that today ends the pass
+   (`src:2247`). Nothing in the pass follows it.
+3. **A stage runs only with `netState == NET_ONLINE` and only if the pass has used less than
+   5000 ms**, measured as `millis() - loopHeartbeatMs` at that point. A pass that has already run
+   long, a reconnect stage or a fault-code PUBACK spin, skips the HTTP stage. The stage runs in a
+   later pass instead.
+4. **A request has a deadline:** 8 s of wall time from OPEN to a complete response, checked between
+   stages. Past it, CLOSE, and the screen shows NO PANEL. A single stage can outlast the deadline;
+   the deadline stops the next one.
+5. **Requests queue, one at a time.** The (b) delivery RECORD is three requests in order: state,
+   select, cmd. That is at least 12 stages over at least 12 passes, and never two stages in one
+   pass.
+
+**Worst-case block per pass from the HTTP client:**
+
+- **OPEN:** the 5000 ms entry limit plus the 20000 ms stage, so 25000 ms for the whole pass.
+- **SEND, READ or CLOSE:** 5000 + 10000 = 15000 ms.
+
+Both are against `HEARTBEAT_TOLERANCE_MS` = 30000 (`src:221`). The margin on OPEN is 5000 ms.
+These are worst cases where every modem command times out. On the LAN, to the broker's own host, a
+stage should take milliseconds (inference); that is NOT DETERMINABLE until timed on the board.
+
+The loop does not stall for the length of a request: sampling, the LCD, buttons and CAN carry on
+between stages. The reader polls on `Wire`, which is not the modem, so it is not counted here.
+
+### 5.3 Command ids the board mints — part (a)
 
 Form: `p4-<session, 8 hex>-<n>`, for example `p4-0000002a-7`. It is at most 22 characters, inside
 the panel's 40-character safe set (`api/commands.py:138`; `references/03_mqtt_contract.md:365`).
@@ -662,45 +800,44 @@ the panel's 40-character safe set (`api/commands.py:138`; `references/03_mqtt_co
   the objection that kept a boot counter out of the firmware (`src:470-472`). Wear is one write per
   boot in which a button was used, against 100,000 data-flash program/erase cycles [8].
 - `<n>` counts from 1 within the session, in RAM.
-- **Why it must be unique:** the panel pins tag and mc per id and answers 409 to a different value
-  under the same id (`simple_tally.py` [18]). The consumer joins on `cmd_id`. The bag reading's
-  `source_key` is the id (**pending gleipnir**).
+- **Why it is in (a):** see §4.2.
+- **Local verdict:** when the handler runs a command whose id the board minted, the screen takes
+  its verdict. Otherwise the screen shows NO ANSWER 10 s after the panel's 202.
 
-### 5.3 What changes in the record contract
+### 5.4 What changes in the record contract
 
 **On the wire, today's firmware path: nothing.** Commands, acks, `weight` and `telemetry` keep
 their shapes (`references/03_mqtt_contract.md`). Board-originated commands appear on
-`plc4/jd5055e/cmd` as the panel publishes them, with `p4-` ids. One addition is proposed, FW-7:
-`nfc` on `status`.
+`plc4/jd5055e/cmd` as the panel publishes them, with `p4-` ids. One addition is proposed, in (b):
+`nfc` on `status` (FW-7).
 
 **The 2026-10-07 RFID-build contract** (`notes/2026-10-07-rfid-record-contract.md`, approved for
-consumer hand-off, firmware gated) is untouched, and this design does not implement it. Note one
-consequence for anyone who later points it at this reader. Its tag is an EPC in whole 16-bit words,
-4–32 hex characters (`valid_epc()`, `api/commands.py:183-185` [18]). A 7-byte NFC UID is 14 hex
-characters, which is not a multiple of 4. That contract's tag rule would have to widen to the
-pendant rule before an NFC UID could ride it.
+consumer hand-off, firmware gated) is untouched, and this design does not implement it. Its tag is
+an EPC in whole 16-bit words, 4–32 hex characters (`valid_epc()`, `api/commands.py:183-185` [18]).
+4-byte and 10-byte NFC UIDs fit that shape by length. A 7-byte UID does not. Fitting the shape does
+not make a UID an EPC: §4.13 explains why the board never sends one to that build.
 
-### 5.4 The other verbs
+### 5.5 The other verbs — part (b)
 
 TARE, UNDO LAST and CLEAR BOARD go through `/api/cmd` as `tare`, `-` and `b`. So does the
 pendant's (mesh `Plc4Operator.cpp:28` [14]). That keeps one audit trail in `plc4_cmd` and the
 panel's state gate ahead of the board's.
 
-**Exception: TARE with no panel.** When `/api/cmd` does not answer, TARE runs locally through the
-same handler, as the console's does (`src:1885-1898`). It changes no record. UNDO and CLEAR never
-run locally: the panel tracks the board's records, and a local undo would leave it counting a bag
-the board had removed.
+**Local TARE with no panel.** When `/api/cmd` does not answer, TARE runs locally through the same
+handler, as the console's does (`src:1885-1898`). It changes no record. UNDO and CLEAR never run
+locally: the panel tracks the board's records, and a local undo would leave it counting a bag the
+board had removed.
 
-### 5.5 Which repos would have to agree
+### 5.6 Which repos would have to agree
 
 | Repo | Owner | What it would need |
 |---|---|---|
-| greybeard-plc4-pwa | PLC #4 PWA coordinator | **No API change.** It must accept the board as a third client of `/api/cmd`, `/api/state`, `/api/tally/*` and `/api/deliveries`, with `p4-` ids. Separately, the **V2 case**: PN532 bosses, four 16.2 mm holes and the M7E bosses removed (§2.5, §3.3). That is `design/case-print/`, carried by the case layout worker |
+| greybeard-plc4-pwa | PLC #4 PWA coordinator | **No API change.** It must accept the board as a client of `/api/cmd` with `p4-` ids in (a), and of `/api/state`, `/api/tally/*` and `/api/deliveries` in (b). Separately, the **V2 case**: PN532 bosses, two or four 16.2 mm holes and the M7E bosses removed (§2.5, §3.3). That is `design/case-print/`, carried by the case layout worker |
 | greybeard-plc-consumer | Consumer coordinator | **No code change.** Migration 129's comment that PLC #4 will never carry RFID is superseded (§1). Restating it is theirs to do |
-| mesh | Mesh coordinator | **No change.** It must agree that the tag rules in §5.6 are shared, so a change on either side is a change on both |
+| mesh | Mesh coordinator | **No change.** It must agree that the tag rules in §5.7 are shared, so a change on either side is a change on both |
 | greybeard-gleipnir, Director, Odoo | gleipnir coordinator | **No change**, if a board `+` with a tag produces a bag reading exactly as a pendant `+` does. **Pending gleipnir** |
 
-### 5.6 Consistency with the pendant
+### 5.7 Consistency with the pendant
 
 | Rule | Pendant | Board | Source |
 |---|---|---|---|
@@ -708,30 +845,32 @@ the board had removed.
 | Bus | HSU on the T-Deck (RX44/TX43); I2C at 0x24 on the Heltec | I2C at 0x24 on `Wire` | mesh `mesh_pendant_tdeck/platformio.ini:17-26`, `Pn532.h:20-21` [14] |
 | Poll | InListPassiveTarget, one target, 106 kbps type A, about 10/s. `MxRtyPassiveActivation` = 1 | Same | mesh `Pn532.h:23-29` [14] |
 | Wire form | Upper-case hex, no separator, an even count of 2–20 digits (`647207CA`) | Same | mesh `validTag()` [14]; `api/commands.py:306-313` [18] |
-| Screen form | `64:72:07:CA` | Same where it fits in 20 columns (§4.3) | mesh `RfidTag.h` `hexShown()` [15] |
+| Screen form | `64:72:07:CA` | Same where it fits in 20 columns (§4.4) | mesh `RfidTag.h` `hexShown()` [15] |
 | Field name | `tag`, on `+` only | Same | `api/app.py:298-309` [18] |
 | New scan, expiry, use | `kGoneMs` 2000, `kArmedMs` 120000, used up on a recorded RECORD | Same | mesh `RfidTag.h` [15] |
-| RECORD | `+` to `/api/cmd`, `into` for the daily log, a tally select first for a delivery | Same | mesh `cmdBody()` [14]; `README.md:330-338` [18] |
-| Dup warning | `last_record` under 15 min and not emptied | Same | mesh `feat/dup-record-warning` merge [14] |
-| `mc` | Unmerged branch | Deferred (§4.11) | [14] |
+| RECORD | `+` to `/api/cmd`: `into` for the daily log; a tally select first for a delivery | (a) the daily-log form only; (b) both | mesh `cmdBody()` [14]; `README.md:330-338` [18] |
+| RFID build | Buttons off | (a) safe by the `into` refusal; (b) buttons off | §4.13 |
+| Dup warning | `last_record` under 15 min and not emptied | (b) only | mesh `feat/dup-record-warning` merge [14] |
+| `mc` | Unmerged branch | Deferred (§4.14) | [14] |
 
 ## 6. Firmware changes proposed (each needs Alex's approval)
 
-None of these is approved. Each is a separate gate.
+None of these is approved. Each is a separate gate. The **Part** column follows §4.2.
 
-| # | Change | Touches |
-|---|---|---|
-| FW-1 | **Reader driver on `Wire`:** step-based, never waits, constants as §5.6. Write it fresh from NXP UM0701-02 [3] rather than copying the mesh driver, which is under mesh's GPL-3.0 (`firmware/LICENSE` [14]). This repo states no licence (`references/01_controller_card.md:40`), and copying would decide one. **Consequence:** two drivers that must stay in agreement on §5.6, which a host test pins | new header in `include/`, `setup()`, `loop()` |
-| FW-2 | **Buttons:** D2-D5 inputs, the 200 Hz debounce timer, the press queue, `KEY STUCK` on the fault row (§3.5) | new header, `setup()`, `hmiRenderFaultRow()` (`src:1658-1670`) |
-| FW-3 | **Screens:** the §4 state machine. Row 0 and row 3 keep today's code. Rows 1 and 2 belong to the screen | `hmiPoll()`, `hmiDrawHome()` (`src:1672-1721`) |
-| FW-4 | **Panel client:** GET `/api/state` (streamed key scan), POST `/api/cmd`, `/api/tally/select`, `/api/tally/start` and `/api/tally/end`, GET `/api/deliveries`. The URL is a `#define` beside the network settings, default `http://192.168.10.99:8081` (mesh `Plc4Operator.h:32-34` [14]) | new header; WiFiS3 `WiFiClient` [9] |
-| FW-5 | **Id minting:** `p4-<session>-<n>`, with the lazily incremented EEPROM session counter (§5.2) | EEPROM map, a free slot chosen in the change |
-| FW-6 | **Local verdict:** when the handler runs a command whose id the board minted, the screen takes its verdict. Otherwise NO ANSWER after 10 s | the ack block (`src:2216-2245`) |
-| FW-7 | **Diagnostics:** `nfc` on `status` (`"ok"` with firmware `"1.6"`, or `"none"`); an `nfc` console verb, refused over MQTT like `i2c` (`src:769-773`); `i2c` also scans `Wire` | `publishStatus()`, the verb chain, `i2cScan()` (`src:1424-1450`) |
-| FW-8 | **MC entry** (§4.11). Deferred | screens, FW-4's POST body |
+| # | Part | Change | Touches |
+|---|---|---|---|
+| FW-1 | (a) | **Reader driver on `Wire`:** step-based, never waits, constants as §5.7. Write it fresh from NXP UM0701-02 [3] rather than copying the mesh driver, which is under mesh's GPL-3.0 (`firmware/LICENSE` [14]). This repo states no licence (`references/01_controller_card.md:40`), and copying would decide one. **Consequence:** two drivers that must stay in agreement on §5.7, which a host test pins | new header in `include/`, `setup()`, `loop()` |
+| FW-2 | (a) | **Buttons:** OK and BACK, or all four with (b), the 200 Hz debounce timer, the press queue, `KEY STUCK` on the fault row (§3.5) | new header, `setup()`, `hmiRenderFaultRow()` (`src:1658-1670`) |
+| FW-3 | (a), then (b) | **Screens:** (a) is §4.3–§4.5, and (b) adds §4.6–§4.14. Row 0 and row 3 keep today's code. Rows 1 and 2 belong to the screen | `hmiPoll()`, `hmiDrawHome()` (`src:1672-1721`) |
+| FW-4 | (a), then (b) | **Panel client as the §5.2 state machine:** one `WiFiClient` call per pass; the last thing in `loop()`; only online and under 5000 ms into the pass; an 8 s request deadline; requests one at a time. (a) is `POST /api/cmd`. (b) adds `GET /api/state` (streamed key scan), `POST /api/tally/select`, `/api/tally/start` and `/api/tally/end`, and `GET /api/deliveries`. The URL is a `#define` beside the network settings, default `http://192.168.10.99:8081` (mesh `Plc4Operator.h:32-34` [14]) | new header; end of `loop()`; WiFiS3 `WiFiClient` [9] |
+| FW-5 | (a) | **Id minting:** `p4-<session>-<n>`, with the lazily incremented EEPROM session counter, and the local verdict (§5.3) | EEPROM map, a free slot chosen in the change; the ack block (`src:2216-2245`) |
+| FW-6 | (b) | **RFID-build lock-out:** read `rfid` from `/api/state` and refuse every button action while it is present (§4.13) | FW-4's state scan, FW-3 |
+| FW-7 | (b) | **Diagnostics:** `nfc` on `status` (`"ok"` with firmware `"1.6"`, or `"none"`); an `nfc` console verb, refused over MQTT like `i2c` (`src:769-773`); `i2c` also scans `Wire` | `publishStatus()`, the verb chain, `i2cScan()` (`src:1424-1450`) |
+| FW-8 | (b) | **MC entry** (§4.14). Deferred | screens, FW-4's POST body |
 
-RAM and flash cost: NOT DETERMINABLE until FW-1 to FW-6 are built. A `tools/build-check.sh` run on
-the change answers it (`notes/2026-10-07-rfid-record-contract.md:368-371`).
+RAM and flash cost: NOT DETERMINABLE until (a) is built, and again with (b). A
+`tools/build-check.sh` run on the change answers it
+(`notes/2026-10-07-rfid-record-contract.md:368-371`).
 
 ## 7. Pending gleipnir
 
@@ -771,14 +910,17 @@ One correction: the reader thread is mesh `firmware/src/modules/plc/RfidReader.c
 | Maximum panel thickness, temperature range and bounce of COM-11966 (§3.2) | A sample on the 4 mm lid; the maker's full datasheet, which [6] is not |
 | The printed case's ingress rating (§3.2) | A spray test of the assembled case |
 | A free `FspTimer` for the debounce (§3.5) | A build and boot on the board |
-| HTTP call time, and two sockets on WiFiS3 (§5.1) | Timing the calls on the board |
+| Stage times in practice, and two sockets on WiFiS3 (§5.1, §5.2) | Timing the stages on the board |
+| Whether the SEND passthrough waits under `MODEM_TIMEOUT` (§5.2) | WiFiS3 `Modem.cpp` `passthrough()` read in full, or a timed failure on the bench |
+| A cross-boot unique source other than EEPROM on the R4 (§4.2) | The RA4M1 core's support for its TRNG, which this repo does not record |
 | `/api/state` size on the live panel (§5.1) | One GET against farm1 |
-| RAM and flash of FW-1 to FW-6 (§6) | `tools/build-check.sh` on the change |
+| RAM and flash of (a), and of (a) plus (b) (§6) | `tools/build-check.sh` on the change |
 
 ## 9. What this design does not do
 
 - It does not read a tag on a bag on the loader. The PN532 reads at 5–7 cm [1].
-- It does not read UHF tags.
+- It does not read UHF tags, so it reads nothing on the UHF EPC Gen2 bag tags.
+- It does not make more than one modem call in one `loop()` pass (§5.2).
 - It does not take the HC-05 off D0/D1, and it does not touch the Qwiic trunk.
 - It does not put `kv`, `c`, `w`, `sm` or a typed delivery on the buttons.
 - It does not light the LED rings.
@@ -787,9 +929,10 @@ One correction: the reader thread is mesh `firmware/src/modules/plc/RfidReader.c
 
 ## 10. Change from today, in one line each
 
-- **Hardware:** a PN532 V3 on `Wire` behind the lid's top-left, and four IP65 buttons in a 2 × 2
-  cluster on D2-D5. HC-05, CAN and Qwiic are unchanged.
-- **Screen:** row 0 and row 3 unchanged. Rows 1 and 2 become a menu driven by four buttons.
+- **Hardware:** a PN532 V3 on `Wire` behind the lid's top-left. Two IP65 buttons (OK and BACK) in
+  (a), four in a 2 × 2 cluster on D2-D5 with (b). HC-05, CAN and Qwiic are unchanged.
+- **Screen:** row 0 and row 3 unchanged. In (a), rows 1 and 2 show TAG and the result of a record.
+  (b) adds the menus.
 - **Record:** a board RECORD is a pendant RECORD from a different client. The tag reaches the
   record through `/api/cmd`, as the pendant's does.
 
@@ -821,8 +964,9 @@ https://github.com/arduino/ArduinoCore-renesas
 data-flash reprogramming/erasure cycles NDPEC. Filed in
 `docs/vendor/renesas/RA4M1_Group_Datasheet_R01DS0355EJ0110.pdf`
 
-[9] Arduino, *ArduinoCore-renesas*, `libraries/WiFiS3/src/WiFiClient.h`, line 229, and
-`WiFi.h`, line 447, as installed with `arduino:renesas_uno` 1.6.0. License: LGPL-2.1. [Online].
+[9] Arduino, *ArduinoCore-renesas*, `libraries/WiFiS3/src/Modem.h`, line 12 (`MODEM_TIMEOUT`);
+`WiFiClient.cpp`, lines 29–71, 80–90, 95–170 and 207–213; `WiFiClient.h`, line 229; and
+`WiFi.h`, line 447; as installed with `arduino:renesas_uno` 1.6.0. License: LGPL-2.1. [Online].
 Available: https://github.com/arduino/ArduinoCore-renesas
 
 [10] A. Pennington, *greybeard-plc4-tractor-scale*, `src/ArduinoHydraulicScale.cpp`,
