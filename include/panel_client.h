@@ -647,6 +647,9 @@ class PanelHttp {
 
   bool busy() const { return st_ != ST_IDLE; }
   PanelKind kind() const { return kind_; }
+  // Whether this request's SEND stage ran. Once it has, the panel may hold the request even if
+  // the answer never arrives, so a failed cmd must be resent under its id, never re-minted.
+  bool wrote() const { return wrote_; }
 
   // Queue one request. False while another is in flight (one at a time, design §5.2 point 5)
   // or when the request does not fit. The deadline clock starts here, so a request held back by
@@ -673,6 +676,7 @@ class PanelHttp {
     kind_ = kind;
     outcome_ = PO_PENDING;
     taken_ = false;
+    wrote_ = false;
     startedAt_ = now;
     memset(&state, 0, sizeof(state));
     memset(&deliveries, 0, sizeof(deliveries));
@@ -702,6 +706,7 @@ class PanelHttp {
         return true;
       case ST_SEND: {
         calls++;
+        wrote_ = true;   // set BEFORE the call: a write that fails part-way may still have gone out
         const size_t w = t_.write((const uint8_t *)req_, reqLen_);
         if (w == reqLen_) st_ = ST_READ;
         else finish(PO_FAIL_SEND);
@@ -771,6 +776,7 @@ class PanelHttp {
   PanelKind kind_ = PK_NONE;
   PanelOutcome outcome_ = PO_PENDING;
   bool taken_ = false;
+  bool wrote_ = false;
   uint32_t startedAt_ = 0;
   char req_[PANEL_REQ_MAX];
   size_t reqLen_ = 0;

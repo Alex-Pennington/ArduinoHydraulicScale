@@ -2003,7 +2003,8 @@ static void panelPoll() {
       Console.print("panel: "); Console.print(panelKindPath(k)); Console.print(" ");
       Console.print(status); Console.print(" "); Console.println(panel.reply.error);
     }
-    hmi.onPanelResult(panelSeq, k, o, status, panel.state, panel.deliveries, panel.reply, hmiContext());
+    hmi.onPanelResult(panelSeq, k, o, status, panel.wrote(), panel.state, panel.deliveries, panel.reply,
+                      hmiContext());
   }
   if (!panel.busy()) {
     PanelKind k;
@@ -2013,7 +2014,8 @@ static void panelPoll() {
       panelSeq = seq;
       if (!panel.start(k, body, millis())) {
         // Never left in the air: a request that cannot be started fails at once.
-        hmi.onPanelResult(seq, k, PO_FAIL_SEND, 0, panel.state, panel.deliveries, panel.reply, hmiContext());
+        hmi.onPanelResult(seq, k, PO_FAIL_SEND, 0, false, panel.state, panel.deliveries, panel.reply,
+                          hmiContext());
       }
     }
   }

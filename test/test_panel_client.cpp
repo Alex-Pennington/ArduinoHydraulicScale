@@ -350,6 +350,28 @@ int main() {
     check_str("error for the console", h.reply.error, "the board will not act in this state");
   }
 
+  printf("wrote(): whether SEND ran (review BLOCKING-1)\n");
+  {
+    FakeNet net; PanelHttp<FakeNet> h(net); h.setUrl(PLC4_PANEL_URL);
+    net.connectOk = false;
+    h.start(PK_CMD, "{}", 0); h.step(0, true);
+    check("connect refused: not written", !h.wrote());
+    h.step(10, true);
+    FakeNet n2; PanelHttp<FakeNet> h2(n2); h2.setUrl(PLC4_PANEL_URL);
+    n2.response = "HTTP/1.1 202 X\r\nContent-Length: 50\r\n\r\n{";   // never completes
+    h2.start(PK_CMD, "{}", 0);
+    PanelOutcome o = PO_PENDING; int st = 0; bool got = false;
+    for (uint32_t t = 0; t < 10000 && !got; t += 100) { h2.step(t, true); got = h2.takeResult(o, st); }
+    check("deadline after SEND: written", got && o == PO_FAIL_DEADLINE && h2.wrote());
+    FakeNet n3; PanelHttp<FakeNet> h3(n3); h3.setUrl(PLC4_PANEL_URL);
+    h3.start(PK_CMD, "{}", 0);
+    for (uint32_t t = 0; t < 9000; t += 100) h3.step(t, false);
+    check("deadline with the gate shut: not written", h3.takeResult(o, st) && o == PO_FAIL_DEADLINE && !h3.wrote());
+    h3.step(9000, true);
+    h3.start(PK_CMD, "{}", 9100);
+    check("a new request starts unwritten", !h3.wrote());
+  }
+
   printf("a simulated loop: the HTTP stage only in quiet passes\n");
   {
     FakeNet net;

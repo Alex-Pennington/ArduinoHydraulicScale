@@ -61,10 +61,17 @@ struct Rig {
     lastKind = k; lastBody = body; lastSeq = s; requests++;
     return true;
   }
+  // `wrote` defaults to what the outcome implies: an HTTP answer, a failed write or a bad answer
+  // all mean SEND ran; a refused connect means it did not. A deadline can fall either side, so
+  // the tests that matter say which with answerW().
   void answer(PanelOutcome o, int status, const PanelState *st = nullptr, const PanelDeliveries *dl = nullptr,
               const PanelReply *rp = nullptr) {
+    answerW(o, status, o == PO_HTTP || o == PO_FAIL_SEND || o == PO_FAIL_RESPONSE, st, dl, rp);
+  }
+  void answerW(PanelOutcome o, int status, bool wrote, const PanelState *st = nullptr,
+               const PanelDeliveries *dl = nullptr, const PanelReply *rp = nullptr) {
     PanelState s0{}; PanelDeliveries d0{}; PanelReply r0{};
-    m.onPanelResult(lastSeq, lastKind, o, status, st ? *st : s0, dl ? *dl : d0, rp ? *rp : r0, c);
+    m.onPanelResult(lastSeq, lastKind, o, status, wrote, st ? *st : s0, dl ? *dl : d0, rp ? *rp : r0, c);
     m.tick(c);
   }
   void verdict(const char *vid, bool ok, const char *detail, long w = 1834) { m.onVerdict(vid, ok, detail, w, c); m.tick(c); }
@@ -190,6 +197,96 @@ int main() {
     r.answer(PO_FAIL_DEADLINE, 0);
     r.adv(30001);
     check("30 s with no press: HOME, tag dropped", r.m.isHome() && !r.m.tagArmed());
+  }
+
+  printf("BLOCKING-1: no double record after a deadline that follows the send\n");
+  {
+    Rig r(false);
+    r.scan("647207CA"); r.press(BTN_OK); r.req();
+    const std::string first = r.lastBody;
+    r.answerW(PO_FAIL_DEADLINE, 0, true);   // SEND went out, the READ missed the 8 s deadline
+    r.verdict("p4-00000001-1", true, "recorded", 1834);   // ...and the board ran the "+"
+    check("the late verdict settles it: RECORDED", r.m.screen() == HS_DONE);
+    check("the tag is used up", !r.m.tagArmed());
+  }
+  {
+    Rig r(false);
+    r.scan("647207CA"); r.press(BTN_OK); r.req();
+    const std::string first = r.lastBody;
+    r.answerW(PO_FAIL_DEADLINE, 0, true);
+    check("a deadline after the send is NO ANSWER, not NO PANEL", r.m.screen() == HS_NOANSWER);
+    r.press(BTN_BACK);                      // back to TAG, tag still armed
+    if (r.m.screen() != HS_TAG) r.scan("647207CA");
+    check_str("TAG says the record is unsettled", r.r2(), "NO ANSWER  OK=RESEND");
+    r.press(BTN_OK);
+    const bool sent = r.req();
+    check("OK again resends", sent);
+    check("under the SAME id, never a fresh one", sent && r.lastBody == first);
+    printf("        second send: %s\n", r.lastBody.c_str());
+    r.answerW(PO_FAIL_DEADLINE, 0, true);
+    r.press(BTN_BACK);
+    r.adv(121000);                          // the tag expires: not an explicit discard
+    check("tag expiry goes HOME", r.m.isHome());
+    r.scan("647207CA");
+    r.press(BTN_OK); r.req();
+    check("the same tag rescanned after expiry: still the same id", r.lastBody == first);
+    r.answer(PO_HTTP, 202);
+    r.verdict("p4-00000001-1", true, "recorded");
+    check("its verdict settles it", r.m.screen() == HS_DONE && !r.m.tagArmed());
+    r.adv(3000);
+    r.scan("647207CA"); r.press(BTN_OK); r.req();
+    check("after the verdict a new RECORD of that tag takes a new id",
+          r.lastBody.find("\"p4-00000001-2\"") != std::string::npos);
+  }
+  {
+    // The verdict arrives while the operator is back on TAG.
+    Rig r(false);
+    r.scan("647207CA"); r.press(BTN_OK); r.req();
+    r.answerW(PO_FAIL_DEADLINE, 0, true);
+    r.press(BTN_BACK);
+    r.verdict("p4-00000001-1", true, "recorded", 1777);
+    check("a verdict on TAG shows RECORDED", r.m.screen() == HS_DONE);
+    check_str("with its weight", r.r1(), "RECORDED     1777 LB");
+    check("tag used up", !r.m.tagArmed());
+  }
+  {
+    // Explicit discard: BACK on the TAG that says NO ANSWER.
+    Rig r(false);
+    r.scan("647207CA"); r.press(BTN_OK); r.req();
+    r.answerW(PO_FAIL_DEADLINE, 0, true);
+    r.press(BTN_BACK);                      // NO ANSWER -> TAG
+    r.press(BTN_BACK);                      // TAG (pending) -> HOME: the operator discards it
+    r.scan("647207CA");
+    check_str("discarded: TAG offers a fresh RECORD", r.r2(), "DAILY LOG     OK=REC");
+    r.press(BTN_OK); r.req();
+    check("a fresh id after the explicit discard", r.lastBody.find("\"p4-00000001-2\"") != std::string::npos);
+  }
+  {
+    // A deadline BEFORE the send (offline: the gate never opened) is NO PANEL, nothing pending.
+    Rig r(false);
+    r.scan("647207CA"); r.press(BTN_OK); r.req();
+    r.answerW(PO_FAIL_DEADLINE, 0, false);
+    check("not sent: NO PANEL", r.m.screen() == HS_NOPANEL);
+    r.press(BTN_BACK);
+    check_str("nothing pending on TAG", r.r2(), "DAILY LOG     OK=REC");
+  }
+  {
+    // (b): the same rule through the state read and a delivery select.
+    Rig r(true);
+    r.scan("647207CA"); r.req();
+    PanelState s = todayState(true, false);
+    r.answer(PO_HTTP, 200, &s);
+    r.press(BTN_OK); r.req(); r.answer(PO_HTTP, 200, &s);
+    r.req(); r.answer(PO_HTTP, 200);        // select
+    r.req();
+    const std::string first = r.lastBody;
+    r.answerW(PO_FAIL_DEADLINE, 0, true);
+    r.press(BTN_BACK);
+    r.req(); r.answer(PO_HTTP, 200, &s);    // nothing, TAG did not refetch; harmless if it did
+    r.press(BTN_OK);
+    bool got = false;
+    for (int i = 0; i < 3 && !got; i++) { if (r.req() && r.lastKind == PK_CMD) got = true; else if (r.lastKind == PK_STATE) r.answer(PO_HTTP, 200, &s); }
+    check("(b) resend is the same cmd, same id", got && r.lastBody == first);
   }
 
   printf("(a) tag expiry, BACK, and a scan held during a send\n");
@@ -376,10 +473,13 @@ int main() {
     r.press(BTN_BACK);
     check("BACK=NO returns to MENU, nothing sent", r.m.screen() == HS_MENU && !r.req());
     r.press(BTN_OK); r.press(BTN_OK);
-    check("tare goes through /api/cmd", r.req() && r.lastBody == "{\"id\":\"p4-00000001-1\",\"verb\":\"tare\"}");
+    check("TARE reads /api/state first", r.req() && r.lastKind == PK_STATE);
+    PanelState st = todayState();
+    r.answer(PO_HTTP, 200, &st);
+    check("then tare goes through /api/cmd", r.req() && r.lastBody == "{\"id\":\"p4-00000001-1\",\"verb\":\"tare\"}");
     r.answer(PO_FAIL_CONNECT, 0);
     const char *v = nullptr;
-    check("no panel: the board tares locally", r.m.takeLocal(v) && strcmp(v, "tare") == 0);
+    check("never sent (connect refused): the board tares locally", r.m.takeLocal(v) && strcmp(v, "tare") == 0);
     check_str("TARING LOCALLY", r.r1(), "TARING LOCALLY...   ");
     r.m.onLocalVerdict(true, "", r.c); r.m.tick(r.c);
     check_str("TARED", r.r1(), "TARED               ");
@@ -389,7 +489,7 @@ int main() {
     r.press(BTN_OK); r.press(BTN_DOWN); r.press(BTN_DOWN);
     r.press(BTN_OK);
     check_str("UNDO confirm names the weight", r.r1(), "UNDO LAST? 1834 LB  ");
-    r.press(BTN_OK); r.req();
+    r.press(BTN_OK); r.req(); r.answer(PO_HTTP, 200, &st); r.req();
     check("UNDO is -", r.lastBody.find("\"verb\":\"-\"") != std::string::npos);
     r.answer(PO_FAIL_CONNECT, 0);
     const char *v2 = nullptr;
@@ -399,7 +499,7 @@ int main() {
     check_str("scrolled: ^ above", r.r1(), " TALLIES           ^");
     r.press(BTN_OK);
     check_str("CLEAR confirm counts the entries", r.r1(), "CLEAR 12 ENTRIES?   ");
-    r.press(BTN_OK); r.req();
+    r.press(BTN_OK); r.req(); r.answer(PO_HTTP, 200, &st); r.req();
     r.answer(PO_HTTP, 202);
     r.verdict(r.m.jobId(), true, "cleared");
     check_str("CLEARED", r.r1(), "CLEARED             ");
@@ -411,6 +511,52 @@ int main() {
     check_str("INFO row 2", r.r2(), "PANEL OK  b 699e3c6c");
     r.adv(30001);
     check("30 s: HOME", r.m.isHome());
+  }
+
+  printf("item 2: TARE after the send never tares locally\n");
+  {
+    Rig r(true);
+    r.press(BTN_OK); r.press(BTN_DOWN); r.press(BTN_OK); r.press(BTN_OK);
+    PanelState st = todayState();
+    r.req(); r.answer(PO_HTTP, 200, &st); r.req();
+    const std::string first = r.lastBody;
+    r.answerW(PO_FAIL_DEADLINE, 0, true);
+    const char *v = nullptr;
+    check("tare sent, answer lost: no local tare", !r.m.takeLocal(v));
+    check("NO ANSWER instead", r.m.screen() == HS_NOANSWER);
+    r.press(BTN_OK);
+    check("OK resends the same tare id", r.req() && r.lastBody == first);
+    r.answerW(PO_FAIL_SEND, 0, true);
+    check("a failed write may have gone out: still no local tare", !r.m.takeLocal(v) && r.m.screen() == HS_NOANSWER);
+    Rig q(true);
+    q.press(BTN_OK); q.press(BTN_DOWN); q.press(BTN_OK); q.press(BTN_OK);
+    q.req(); q.answer(PO_FAIL_CONNECT, 0);
+    check("the state read fails, nothing sent: local tare", q.m.takeLocal(v));
+  }
+
+  printf("item 3: TARE, UNDO, CLEAR refuse on the RFID build, read fresh\n");
+  {
+    Rig r(true);
+    // Never read before: the verb reads it now.
+    r.press(BTN_OK); r.press(BTN_DOWN); r.press(BTN_DOWN); r.press(BTN_OK); r.press(BTN_OK);
+    check("UNDO reads /api/state before anything", r.req() && r.lastKind == PK_STATE);
+    PanelState rf{}; rf.rfid = true;
+    r.answer(PO_HTTP, 200, &rf);
+    check("RFID build: no '-' sent, RFID BUILD shown", !r.req() && r.m.screen() == HS_RFIDOFF);
+    Rig q(true);
+    q.press(BTN_OK); for (int i = 0; i < 4; i++) q.press(BTN_DOWN); q.press(BTN_OK); q.press(BTN_OK);
+    q.req();
+    q.answer(PO_HTTP, 200, &rf);
+    check("CLEAR on the RFID build: nothing sent", !q.req() && q.m.screen() == HS_RFIDOFF);
+    Rig t(true);
+    t.press(BTN_OK); t.press(BTN_DOWN); t.press(BTN_OK); t.press(BTN_OK);
+    t.req(); t.answer(PO_HTTP, 200, &rf);
+    check("TARE on the RFID build: nothing sent, no local tare", !t.req() && t.m.screen() == HS_RFIDOFF);
+    PanelState ok = todayState();
+    Rig u(true);
+    u.press(BTN_OK); u.press(BTN_DOWN); u.press(BTN_DOWN); u.press(BTN_OK); u.press(BTN_OK);
+    u.req(); u.answer(PO_HTTP, 500, &ok);
+    check("a state read refused: nothing sent", !u.req() && u.m.screen() == HS_FAILED);
   }
 
   printf("(b) TALLIES, TALLY, DELIVERIES (design §4.9-§4.11)\n");
@@ -431,7 +577,9 @@ int main() {
     check_str("TALLY row 1", r.r1(), "SMITH #4411 n3   *  ");
     check_str("TALLY row 2", r.r2(), ">SELECT             ");
     r.press(BTN_OK);
-    check("SELECT posts select", r.req() && r.lastKind == PK_SELECT);
+    check("SELECT reads /api/state first", r.req() && r.lastKind == PK_STATE);
+    r.answer(PO_HTTP, 200, &s);
+    check("then posts select", r.req() && r.lastKind == PK_SELECT);
     r.answer(PO_HTTP, 200);
     check("then back to TALLIES, read fresh", r.req() && r.lastKind == PK_STATE);
     r.answer(PO_HTTP, 200, &s);
@@ -451,6 +599,8 @@ int main() {
     r.press(BTN_OK);
     check_str("START confirm", r.r1(), "START JONES?        ");
     r.press(BTN_OK);
+    check("START reads /api/state first", r.req() && r.lastKind == PK_STATE);
+    r.answer(PO_HTTP, 200, &s);
     check("POST /api/tally/start", r.req() && r.lastKind == PK_START);
     check("with t_ms and the picking id", r.lastBody.find("\"attr\":\"delivery\",\"t_ms\":1793268846") != std::string::npos &&
                                          r.lastBody.find("\"picking_id\":4415}") != std::string::npos);
@@ -506,10 +656,10 @@ int main() {
     check("a new request went out", r.lastSeq != stale);
     PanelState rf{}; rf.rfid = true;
     PanelDeliveries d0{}; PanelReply r0{};
-    r.m.onPanelResult(stale, PK_STATE, PO_HTTP, 200, rf, d0, r0, r.c);
+    r.m.onPanelResult(stale, PK_STATE, PO_HTTP, 200, true, rf, d0, r0, r.c);
     check("the stale answer changes nothing", r.m.screen() == HS_LOADING && !r.m.rfidLocked());
     PanelState ok = todayState();
-    r.m.onPanelResult(r.lastSeq, PK_STATE, PO_HTTP, 200, ok, d0, r0, r.c);
+    r.m.onPanelResult(r.lastSeq, PK_STATE, PO_HTTP, 200, true, ok, d0, r0, r.c);
     check("the current answer is applied", r.m.screen() == HS_TALLIES);
   }
 

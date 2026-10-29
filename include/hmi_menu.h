@@ -144,13 +144,31 @@ class HmiMenu {
   // The board's handler ran a command under `id` (the MQTT ack block, or a dedup replay).
   // `w` is the weight it recorded, for RECORDED's row.
   void onVerdict(const char *id, bool ok, const char *detail, long w, const HmiContext &c) {
-    if (job_.op == OP_NONE || !id || strcmp(id, job_.id) != 0 || !job_.id[0]) return;
+    if (!id || !id[0]) return;
+    // A RECORD that went out and was never settled: its verdict settles it wherever the screen
+    // is, so its tag can never go out again under a fresh id.
+    if (pendValid_ && strcmp(id, pend_.id) == 0) {
+      pendValid_ = false;
+      const bool onItsTag = pend_.tag[0] && strcmp(pend_.tag, tag_) == 0 &&
+                            (scr_ == HS_TAG || scr_ == HS_MC) && strcmp(job_.id, id) != 0;
+      if (onItsTag) {
+        // Back on TAG after NO ANSWER: show the verdict the board just gave.
+        abandonFetch();
+        job_ = pend_;
+      } else if (strcmp(job_.id, id) != 0) {
+        if (ok && pend_.tag[0] && strcmp(pend_.tag, tag_) == 0) clearTag();
+        return;
+      }
+    }
+    if (job_.op == OP_NONE || strcmp(id, job_.id) != 0 || !job_.id[0]) return;
     job_.verdictIn = true;
     job_.verdictOk = ok;
     job_.verdictW = w;
     snprintf(job_.detail, sizeof(job_.detail), "%s", detail ? detail : "");
-    // A verdict that lands after NO ANSWER went up still settles it: the board did run it.
-    if ((job_.phase == PH_VERDICT && scr_ == HS_BUSY) || scr_ == HS_NOANSWER) finishVerdict(c);
+    // A verdict that lands after NO ANSWER (or NO PANEL, once the cmd went out) still settles
+    // it: the board did run it. So does one for a pending RECORD reopened on its TAG.
+    if ((job_.phase == PH_VERDICT && scr_ == HS_BUSY) || scr_ == HS_NOANSWER ||
+        (scr_ == HS_NOPANEL && job_.cmdSent) || scr_ == HS_TAG || scr_ == HS_MC) finishVerdict(c);
   }
 
   // The local TARE ran through the board's handler.
@@ -164,8 +182,11 @@ class HmiMenu {
   }
 
   // The panel client finished the request this menu asked for.
-  void onPanelResult(uint16_t seq, PanelKind kind, PanelOutcome o, int status, const PanelState &st,
-                     const PanelDeliveries &dl, const PanelReply &rp, const HmiContext &c) {
+  // `wrote` is whether the client's SEND stage ran for this request: once it has, the panel
+  // may have the command even when the answer never came back.
+  void onPanelResult(uint16_t seq, PanelKind kind, PanelOutcome o, int status, bool wrote,
+                     const PanelState &st, const PanelDeliveries &dl, const PanelReply &rp,
+                     const HmiContext &c) {
     if (kind != PK_NONE) lastAnswer_ = (o == PO_HTTP) ? 1 : 2;
     if (seq == 0 || seq != expect_) return;   // an answer to a request this menu has let go of
     expect_ = 0;
@@ -186,16 +207,17 @@ class HmiMenu {
         if (o != PO_HTTP || status != 200) { go(HS_RFIDOFF, c); return; }
         if (rfid_) go(HS_RFIDOFF, c); else goHome(c);
         return;
-      default: actionResult(kind, o, status, rp, c); return;
+      default: actionResult(kind, o, status, wrote, rp, c); return;
     }
   }
 
   // Timeouts and stalls. Call every pass.
   void tick(const HmiContext &c) {
     if (want_ != PK_NONE && (uint32_t)(c.now - wantSince_) >= HMI_WANT_STALL_MS) {
-      want_ = PK_NONE;   // the client never took it: treat as a failed request
-      const PanelState s{}; const PanelDeliveries d{}; const PanelReply r{};
-      onPanelResult(expect_, PK_NONE, PO_FAIL_DEADLINE, 0, s, d, r, c);
+      want_ = PK_NONE;   // the client never took it: treat as a failed request, never sent
+      // Static, not on the stack: the three structs are about 700 B together.
+      static const PanelState s{}; static const PanelDeliveries d{}; static const PanelReply r{};
+      onPanelResult(expect_, PK_NONE, PO_FAIL_DEADLINE, 0, false, s, d, r, c);
       return;
     }
     if (job_.op != OP_NONE && job_.phase == PH_VERDICT && scr_ == HS_BUSY && !job_.verdictIn &&
@@ -323,6 +345,7 @@ class HmiMenu {
     int64_t picking;
     uint32_t acceptedAt;
     bool verdictIn, verdictOk, local;
+    bool cmdSent;               // the cmd's SEND stage ran: the panel may have it
     long verdictW;
     char detail[21];
   };
@@ -351,8 +374,22 @@ class HmiMenu {
     if (full) beginFetch(OP_FETCH_TAG, HS_TAG, c);
   }
 
+  bool pendingForTag() const { return pendValid_ && tag_[0] && strcmp(pend_.tag, tag_) == 0; }
+
   void tagButton(const BtnEvent &e, const HmiContext &c) {
-    if (e.id == BTN_BACK && !e.repeat) { goHome(c); return; }
+    if (e.id == BTN_BACK && !e.repeat) {
+      // The operator's explicit discard of a RECORD that went out unanswered: TAG row 2 said
+      // NO ANSWER OK=RESEND, and BACK is the choice not to.
+      if (pendingForTag()) pendValid_ = false;
+      goHome(c);
+      return;
+    }
+    // A RECORD for this tag went out and was never settled: OK resends it under its own id,
+    // whatever else the screen offers. It is never re-minted (review BLOCKING-1).
+    if (pendingForTag()) {
+      if (e.id == BTN_OK && !e.repeat) resendPending(c);
+      return;
+    }
     if (!full) {
       if (e.id == BTN_OK && !e.repeat) startRecord(true, c);
       return;
@@ -577,10 +614,21 @@ class HmiMenu {
     advance(c);
   }
 
+  // TARE, UNDO and CLEAR read /api/state first, every time, so the FW-6 lock-out rests on an
+  // answer from this moment, never a stale or unread one: on an RFID-build panel UNDO would
+  // void a ledger record (review item 3).
   void startVerb(HmiOp op, const HmiContext &c) {
     beginJob(op);
     if (!mint(c)) { fail("NO ID", c); return; }
+    job_.phase = PH_STATE;
+    advance(c);
+  }
+
+  void resendPending(const HmiContext &c) {
+    if (job_.op != OP_NONE) { abandonFetch(); endJob(); }
+    job_ = pend_;
     job_.phase = PH_CMD;
+    job_.verdictIn = false;
     advance(c);
   }
 
@@ -589,8 +637,9 @@ class HmiMenu {
     if (tally) snprintf(job_.tally, sizeof(job_.tally), "%s", tally);
     snprintf(job_.label, sizeof(job_.label), "%s", label ? label : "");
     job_.picking = picking;
-    // A start needs the panel's clock for t_ms; read /api/state first if it is not known yet.
-    job_.phase = ((op == OP_START_DAILY || op == OP_START_DELIVERY) && !c.haveEpoch) ? PH_STATE : PH_POST;
+    // Read /api/state first, every time: the RFID check (a start on the RFID build would open
+    // an RFID-build tally), and the panel's clock for a start's t_ms.
+    job_.phase = PH_STATE;
     advance(c);
   }
 
@@ -659,12 +708,26 @@ class HmiMenu {
     go(to, c);
   }
 
-  void actionResult(PanelKind kind, PanelOutcome o, int status, const PanelReply &rp, const HmiContext &c) {
+  void actionResult(PanelKind kind, PanelOutcome o, int status, bool wrote, const PanelReply &rp,
+                    const HmiContext &c) {
     (void)kind;
     if (o != PO_HTTP) {
-      // TARE with no panel runs locally through the same handler (design §5.5). UNDO and CLEAR
-      // never do: the panel tracks the board's records.
-      if (job_.op == OP_TARE && job_.phase == PH_CMD) { job_.phase = PH_LOCAL; advance(c); return; }
+      if (job_.phase == PH_CMD && wrote) {
+        // The cmd went out and its answer did not come back. The panel may have published it
+        // and the board may have run it, so this is NO ANSWER: OK resends under the SAME id,
+        // and a late verdict settles it (review BLOCKING-1). TARE does not tare locally here
+        // either -- the panel's tare may already have run (review item 2).
+        job_.cmdSent = true;
+        rememberPending();
+        job_.phase = PH_VERDICT;
+        go(HS_NOANSWER, c);
+        return;
+      }
+      // TARE with no panel runs locally through the same handler (design §5.5) -- only when
+      // the tare never went out. UNDO and CLEAR never do: the panel tracks the board's records.
+      if (job_.op == OP_TARE && !job_.cmdSent && (job_.phase == PH_CMD || job_.phase == PH_STATE)) {
+        job_.phase = PH_LOCAL; advance(c); return;
+      }
       job_.failedAt = job_.phase;
       go(HS_NOPANEL, c);
       return;
@@ -676,6 +739,8 @@ class HmiMenu {
         if (job_.op == OP_RECORD) {
           if (dupWarns()) { job_.phase = PH_PAUSED; go(HS_DUPWARN, c); return; }
           job_.phase = job_.select ? PH_SELECT : PH_CMD;
+        } else if (job_.op == OP_TARE || job_.op == OP_UNDO || job_.op == OP_CLEAR) {
+          job_.phase = PH_CMD;
         } else {
           job_.phase = PH_POST;
         }
@@ -688,6 +753,8 @@ class HmiMenu {
         return;
       case PH_CMD:
         if (status != 202) { panelRefused(status, rp, c); return; }
+        job_.cmdSent = true;
+        rememberPending();
         job_.phase = PH_VERDICT;
         job_.acceptedAt = c.now;
         if (job_.verdictIn) finishVerdict(c);
@@ -700,6 +767,14 @@ class HmiMenu {
         return;
       default: return;
     }
+  }
+
+  // A tagged RECORD whose cmd went out stays pending on its tag until a verdict or the
+  // operator's explicit discard. A later RECORD of another tag takes the slot.
+  void rememberPending() {
+    if (job_.op != OP_RECORD || !job_.tag[0]) return;
+    pend_ = job_;
+    pendValid_ = true;
   }
 
   bool dupWarns() const {
@@ -762,6 +837,7 @@ class HmiMenu {
 
   void renderTag(char *a, char *b, size_t cap) const {
     tagRowText(tag_, a, cap);
+    if (pendingForTag()) { snprintf(b, cap, "NO ANSWER  OK=RESEND"); return; }
     if (!full) { snprintf(b, cap, "DAILY LOG     OK=REC"); return; }
     if (tagLoad_ == 1) { snprintf(b, cap, "READING PANEL..."); return; }
     if (tagLoad_ == 2) { snprintf(b, cap, "NO PANEL   OK=RETRY"); return; }
@@ -902,6 +978,8 @@ class HmiMenu {
   uint8_t dest_ = 0, destBeforeDown_ = 0;
   char held_[TAG_HEX_LEN] = "";
   uint32_t heldAt_ = 0;
+  Job pend_ = {};                      // the unsettled RECORD, see rememberPending()
+  bool pendValid_ = false;
 
   bool rfid_ = false;
   bool haveState_ = false;
