@@ -16,6 +16,7 @@ Gen2 (`notes/rfid-inventory-discussion.md:7, 19`; `notes/2026-10-26-rfid-pendant
 Held to this box, a UHF tie tag reads as nothing: no UID, no scan, no TAG screen. Every tag this
 design scans is a 13.56 MHz NFC tag, such as the MIFARE card the T-Deck spike read
 (`spikes/tdeck-nfc/README.md:59-63`). The pendant has the same limit, because it uses the same chip.
+Alex chose the PN532 with this consequence stated (§1, *Alex's choices*).
 
 ## 1. The instruction in force
 
@@ -37,6 +38,15 @@ The pendant is not retired. Alex said *"the same rfid chip that the t-deck penda
 readers exist. The board and the pendant are two clients of one record path (§5). His 2026-10-25
 answer on pendant count, *"Design so either works"* (`notes/2026-10-25-rfid-pendant-rulings.md:78`),
 holds for a fleet of one board reader and any number of pendants.
+
+**Alex's choices on this design, 2026-10-29.** These were made in the PLC #4 coordinator's dialog
+and relayed to this worker. They are the option labels he chose, not his sentences:
+
+- **Reader: "PN532, as you said".** The same chip as the pendant, NFC only. He chose it with this
+  document's UHF consequence in front of him: the box reads nothing on the UHF bag tags (the
+  paragraph after *How to read the claims*).
+- **Menus: "Full pendant set".** Every screen in §4 is in scope, and so are four buttons. §4.2
+  keeps the scan → record flow, (a), as the first step of the build order.
 
 ## 2. The reader
 
@@ -176,7 +186,7 @@ case log's dispatched layout worker carries them (`notes/case-v2-log.md:77-80`).
 
 ## 3. The buttons
 
-### 3.1 Count: two for the minimum, four with pendant parity
+### 3.1 Count: four
 
 **BACK, UP, DOWN, OK.** Four is the smallest set where every screen in §4 has a one-press cancel
 and needs no "back" entry in a list:
@@ -190,10 +200,10 @@ operator scrolls to. The mesh pendant case has four push buttons plus an encoder
 (`notes/2026-10-25-rfid-pendant-rulings.md:14-17`). The baseline keypad had five
 (`BRIEF.md:191-192`).
 
-**The count follows the scope split in §4.2.** The minimum flow, scan → record, uses only **OK and
-BACK**: two buttons and two holes, at the OK and BACK positions in §3.3. UP and DOWN exist only
-for the pendant-parity menus, part (b), which is a scope choice for Alex. Each hole is a water
-path (`BRIEF.md:191-193`), so the count is part of that choice.
+**Four is the design.** Alex chose the full pendant set (§1), and its lists and choosers need UP
+and DOWN. The first step of the build order, (a) in §4.2, uses only OK and BACK. Fit all four
+buttons at once anyway, so the lid is cut and sealed once. Each hole is a water path
+(`BRIEF.md:191-193`).
 
 ### 3.2 Part
 
@@ -268,8 +278,8 @@ the RA4M1's RU is 10–50 kΩ [8], weak for a 30 cm run on a tractor (inference)
 which filters spikes and costs nothing against 20 ms debounce. A pressed button draws about 1 mA.
 
 Run five conductors (GND plus four signals) from the lid with a service loop. Put a 5-pin connector
-at the board end. Part (a) alone fits BACK and OK on D2 and D5 and runs three conductors. Keep the
-5-pin connector, so adding (b) means fitting buttons, not rewiring. Leave NC and the LED leads insulated. D6-D9, D11, D12 and A0-A3 stay free.
+at the board end. All four buttons are fitted from the start (§3.1), even though the first build
+step uses only BACK and OK. Leave NC and the LED leads insulated. D6-D9, D11, D12 and A0-A3 stay free.
 
 ### 3.5 Debounce
 
@@ -309,24 +319,25 @@ at the board end. Part (a) alone fits BACK and OK on D2 and D5 and runs three co
 Every screen below is shown in full, 20 columns by 4 rows, between `|` marks. The weight, counts
 and labels are examples.
 
-### 4.2 Scope: (a) the minimum, and (b) pendant parity
+### 4.2 Build order: (a) scan → record first, then (b) the rest of the pendant set
 
-**(a) The minimum for scan → record.** This is what Alex asked for: *"an operator at the tractor
-can scan a rfid tag"*, plus the buttons and menus that needs. Part (a) is HOME (today's screen,
-unchanged), TAG, and the result screens, §4.3–§4.5. It uses:
+Both parts are in scope: Alex chose the full pendant set (§1). The split is the order to build
+and flash them in, so the scan → record path can be proven on the tractor before the menus land.
+
+**(a) Scan → record.** This is the core of his instruction: *"an operator at the tractor can scan a
+rfid tag"*. Part (a) is HOME (today's screen, unchanged), TAG, and the result screens, §4.3–§4.5.
+It uses:
 
 - OK and BACK only;
 - one HTTP request per record: `POST /api/cmd` with `"into":"daily_log"`;
-- a board-minted command id (§5.2).
+- a board-minted command id (§5.3).
 
-**(b) Pendant parity. A scope choice for Alex, not what he asked for.** These extras give the board
-what the mesh pendant offers (`notes/2026-10-25-rfid-pendant-rulings.md:66-74`). They are
-designed here so the choice can be made on a full picture. None of them is needed to scan a tag
-and record it.
+**(b) The rest of the pendant set.** It gives the board what the mesh pendant offers
+(`notes/2026-10-25-rfid-pendant-rulings.md:66-74`). It is the second step of the build.
 
 | (b) item | Section |
 |---|---|
-| UP and DOWN buttons (two more holes) | §3.1, §3.3 |
+| UP and DOWN, in use (fitted with (a)) | §3.1, §3.3 |
 | Choosing the destination tally on TAG, and so the delivery RECORD (a tally select, then `+` without `into`) | §4.6 |
 | DUP WARN, the 15-minute duplicate warning, on the board | §4.6 |
 | MENU, with RECORD NO TAG, TARE, UNDO LAST, CLEAR BOARD | §4.7, §4.8 |
@@ -338,8 +349,7 @@ and record it.
 | `nfc` on `status`, the `nfc` console verb, `i2c` scanning `Wire` | §6 FW-7 |
 | MC entry (deferred in any case) | §4.14 |
 
-**One item the review placed in (b) stays in (a): the EEPROM session counter behind the command
-id (§5.2).** Part (a) still sends `+` under an id the board mints. That id must not repeat across
+**The EEPROM session counter behind the command id is in (a) (§5.3).** Part (a) still sends `+` under an id the board mints. That id must not repeat across
 reboots, for three reasons:
 
 - The panel pins the tag to the id and answers 409 to the same id with a different tag
@@ -359,7 +369,7 @@ source on the R4, which makes that NOT DETERMINABLE here.
 NFC UID into the RFID build's ledger (§4.13). The cost: an (a) RECORD always goes into the open
 daily log, and the panel selects that log as a side effect (`simple_tally.py:505-527`). With no
 daily log open, the panel refuses with 409, `OPEN_DAILY_FIRST` (`simple_tally.py:522-524`). In (a),
-a delivery is recorded from the phone or the pendant.
+a delivery is recorded from the phone or the pendant until (b) is flashed.
 
 ### 4.3 (a) HOME — today's screen, unchanged
 
@@ -765,7 +775,7 @@ against the 30000 ms heartbeat tolerance (`src:221`). The watchdog would reset t
 2. **A stage runs last in `loop()`**, after the engine and fault-code block that today ends the pass
    (`src:2247`). Nothing in the pass follows it.
 3. **A stage runs only with `netState == NET_ONLINE` and only if the pass has used less than
-   5000 ms**, measured as `millis() - loopHeartbeatMs` at that point. A pass that has already run
+   2000 ms**, measured as `millis() - loopHeartbeatMs` at that point. A pass that has already run
    long, a reconnect stage or a fault-code PUBACK spin, skips the HTTP stage. The stage runs in a
    later pass instead.
 4. **A request has a deadline:** 8 s of wall time from OPEN to a complete response, checked between
@@ -777,10 +787,13 @@ against the 30000 ms heartbeat tolerance (`src:221`). The watchdog would reset t
 
 **Worst-case block per pass from the HTTP client:**
 
-- **OPEN:** the 5000 ms entry limit plus the 20000 ms stage, so 25000 ms for the whole pass.
-- **SEND, READ or CLOSE:** 5000 + 10000 = 15000 ms.
+- **OPEN:** under 2000 ms before the stage, plus the 20000 ms stage, so under **22000 ms** for the
+  whole pass. The margin is **8000 ms** to the tolerance.
+- **SEND, READ or CLOSE:** under 2000 + 10000, so under **12000 ms**. The margin is **18000 ms**.
 
-Both are against `HEARTBEAT_TOLERANCE_MS` = 30000 (`src:221`). The margin on OPEN is 5000 ms.
+Both are against `HEARTBEAT_TOLERANCE_MS` = 30000 (`src:221`). Nothing in the pass follows the
+stage (point 2), so these totals are the whole pass. A pass that has used more than 2000 ms by
+then skips the stage; the skipped stage runs in a later, quieter pass.
 These are worst cases where every modem command times out. On the LAN, to the broker's own host, a
 stage should take milliseconds (inference); that is NOT DETERMINABLE until timed on the board.
 
@@ -817,7 +830,7 @@ an EPC in whole 16-bit words, 4–32 hex characters (`valid_epc()`, `api/command
 4-byte and 10-byte NFC UIDs fit that shape by length. A 7-byte UID does not. Fitting the shape does
 not make a UID an EPC: §4.13 explains why the board never sends one to that build.
 
-### 5.5 The other verbs — part (b)
+### 5.5 The other verbs — (b)
 
 TARE, UNDO LAST and CLEAR BOARD go through `/api/cmd` as `tare`, `-` and `b`. So does the
 pendant's (mesh `Plc4Operator.cpp:28` [14]). That keeps one audit trail in `plc4_cmd` and the
@@ -832,7 +845,7 @@ board had removed.
 
 | Repo | Owner | What it would need |
 |---|---|---|
-| greybeard-plc4-pwa | PLC #4 PWA coordinator | **No API change.** It must accept the board as a client of `/api/cmd` with `p4-` ids in (a), and of `/api/state`, `/api/tally/*` and `/api/deliveries` in (b). Separately, the **V2 case**: PN532 bosses, two or four 16.2 mm holes and the M7E bosses removed (§2.5, §3.3). That is `design/case-print/`, carried by the case layout worker |
+| greybeard-plc4-pwa | PLC #4 PWA coordinator | **No API change.** It must accept the board as a client of `/api/cmd` with `p4-` ids in (a), and of `/api/state`, `/api/tally/*` and `/api/deliveries` in (b). Separately, the **V2 case**: PN532 bosses, four 16.2 mm holes and the M7E bosses removed (§2.5, §3.3). That is `design/case-print/`, carried by the case layout worker |
 | greybeard-plc-consumer | Consumer coordinator | **No code change.** Migration 129's comment that PLC #4 will never carry RFID is superseded (§1). Restating it is theirs to do |
 | mesh | Mesh coordinator | **No change.** It must agree that the tag rules in §5.7 are shared, so a change on either side is a change on both |
 | greybeard-gleipnir, Director, Odoo | gleipnir coordinator | **No change**, if a board `+` with a tag produces a bag reading exactly as a pendant `+` does. **Pending gleipnir** |
@@ -855,14 +868,14 @@ board had removed.
 
 ## 6. Firmware changes proposed (each needs Alex's approval)
 
-None of these is approved. Each is a separate gate. The **Part** column follows §4.2.
+None of these is approved. Each is a separate gate. The **Build** column is the build order of §4.2: (a) first, then (b). All of them are in scope.
 
-| # | Part | Change | Touches |
+| # | Build | Change | Touches |
 |---|---|---|---|
 | FW-1 | (a) | **Reader driver on `Wire`:** step-based, never waits, constants as §5.7. Write it fresh from NXP UM0701-02 [3] rather than copying the mesh driver, which is under mesh's GPL-3.0 (`firmware/LICENSE` [14]). This repo states no licence (`references/01_controller_card.md:40`), and copying would decide one. **Consequence:** two drivers that must stay in agreement on §5.7, which a host test pins | new header in `include/`, `setup()`, `loop()` |
-| FW-2 | (a) | **Buttons:** OK and BACK, or all four with (b), the 200 Hz debounce timer, the press queue, `KEY STUCK` on the fault row (§3.5) | new header, `setup()`, `hmiRenderFaultRow()` (`src:1658-1670`) |
+| FW-2 | (a) | **Buttons:** all four, fitted with (a), with BACK and OK used first; the 200 Hz debounce timer, the press queue, `KEY STUCK` on the fault row (§3.5) | new header, `setup()`, `hmiRenderFaultRow()` (`src:1658-1670`) |
 | FW-3 | (a), then (b) | **Screens:** (a) is §4.3–§4.5, and (b) adds §4.6–§4.14. Row 0 and row 3 keep today's code. Rows 1 and 2 belong to the screen | `hmiPoll()`, `hmiDrawHome()` (`src:1672-1721`) |
-| FW-4 | (a), then (b) | **Panel client as the §5.2 state machine:** one `WiFiClient` call per pass; the last thing in `loop()`; only online and under 5000 ms into the pass; an 8 s request deadline; requests one at a time. (a) is `POST /api/cmd`. (b) adds `GET /api/state` (streamed key scan), `POST /api/tally/select`, `/api/tally/start` and `/api/tally/end`, and `GET /api/deliveries`. The URL is a `#define` beside the network settings, default `http://192.168.10.99:8081` (mesh `Plc4Operator.h:32-34` [14]) | new header; end of `loop()`; WiFiS3 `WiFiClient` [9] |
+| FW-4 | (a), then (b) | **Panel client as the §5.2 state machine:** one `WiFiClient` call per pass; the last thing in `loop()`; only online and under 2000 ms into the pass; an 8 s request deadline; requests one at a time. (a) is `POST /api/cmd`. (b) adds `GET /api/state` (streamed key scan), `POST /api/tally/select`, `/api/tally/start` and `/api/tally/end`, and `GET /api/deliveries`. The URL is a `#define` beside the network settings, default `http://192.168.10.99:8081` (mesh `Plc4Operator.h:32-34` [14]) | new header; end of `loop()`; WiFiS3 `WiFiClient` [9] |
 | FW-5 | (a) | **Id minting:** `p4-<session>-<n>`, with the lazily incremented EEPROM session counter, and the local verdict (§5.3) | EEPROM map, a free slot chosen in the change; the ack block (`src:2216-2245`) |
 | FW-6 | (b) | **RFID-build lock-out:** read `rfid` from `/api/state` and refuse every button action while it is present (§4.13) | FW-4's state scan, FW-3 |
 | FW-7 | (b) | **Diagnostics:** `nfc` on `status` (`"ok"` with firmware `"1.6"`, or `"none"`); an `nfc` console verb, refused over MQTT like `i2c` (`src:769-773`); `i2c` also scans `Wire` | `publishStatus()`, the verb chain, `i2cScan()` (`src:1424-1450`) |
@@ -929,10 +942,10 @@ One correction: the reader thread is mesh `firmware/src/modules/plc/RfidReader.c
 
 ## 10. Change from today, in one line each
 
-- **Hardware:** a PN532 V3 on `Wire` behind the lid's top-left. Two IP65 buttons (OK and BACK) in
-  (a), four in a 2 × 2 cluster on D2-D5 with (b). HC-05, CAN and Qwiic are unchanged.
-- **Screen:** row 0 and row 3 unchanged. In (a), rows 1 and 2 show TAG and the result of a record.
-  (b) adds the menus.
+- **Hardware:** a PN532 V3 on `Wire` behind the lid's top-left, and four IP65 buttons in a 2 × 2
+  cluster on D2-D5. HC-05, CAN and Qwiic are unchanged.
+- **Screen:** row 0 and row 3 unchanged. Rows 1 and 2 carry the full pendant set of screens: TAG
+  and the record results first (a), then the menus (b).
 - **Record:** a board RECORD is a pendant RECORD from a different client. The tag reaches the
   record through `/api/cmd`, as the pendant's does.
 
