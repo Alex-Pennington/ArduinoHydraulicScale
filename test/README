@@ -20,5 +20,16 @@ Each carries its own build line in its header comment; run from the repo root.
   test_can_event_mask.cpp  CAN error-event classification, include/can_event_mask.h.
   test_j1939_replay.cpp    J1939 decode replayed over a candump log,
                            include/j1939_decode.h. Takes the log path as argument.
+  test_pn532.cpp           PN532 frames, the tag's wire and screen forms, the scan
+                           rules and the step driver, include/pn532.h (FW-1).
+  test_hmi_buttons.cpp     Lid button debounce, queue, repeat, KEY STUCK,
+                           include/hmi_buttons.h (FW-2).
+  test_cmd_id.cpp          Board command ids across simulated reboots,
+                           include/cmd_id.h (FW-5).
+  test_panel_client.cpp    Panel request bodies, mc rules, JSON scan, and the
+                           one-call-per-pass HTTP stages, include/panel_client.h
+                           and include/mc_value.h (FW-4, FW-8).
+  test_hmi_menu.cpp        The screens and flows, include/hmi_menu.h (FW-3, FW-6,
+                           FW-8).
 
   Each exits with its failure count.
