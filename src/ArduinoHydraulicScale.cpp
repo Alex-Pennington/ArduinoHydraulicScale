@@ -26,10 +26,9 @@
 // The on-board NFC reader, lid buttons, menus and panel client.
 // docs/design/2026-10-29-onboard-rfid-buttons-menus.md, FW-1 to FW-8.
 //
-// The panel's URL sits here rather than beside the network settings below only because
-// it must be defined before include/panel_client.h is read. It is the pendant's default
-// PLC4_PWA_URL (mesh Plc4Operator.h:32-34), the same host as the broker.
-#define PLC4_PANEL_URL "http://192.168.10.99:8081"
+// The panel's URL, PLC4_PANEL_URL, is defined ONCE, in include/panel_client.h: the
+// pendant's default PLC4_PWA_URL (mesh Plc4Operator.h:32-34), the same host as the broker.
+// A build overrides it with -DPLC4_PANEL_URL=... .
 // Build order, design §4.2: 0 flashes part (a) only -- HOME, TAG and the result screens,
 // OK and BACK, one POST /api/cmd per RECORD. 1 adds part (b), the rest of the pendant set.
 #ifndef PLC4_HMI_FULL
@@ -217,6 +216,13 @@ HmiMenu hmi;
 // MQTT path parks it in consoleSaved.
 bool localCmdPending = false;
 char localSaved[65] = "";
+
+// What setup() could and could not allocate (review item 4). The RA4M1 has 32 interrupt
+// slots and the build is near them, so a timer or the Wire controller can fail to get one.
+// Each failure is printed at boot and published as `hw_fail` on status.
+bool hbTimerOn = false;   // the heartbeat watchdog refresher
+bool wireUp    = false;   // Wire.begin() has run (after the heartbeat and CAN timers)
+bool wireOk    = false;   // ...and the controller looks initialised, see wireLooksInitialised()
 // Set by a verb that REFUSED, cleared immediately before each command runs.
 // The MQTT ack cannot read the outcome at the point the verb is queued -- the
 // handler runs later in the same loop pass -- so this is how the verdict gets
@@ -362,8 +368,8 @@ const unsigned long INA_POLL_MS = 2000;
 int wifiIndex = 0;
 
 const char broker[] = SECRET_MQTT_BROKER;   // LAN form: 192.168.10.99
-// The panel the lid buttons ask, PLC4_PANEL_URL, is defined at the top of this file:
-// it must precede include/panel_client.h. Same host as the broker, port 8081.
+// The panel the lid buttons ask, PLC4_PANEL_URL, is defined in include/panel_client.h.
+// Same host as the broker, port 8081.
 const int  port     = 1883;
 const char mqttUser[] = SECRET_MQTT_USER;
 const char mqttPass[] = SECRET_MQTT_PASS;
@@ -580,9 +586,11 @@ static bool publishWeight(int32_t w, uint32_t ageMs, bool backlog) {
 // boot, and a board in a reset loop would then wear the flash out while failing.
 // Uptime plus the hardware reset cause tell the same story without that risk.
 // ---------------------------------------------------------------------------
+unsigned long statusTooLong = 0;   // status payloads that did not fit even without optional keys
+
 static void publishStatus(unsigned long now) {
   lastStatusMs = now;
-  // 448 -> 512 for `nfc` and `nfc_fw` (FW-7). Sized, streamed beginMessage below, so the
+  // 448 -> 512 for `nfc`, `nfc_fw` and `hw_fail`. Sized, streamed beginMessage below, so the
   // only limit is this buffer.
   char payload[512];
   // `stale` is a bare JSON boolean, not a string, and sits right after
@@ -609,12 +617,36 @@ static void publishStatus(unsigned long now) {
     snprintf(shuntField, sizeof(shuntField), "null");
   }
 
-  snprintf(payload, sizeof(payload),
+  // `hw_fail` (review item 4): what setup() could not allocate, comma-separated, and the
+  // key is present only when something failed.
+  char hwFail[48] = "";
+  {
+    size_t k = 0;
+    const char *parts[4] = {hbTimerOn ? nullptr : "hb_timer", canTimerOn ? nullptr : "can_timer",
+                            btnTimerOn ? nullptr : "btn_timer", (wireUp && !wireOk) ? "wire" : nullptr};
+    for (const char *p : parts) {
+      if (!p) continue;
+      const int w = snprintf(hwFail + k, sizeof(hwFail) - k, "%s%s", k ? "," : "", p);
+      if (w > 0 && (size_t)w < sizeof(hwFail) - k) k += (size_t)w;
+    }
+  }
+  char opt[96] = "";
+  snprintf(opt, sizeof(opt), "\"nfc\":\"%s\",\"nfc_fw\":%s,%s%s%s",
+           nfc.health() == NFC_OK ? "ok" : "none", nfcFwField,
+           hwFail[0] ? "\"hw_fail\":\"" : "", hwFail, hwFail[0] ? "\"," : "");
+
+  // A truncated status is invalid JSON and every consumer drops the whole retained message
+  // -- the defect the sized beginMessage below was added for. So the return is CHECKED
+  // (review item 5): if the payload does not fit, it is built again without the optional
+  // keys (`nfc`, `nfc_fw`, `hw_fail`), and if even that does not fit nothing is published.
+  int pn = -1;
+  for (int pass = 0; pass < 2; pass++) {
+    pn = snprintf(payload, sizeof(payload),
     "{\"up\":true,\"cal\":\"%s\",\"sensor\":\"%s\",\"stale\":%s,\"tare\":%d,\"cf\":%.5f,"
     "\"n\":%d,\"total\":%ld,\"q\":%d,\"dropped\":%lu,\"uptime_s\":%lu,\"rssi\":%d,"
     "\"overrange\":%lu,\"overrange_max\":%d,\"underrange\":%lu,\"i2c_err\":%lu,"
     "\"vbus\":%s,\"shunt_mv\":%s,\"ina_err\":%lu,"
-    "\"nfc\":\"%s\",\"nfc_fw\":%s,"
+    "%s"
     "\"build\":\"%s\",\"reset\":\"%s\",\"id\":\"%s\"}",
     calibrationDefaulted ? "DEFAULT" : "ok",
     sensorStateName(), readingFresh() ? "false" : "true", tareValue, calFactor,
@@ -623,8 +655,11 @@ static void publishStatus(unsigned long now) {
     overRangeCount, overRangeMaxCounts, underRangeCount,
     (unsigned long)mcpFailCount(),
     vbusField, shuntField, (unsigned long)inaFailCount(),
-    nfc.health() == NFC_OK ? "ok" : "none", nfcFwField,
+    pass == 0 ? opt : "",
     BUILD_PROVENANCE, resetCause, CLIENT_ID);
+    if (pn > 0 && (size_t)pn < sizeof(payload)) break;
+  }
+  if (pn <= 0 || (size_t)pn >= sizeof(payload)) { statusTooLong++; return; }
   char topic[64];
   if (!buildTopic("status", topic, sizeof(topic))) return;
   if (!mqttClient.beginMessage(topic, (unsigned long)strlen(payload), true, 1)) return;   // retained, QoS 1, STREAMED not buffered
@@ -1581,10 +1616,28 @@ static void i2cScan() {
   // no-op and that transfer lands on channel 7, whatever it was meant for.
   i2cMuxInvalidate();
 
-  // The header bus, Wire (A4/A5): the PN532 at 0x24 and nothing else (design §2.2,
-  // FW-7). A probe can land between a command and its answer, so the reader driver
-  // starts over from SAMConfiguration afterwards.
-  Wire.begin();
+  i2cScanWire();
+}
+
+// Whether Wire's controller initialised. TwoWire::init_ok is private, and when it is false
+// write_to() returns END_TX_OK for ANY address without touching the bus (Wire.cpp:497-530,
+// rv is initialised to END_TX_OK and only set inside `if (init_ok)`). Nothing on this bus
+// answers at both 0x08 (reserved) and 0x77, so both "answering" means the controller is not
+// running -- an IRQ slot it did not get, say. Inference from the core's source, not measured.
+static bool wireLooksInitialised() {
+  Wire.beginTransmission(0x08);
+  const bool a = Wire.endTransmission() == 0;
+  Wire.beginTransmission(0x77);
+  const bool b = Wire.endTransmission() == 0;
+  return !(a && b);
+}
+
+// The header bus, Wire (A4/A5): the PN532 at 0x24 and nothing else (design §2.2, FW-7).
+// Only once setup() has started it, after the heartbeat and CAN timers. A probe can land
+// between a command and its answer, so the reader driver starts over afterwards.
+static void i2cScanWire() {
+  if (!wireUp) return;
+  if (!wireOk) { Console.println("i2c Wire: NOT INITIALISED (no IRQ slot?)"); return; }
   Console.print("i2c Wire:");
   int hdr = 0;
   for (uint8_t a = 0x08; a <= 0x77; a++) {
@@ -1712,7 +1765,7 @@ void setup() {
   // but it is back to resetting during network calls — so say so rather than fail quiet.
   uint8_t timerType;
   int8_t timerCh = FspTimer::get_available_timer(timerType);
-  bool hb = false;
+  bool hb = false;   // copied to hbTimerOn below
   if (timerCh >= 0) {
     hb = wdtTimer.begin(TIMER_MODE_PERIODIC, timerType, (uint8_t)timerCh,
                         2.0f, 0.0f, wdtHeartbeatISR)
@@ -1722,6 +1775,7 @@ void setup() {
   }
   Console.print("heartbeat wdt = ");
   Console.println(hb ? "on" : "UNAVAILABLE - resets during network calls");
+  hbTimerOn = hb;
 
   // CAN AFTER the heartbeat timer, so the watchdog gets the first free timer and
   // CAN can never be the reason it has none. Filter OFF at boot: it has never run
@@ -1731,6 +1785,16 @@ void setup() {
   Console.print(canUp ? "up 250k D10/D13" : "BEGIN FAILED");
   Console.print(", drain ");
   Console.println(canTimerOn ? "timer 200 Hz" : "loop (NO TIMER - frames lost during network calls)");
+
+  // FW-1: Wire, the reader's bus. Begun HERE, after the heartbeat and CAN timers, never in
+  // the boot i2cScan() above: Wire takes interrupt slots, and a shortage must never cost the
+  // watchdog its timer (review item 4).
+  Wire.begin();
+  wireUp = true;
+  wireOk = wireLooksInitialised();
+  i2cScanWire();
+  Console.print("nfc = PN532 on Wire 0x24");
+  Console.println(wireOk ? "" : " -- Wire NOT INITIALISED, reader off");
 
   // FW-2: the lid buttons. Their timer comes AFTER the heartbeat's and CAN's, so neither
   // can lose its timer to them. Whether a third is free is for the boot banner to say
@@ -1748,9 +1812,6 @@ void setup() {
   }
   Console.print("buttons = D2-D5, ");
   Console.println(btnTimerOn ? "timer 200 Hz" : "loop (NO TIMER - presses lost during network calls)");
-
-  // FW-1: the reader. Wire was begun by i2cScan() above; the driver starts on its first step.
-  Console.println("nfc = PN532 on Wire 0x24");
 
   // FW-4, FW-5, FW-3.
   const bool urlOk = panel.setUrl(PLC4_PANEL_URL);
@@ -1926,6 +1987,7 @@ static HmiContext hmiContext() {
 // FW-1: one reader step (at most one Wire transaction), then hand any NEW scan to the
 // menu. TagTracker decides what is new (design §4.4: kGoneMs).
 static void nfcPoll() {
+  if (!wireOk) return;   // no controller: every "transaction" would be a false success
   const uint32_t now = millis();
   nfc.step(now);
   if (nfc.takeEmpty()) tagTracker.empty(now);
@@ -2290,6 +2352,10 @@ void loop() {
       Console.print("hmi = ");       Console.print(hmi.full ? "full" : "part a");
       Console.print(" screen ");     Console.println((int)hmi.screen());
       Console.print("panel = ");     Console.println(PLC4_PANEL_URL);
+      Console.print("hb_timer = ");  Console.println(hbTimerOn ? "on" : "FAILED");
+      Console.print("can_timer = "); Console.println(canTimerOn ? "on" : "FAILED");
+      Console.print("wire = ");      Console.println(!wireUp ? "not started" : wireOk ? "ok" : "NOT INITIALISED");
+      Console.print("status_too_long = "); Console.println(statusTooLong);
       Console.print("panel_req = "); Console.println(panel.requests);
       Console.print("panel_fail = "); Console.println(panel.failures);
       Console.print("panel_calls = "); Console.println(panel.calls);
